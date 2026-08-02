@@ -18,15 +18,20 @@ so that existing Z80 tooling works against NextTang hardware.
 - [x] Create the public repository and choose the GPLv3 license foundation.
 - [x] Define Tang Console 138K as the initial target and Tang Console 60K as a
   shared-source target.
-- [ ] Record the exact MiSTer upstream commit selected for the first port.
-- [ ] Audit licenses and per-file notices before importing upstream source.
-- [ ] Add a provenance document distinguishing upstream, modified, generated,
+- [x] Record the exact MiSTer upstream commit selected for the first port.
+- [x] Audit licenses and per-file notices before importing upstream source.
+- [x] Add a provenance document distinguishing upstream, modified, generated,
   and original files.
-- [ ] Record supported board, package, and B/C silicon revisions.
+- [ ] Record supported board, package, and B/C silicon revisions after the
+  purchased 138K hardware arrives and can be inspected.
 - [x] Document contributor workflow, formatting, review, and evidence rules.
 
+The [provenance audit](docs/provenance.md) pins the selected upstream tree and
+records every upstream file. Milestone 0 remains open only for exact hardware
+identity; purchasing a board is not hardware verification.
+
 **Exit evidence:** pinned upstream revisions, a completed license/provenance
-review, and an agreed target matrix.
+review, and an agreed target matrix with the physical board identity recorded.
 
 ## Milestone 1: Toolchain and board bring-up
 

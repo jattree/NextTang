@@ -18,6 +18,7 @@
 <p align="center">
   <a href="ROADMAP.md">Roadmap</a> ·
   <a href="#hardware-targets">Hardware targets</a> ·
+  <a href="docs/provenance.md">Provenance</a> ·
   <a href="docs/toolchain.md">Toolchain</a> ·
   <a href="https://t.me/NextTang">Telegram</a> ·
   <a href="#contributing">Contributing</a> ·
@@ -77,7 +78,7 @@ cooperation or code sharing is welcome where technically and legally possible.
 
 | Target | Intended role | Status |
 | --- | --- | --- |
-| Tang Console 138K | Initial port, full development instrumentation, deep trace | Planned |
+| Tang Console 138K | Initial port, full development instrumentation, deep trace | 138K hardware purchased; exact product and revision pending arrival and inspection |
 | Tang Console 60K | Portable release core and lighter debugging | Planned; contributor wanted |
 | Tang Nano 20K | Later compact release target; not a development platform | In scope; not currently scheduled |
 
@@ -162,6 +163,7 @@ in the [NextTang Telegram group](https://t.me/NextTang).
 
 - [Official ZX Spectrum Next FPGA repository](https://gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA)
 - [MiSTer ZXNext core](https://github.com/MiSTer-devel/ZXNext_MISTer)
+- [Pinned upstream and per-file provenance audit](docs/provenance.md)
 - [Sipeed Tang Console documentation](https://wiki.sipeed.com/hardware/en/tang/tang-console/mega-console.html)
 - [Sipeed Tang Mega 138K examples](https://github.com/sipeed/TangMega-138K-example)
 - [ZXSpectrumNextTests](https://github.com/MrKWatkins/ZXSpectrumNextTests)
@@ -175,6 +177,8 @@ or RetroSilicon. Product and project names belong to their respective owners.
 
 Original work in this repository is released under the
 [GNU General Public License v3.0](LICENSE). Imported source will retain its
-copyright, attribution, modification notices, and license terms. Provenance and
-license compatibility will be audited and documented before upstream HDL is
-committed.
+copyright, attribution, modification notices, and license terms. The
+[upstream audit and import policy](docs/provenance.md) records the selected
+baseline before any upstream HDL is committed. Synthesized releases containing
+the audited BSD-style components must include
+[the third-party notices](THIRD_PARTY_NOTICES.md).

@@ -25,7 +25,10 @@ does: `make synth TOOLCHAIN=vendor TARGET=console138k PROFILE=release`.
   test media under `local/`; the directory and common Spectrum media formats are
   ignored and rejected by the repository check if force-added.
 - Preserve copyright, license, and modification notices on imported files.
-- Record the source revision and provenance before importing upstream HDL.
+- Follow the [provenance and import policy](docs/provenance.md), record the
+  source revision and blob, and preserve the applicable entries from
+  [the third-party notices](THIRD_PARTY_NOTICES.md) before importing upstream
+  HDL.
 - Run `make check` before pushing.
 
 Build drivers must follow the contract in [boards/README.md](boards/README.md).
