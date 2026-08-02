@@ -145,7 +145,7 @@ high leverage. Useful contribution areas include:
   [nextpnr](https://github.com/YosysHQ/nextpnr), or
   [Project Apicula](https://github.com/YosysHQ/apicula) experience;
 - mixed VHDL/SystemVerilog integration;
-- DDR3, HDMI, SD, USB HID, and BL616 firmware;
+- DDR3, HDMI, SD, USB HID, and onboard USB controller firmware;
 - Z80N/Next compatibility testing; and
 - FPGA trace and source-debugger design.
 

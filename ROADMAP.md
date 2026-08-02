@@ -9,7 +9,9 @@ The [MiSTer ZXNext core](https://github.com/MiSTer-devel/ZXNext_MISTer) is the
 planned implementation baseline. The
 [official ZX Spectrum Next FPGA repository](https://gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA)
 and [ZXSpectrumNextTests](https://github.com/MrKWatkins/ZXSpectrumNextTests)
-provide specification and compatibility references.
+provide specification and compatibility references. The debugger targets the
+[DeZog Remote Protocol](https://github.com/maziac/DeZog/blob/main/design/DeZogProtocol.md)
+so that existing Z80 tooling works against NextTang hardware.
 
 ## Milestone 0: Project baseline
 
@@ -118,7 +120,13 @@ never imply that alternate FPGA evidence proves official-hardware parity.
 
 ## Milestone 6: Debug-lite
 
-- [ ] Specify a versioned transport protocol with capability discovery.
+- [ ] Adopt the [DeZog Remote Protocol](https://github.com/maziac/DeZog/blob/main/design/DeZogProtocol.md)
+  as the wire protocol rather than defining one. It already treats real ZX Next
+  hardware as a first-class remote, bounds memory reads by start and size,
+  carries slot and banking state, negotiates versions on init, and expects
+  remotes to implement different command subsets.
+- [ ] Declare the implemented DZRP command subset per build profile, and confirm
+  by interoperability test rather than by reading the specification.
 - [ ] Keep the debug transport alive in a clock domain independent of the
   machine being inspected.
 - [ ] Implement distinct CPU-halt and whole-machine-freeze semantics.
@@ -129,7 +137,9 @@ never imply that alternate FPGA evidence proves official-hardware parity.
 - [ ] Attempt `debug-lite` synthesis and timing closure on both 60K and 138K.
 
 **Exit evidence:** scripted halt, inspect, step, continue, and breakpoint tests
-pass without changing the program result when debugging is disabled.
+pass without changing the program result when debugging is disabled. A DZRP
+client reaches the same results over the transport, with the declared command
+subset and the unimplemented commands both recorded.
 
 ## Milestone 7: Debug-full and source integration
 
@@ -137,11 +147,15 @@ pass without changing the program result when debugging is disabled.
 - [ ] Add a triggered circular trace containing instruction, physical page,
   memory-write, interrupt, and timing information.
 - [ ] Bound trace storage and define deterministic overflow behavior.
-- [ ] Evaluate higher-bandwidth USB transport through the Tang Console BL616.
+- [ ] Identify the Console's actual USB controller and debugger MCU, which the
+  board documentation does not name, then evaluate higher-bandwidth transport
+  over the documented USB3 device interfaces.
 - [ ] Add SLD/source-map loading and page-aware symbol resolution.
-- [ ] Investigate a hardware backend for the
-  [JNext debugger](https://github.com/jorgegv/jnext) rather than duplicating its
-  source display and stepping user interface.
+- [ ] Reach source-level debugging through existing DZRP clients, primarily
+  [DeZog](https://github.com/maziac/DeZog) in VS Code, rather than building a
+  source display and stepping interface. The
+  [JNext debugger](https://github.com/jorgegv/jnext) becomes a peer speaking the
+  same protocol rather than a front end requiring a bespoke backend.
 - [ ] Measure debug logic resource use and timing impact for every build profile.
 
 **Exit evidence:** a source-level test can stop at a page-qualified breakpoint,
@@ -171,8 +185,8 @@ legally obtained external software.
 | Core integration | Pin upstream, audit provenance, isolate platform dependencies |
 | Simulation | Reset, memory, clock-domain, and bus-handshake fixtures |
 | Verification | Select small cross-platform Next tests and evidence formats |
-| Debugger | Protocol, capability model, halt semantics, and host CLI design |
-| BL616 | Document existing firmware path and prototype a bounded debug transport |
+| Debugger | DZRP command subset, halt semantics, and host client integration |
+| USB transport | Identify the onboard USB controller, document its firmware path, and prototype a bounded debug transport |
 
 Coordination happens through the
 [NextTang issue tracker](https://github.com/jattree/NextTang/issues). Each task
