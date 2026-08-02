@@ -1,0 +1,139 @@
+# Local configuration, credentials, and vendor licenses
+.env
+.env.*
+!.env.example
+.direnv/
+.envrc
+.license/
+*.lic
+*.license
+license.dat
+flexlmrc
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
+*.bak
+.idea/
+.vscode/
+
+# Python tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+
+# Local tools, caches, and repository build outputs
+/.cache/
+/.local/
+/.tools/
+/toolchains/
+/build/
+/dist/
+/out/
+/artifacts/
+/release/
+/tmp/
+
+# Host-tool build products and downloaded dependencies
+/target/
+node_modules/
+.pnpm-store/
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+compile_commands.json
+
+# Gowin EDA generated workspaces, IP scratch trees, and reports. Keep source
+# project/configuration files such as .gprj, .ipc, .cst, and .sdc in Git.
+**/impl/
+**/impl_*/
+**/gwsynthesis/
+**/pnr/
+**/temp/
+*.gprj.user
+*rtl_parser.result
+*rtl_parser_arg.json
+*_process_config.json
+*_syn_resource.html
+*_syn_rsc.xml
+*_syn.rpt.html
+*_tmp.v
+*.vo
+*.vg
+*.mod
+*.rao
+*.rpt
+*.jou
+*.log
+*.history
+*.tmp
+
+# Generated FPGA/firmware images. Publish selected releases through GitHub, not
+# Git history. Source memory initializers must use a reviewed source format.
+*.fs
+*.fs.7z
+*.fs.zst
+*.bit
+*.bin
+*.mcs
+*.jed
+*.svf
+*.dfu
+*.elf
+*.uf2
+
+# Simulator, formal, and coverage outputs
+obj_dir/
+sim_build/
+**/sim/work/
+**/.Xil/
+**/xsim.dir/
+work-obj*.cf
+transcript
+vsim.wlf
+*.vcd
+*.fst
+*.ghw
+*.wlf
+*.vvp
+*.ucdb
+*.coverage
+
+# Local hardware captures and analyzer databases
+/captures/
+*.sal
+*.sr
+
+# Private/copyrighted runtime inputs. Put locally owned ROMs, games, SD-card
+# trees, vendor payloads, and downloaded test media beneath local/.
+/local/
+/roms/
+/games/
+/sdcard/
+/sd-card/
+/test-media/
+*.rom
+*.nex
+*.sna
+*.z80
+*.tap
+*.tzx
+*.dsk
+*.trd
+*.scl
+*.img
+*.iso

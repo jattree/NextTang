@@ -1,0 +1,22 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{md,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.{py,sh,tcl}]
+indent_style = space
+indent_size = 4
+
+[Makefile]
+indent_style = tab
+
+[*.{v,vh,sv,svh,vhd,vhdl,cst,sdc}]
+indent_style = space
+indent_size = 4
