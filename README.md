@@ -36,6 +36,10 @@ UART, HDMI, DDR3, SD, audio, and USB HID. The
 [starter roadmap](ROADMAP.md) defines the evidence required before importing
 and adapting the ZXNext core.
 
+The one part of the project not waiting on that board is the
+[host tooling track](ROADMAP.md#host-tooling-track), which builds the DZRP client and
+command-subset conformance suite against existing remotes.
+
 ## What NextTang is
 
 NextTang is an independent, community-developed port of the
@@ -167,7 +171,10 @@ in the [NextTang Telegram group](https://t.me/NextTang).
 - [Sipeed Tang Console documentation](https://wiki.sipeed.com/hardware/en/tang/tang-console/mega-console.html)
 - [Sipeed Tang Mega 138K examples](https://github.com/sipeed/TangMega-138K-example)
 - [ZXSpectrumNextTests](https://github.com/MrKWatkins/ZXSpectrumNextTests)
+- [DeZog Remote Protocol](https://github.com/maziac/DeZog/blob/main/design/DeZogProtocol.md)
 - [JNext emulator and debugger](https://github.com/jorgegv/jnext)
+- [dezogif](https://github.com/maziac/dezogif) and
+  [dezogif_ng](https://github.com/jorgegv/dezogif_ng), DZRP debug stubs for real Next hardware
 - [NextNano source discussion](https://github.com/RetroSilicon/NextNano/issues/1)
 
 ## Independence and license

@@ -13,6 +13,32 @@ provide specification and compatibility references. The debugger targets the
 [DeZog Remote Protocol](https://github.com/maziac/DeZog/blob/main/design/DeZogProtocol.md)
 so that existing Z80 tooling works against NextTang hardware.
 
+The numbered milestones are gated on Tang Console hardware. The
+[host tooling track](#host-tooling-track) is not, and can proceed now.
+
+## Host tooling track
+
+This track runs alongside the milestone sequence rather than inside it, because its gate is
+different. Milestone 1 onward waits on a Tang Console board. The host side of the debugger
+waits on a DZRP remote to talk to, which can be real ZX Next hardware running
+[dezogif](https://github.com/maziac/dezogif), or
+[JNext](https://github.com/jorgegv/jnext) once it implements DZRP. Neither needs a Tang
+board, and neither is in hand yet, so this track is gated on a remote rather than on
+hardware NextTang controls.
+
+- [ ] Build a DZRP host client that treats the remote as interchangeable, so one client
+  drives dezogif on real Next hardware, JNext, and later NextTang.
+- [ ] Build a command-subset conformance suite that records, per remote, which DZRP
+  commands are implemented and what each returns when asked for one it is not.
+- [ ] Run the suite against at least two remotes NextTang did not write, before NextTang
+  implements any of the protocol itself.
+- [ ] Keep the client and suite useful to other DZRP remotes rather than specialising them
+  to NextTang.
+
+**Exit evidence:** the conformance suite produces a recorded per-command result table for a
+remote this project did not write, which gives Milestone 6 an acceptance test before it has
+an implementation.
+
 ## Milestone 0: Project baseline
 
 - [x] Create the public repository and choose the GPLv3 license foundation.
@@ -117,6 +143,11 @@ difference has a minimal reproduction and an open issue.
   appropriate emulators.
 - [ ] Maintain distinct evidence labels for simulation, Tang 60K hardware, Tang
   138K hardware, and official Next hardware.
+- [ ] Record how an official-hardware result was obtained. A guest-side DZRP stub such as
+  [dezogif](https://github.com/maziac/dezogif) runs on the machine's own Z80 and takes
+  over through NMI, so it observes architectural state well and timing poorly. Contention,
+  wait states, and cycle counts measured that way are not equivalent to an instrumented or
+  fabric-side measurement, and the label must say which produced the number.
 - [ ] Define regression and rollback criteria before replacing a known-good
   bitstream.
 
@@ -132,14 +163,23 @@ never imply that alternate FPGA evidence proves official-hardware parity.
   remotes to implement different command subsets.
 - [ ] Declare the implemented DZRP command subset per build profile, and confirm
   by interoperability test rather than by reading the specification.
+- [ ] Read the command subset implemented by
+  [dezogif](https://github.com/maziac/dezogif) before declaring NextTang's. It is the only
+  DZRP remote running on real ZX Next hardware, so it is the closest existing precedent for
+  what a hardware remote supports, particularly for breakpoints, which the protocol notes
+  differ considerably on a real ZXNext.
 - [ ] Keep the debug transport alive in a clock domain independent of the
   machine being inspected.
 - [ ] Implement distinct CPU-halt and whole-machine-freeze semantics.
 - [ ] Expose an explicit instruction-retirement event for reliable single-step.
 - [ ] Read registers, NextREGs, MMU mappings, and physical memory safely.
 - [ ] Add page-aware execution breakpoints and a bounded breakpoint count.
-- [ ] Implement UART transport and a small host command-line client.
+- [ ] Implement the UART transport on the NextTang side and drive it with the client from
+  the [host tooling track](#host-tooling-track) rather than a NextTang-specific tool.
 - [ ] Attempt `debug-lite` synthesis and timing closure on both 60K and 138K.
+
+The declared subset should be checked against the conformance suite from the host tooling
+track, which by this point has run against remotes this project did not write.
 
 **Exit evidence:** scripted halt, inspect, step, continue, and breakpoint tests
 pass without changing the program result when debugging is disabled. A DZRP
@@ -160,7 +200,16 @@ subset and the unimplemented commands both recorded.
   [DeZog](https://github.com/maziac/DeZog) in VS Code, rather than building a
   source display and stepping interface. The
   [JNext debugger](https://github.com/jorgegv/jnext) becomes a peer speaking the
-  same protocol rather than a front end requiring a bespoke backend.
+  same protocol rather than a front end requiring a bespoke backend. The JNext author
+  proposed DZRP for the same interoperability reason in
+  [jnext#12](https://github.com/jorgegv/jnext/issues/12), where the ZX Basic Studio author
+  agreed, so this records a shared direction rather than an assumption about upstream.
+- [ ] Run [dezogif_ng](https://github.com/jorgegv/dezogif_ng) on NextTang once the core
+  boots. It is ordinary Next software, so it should load like any other, giving two
+  independent DZRP remotes for one machine: a guest-side stub and the fabric debug unit.
+  They must agree on registers, memory, and MMU state, and a disagreement identifies a
+  defect in one of them that is worth a minimal reproduction either way. Loading it at all
+  also exercises Multiface, AltROM, and Copper, and it requires core 03.01.10 or newer.
 - [ ] Measure debug logic resource use and timing impact for every build profile.
 
 **Exit evidence:** a source-level test can stop at a page-qualified breakpoint,
@@ -191,6 +240,7 @@ legally obtained external software.
 | Simulation | Reset, memory, clock-domain, and bus-handshake fixtures |
 | Verification | Select small cross-platform Next tests and evidence formats |
 | Debugger | DZRP command subset, halt semantics, and host client integration |
+| Host tooling | The [host tooling track](#host-tooling-track): DZRP client and conformance suite, no Tang board required |
 | USB transport | Identify the onboard USB controller, document its firmware path, and prototype a bounded debug transport |
 
 Coordination happens through the
