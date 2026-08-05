@@ -28,8 +28,14 @@ hardware NextTang controls.
 
 - [ ] Build a DZRP host client that treats the remote as interchangeable, so one client
   drives dezogif on real Next hardware, JNext, and later NextTang.
-- [ ] Build a command-subset conformance suite that records, per remote, which DZRP
-  commands are implemented and what each returns when asked for one it is not.
+- [ ] Build a command-subset conformance suite keyed by remote **and mode**, recording
+  which DZRP commands are implemented and what each returns when asked for one it is
+  not. One machine can expose two remotes: an out-of-band one, meaning the fabric debug
+  unit on NextTang or the emulator itself in JNext, and an in-band one, meaning a
+  guest-side stub such as `dezogif_ng` running as ordinary Next software. Their subsets
+  differ, because in-band mode is limited by what a Z80 stub can do to its own machine
+  rather than by the target's capability. A table keyed by remote alone will need
+  reworking.
 - [ ] Run the suite against at least two remotes NextTang did not write, before NextTang
   implements any of the protocol itself.
 - [ ] Keep the client and suite useful to other DZRP remotes rather than specialising them
@@ -148,6 +154,12 @@ difference has a minimal reproduction and an open issue.
   over through NMI, so it observes architectural state well and timing poorly. Contention,
   wait states, and cycle counts measured that way are not equivalent to an instrumented or
   fabric-side measurement, and the label must say which produced the number.
+- [ ] Quantify that distortion rather than only warning about it. JNext plans both an
+  out-of-band DZRP implementation and an in-band one that loads a guest stub into the
+  emulated machine, so running one program under both modes isolates the stub's own
+  observational cost against a reference that perturbs nothing. Real hardware offers no
+  uninstrumented reference to diff against, so this number is only obtainable in an
+  emulator, and it bounds the error on every in-band hardware result.
 - [ ] Define regression and rollback criteria before replacing a known-good
   bitstream.
 
@@ -210,6 +222,8 @@ subset and the unimplemented commands both recorded.
   They must agree on registers, memory, and MMU state, and a disagreement identifies a
   defect in one of them that is worth a minimal reproduction either way. Loading it at all
   also exercises Multiface, AltROM, and Copper, and it requires core 03.01.10 or newer.
+  This is the same in-band and out-of-band pairing JNext is building, so the conformance
+  table covers both machines with one shape.
 - [ ] Measure debug logic resource use and timing impact for every build profile.
 
 **Exit evidence:** a source-level test can stop at a page-qualified breakpoint,
