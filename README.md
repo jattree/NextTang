@@ -82,7 +82,7 @@ cooperation or code sharing is welcome where technically and legally possible.
 
 | Target | Intended role | Status |
 | --- | --- | --- |
-| Tang Console 138K | Initial port, full development instrumentation, deep trace | 138K hardware purchased; exact product and revision pending arrival and inspection |
+| Tang Console 138K | Initial port, full development instrumentation, deep trace | Purchased hardware in transit; exact product and revision pending arrival and inspection |
 | Tang Console 60K | Portable release core and lighter debugging | Planned; contributor wanted |
 | Tang Nano 20K | Later compact release target; not a development platform | In scope; not currently scheduled |
 
@@ -168,6 +168,7 @@ in the [NextTang Telegram group](https://t.me/NextTang).
 - [Official ZX Spectrum Next FPGA repository](https://gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA)
 - [MiSTer ZXNext core](https://github.com/MiSTer-devel/ZXNext_MISTer)
 - [Pinned upstream and per-file provenance audit](docs/provenance.md)
+- [Adjacent Tang project evidence and reuse boundaries](docs/adjacent-projects.md)
 - [Sipeed Tang Console documentation](https://wiki.sipeed.com/hardware/en/tang/tang-console/mega-console.html)
 - [Sipeed Tang Mega 138K examples](https://github.com/sipeed/TangMega-138K-example)
 - [ZXSpectrumNextTests](https://github.com/MrKWatkins/ZXSpectrumNextTests)

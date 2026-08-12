@@ -53,6 +53,17 @@ make synth TOOLCHAIN=vendor TARGET=console138k PROFILE=release
 The synthesis command currently stops before invoking Gowin because the 138K board
 driver has not been implemented. That failure is intentional.
 
+### Local smoke-build evidence
+
+On 2026-08-05, installed GOWIN EDA Standard `V1.9.12.03` synthesized, placed,
+routed, timing-checked and packed a small resettable counter for candidate part
+`GW5AST-LV138PG484AC1/I0`. The 10 MHz smoke constraint passed with zero setup or
+hold violations and a fresh `.fs` file was generated.
+
+The test used arbitrary package pins selected for toolchain validation. The
+bitstream is not safe to program, does not use Console constraints, and does not
+exercise NextTang sources, mixed-language synthesis, DDR3 or hardware.
+
 Primary reference: [Sipeed Tang Mega 138K examples](https://github.com/sipeed/TangMega-138K-example),
 including its [DDR memory notes](https://github.com/sipeed/TangMega-138K-example/blob/main/ddr_memory/README.md).
 
@@ -77,6 +88,12 @@ but the exact mixed-language synthesis boundary remains to be proven. Do not use
 the open flow for a release claim until synthesis, timing, programming, and hardware
 tests have all been reproduced.
 
+On 2026-08-05, OSS CAD Suite `2026-08-05`, Yosys `0.67+153`,
+nextpnr `0.10-117-g8d8053e0` and `gowin_pack` processed the same counter for the
+same candidate part through bitstream generation. The 10 MHz constraint passed.
+This validates a small pure-Verilog tool path only; the same board, pin and
+hardware limits as the vendor smoke build apply.
+
 Primary references:
 
 - [OSS CAD Suite](https://github.com/YosysHQ/oss-cad-suite-build)
@@ -84,6 +101,27 @@ Primary references:
 - [nextpnr releases](https://github.com/YosysHQ/nextpnr/releases)
 - [Project Apicula](https://github.com/YosysHQ/apicula)
 - [openFPGALoader releases](https://github.com/trabucayre/openFPGALoader/releases)
+
+## Required build acceptance checks
+
+The adjacent-project review found that `gw_sh` can return zero after logging
+missing-source errors, and that stale checked-in implementation output can hide
+the absence of a fresh bitstream. A generated bitstream can also coexist with
+setup or hold violations.
+
+A NextTang board driver must therefore fail unless the current invocation:
+
+1. starts with an empty, target-specific output directory;
+2. completes without tool error records, regardless of process exit status;
+3. creates fresh synthesis, placement, timing and utilisation reports;
+4. creates the expected fresh bitstream;
+5. records the exact device, tool version, target and profile; and
+6. meets every timing constraint required by that profile.
+
+Warnings remain reviewable evidence and must not be discarded. The driver should
+classify known warnings explicitly rather than treating all warning text as either
+success or failure. See the [adjacent-project review](adjacent-projects.md) for
+the observations that established these requirements.
 
 ## Promoting a toolchain version
 

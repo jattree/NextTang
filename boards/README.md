@@ -18,7 +18,11 @@ A driver must:
 - accept only the toolchains and profiles that have an implemented flow;
 - read source and checked-in constraints from the repository;
 - write generated files only beneath the provided absolute output directory;
+- require an empty target-specific output directory before invoking a tool;
 - invoke tools non-interactively and propagate a nonzero exit status;
+- reject tool error records even when the tool exits zero;
+- require reports and the bitstream to have been created by the current run;
+- fail when a timing constraint required by the selected profile is violated;
 - retain synthesis, placement, timing, and utilization reports in the output; and
 - never silently substitute another board, device revision, or build profile.
 
