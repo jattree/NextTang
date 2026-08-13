@@ -10,9 +10,11 @@ import contextlib
 import io
 import json
 import os
+import struct
 import tempfile
 import time
 import unittest
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -277,6 +279,28 @@ class DryRunTests(CliTestCase):
         self.reply.write_text("Thanks. The 138K board is still in transit.\n", encoding="utf-8")
         self.video = Path(self.temporary.name) / "devlog-001.mp4"
         self.video.write_bytes(b"\x00" * 4096)
+        self.banner = Path(self.temporary.name) / "youtube-banner.png"
+        self._write_png(self.banner, 2048, 1152)
+        self.watermark = Path(self.temporary.name) / "youtube-watermark.png"
+        self._write_png(self.watermark, 150, 150)
+
+    @staticmethod
+    def _write_png(path: Path, width: int, height: int) -> None:
+        def chunk(kind: bytes, payload: bytes) -> bytes:
+            return (
+                struct.pack(">I", len(payload))
+                + kind
+                + payload
+                + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+            )
+
+        rows = b"".join(b"\x00" + b"\x00\x00\x00\x00" * width for _ in range(height))
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, level=9))
+            + chunk(b"IEND", b"")
+        )
 
     def _read_routes(self) -> FakeTransport:
         transport = FakeTransport()
@@ -345,6 +369,27 @@ class DryRunTests(CliTestCase):
         self.assertIn("DRY RUN", out)
         self.assertEqual(transport.mutating_requests, [])
 
+    def test_banner_dry_run_sends_no_write_and_names_both_api_steps(self) -> None:
+        transport = self._read_routes()
+        code, out, _ = self.run_cli(
+            ["channel", "set-banner", "--file", str(self.banner)], transport
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("DRY RUN", out)
+        self.assertIn("channelBanners.insert", out)
+        self.assertIn("channels.update", out)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_watermark_dry_run_sends_no_write(self) -> None:
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        code, out, _ = self.run_cli(
+            ["channel", "set-watermark", "--file", str(self.watermark)], transport
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("DRY RUN", out)
+        self.assertIn("watermarks.set", out)
+        self.assertEqual(transport.mutating_requests, [])
+
     def test_upload_requires_an_explicit_privacy_value(self) -> None:
         transport = FakeTransport()
         with self.assertRaises(SystemExit) as raised:
@@ -381,6 +426,158 @@ class DryRunTests(CliTestCase):
 
 
 class ApplyTests(DryRunTests):
+    def test_banner_apply_requires_its_own_capability(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["comments-read"],
+        )
+        transport = self._read_routes()
+        code, _, err = self.run_cli(
+            ["channel", "set-banner", "--file", str(self.banner), "--apply"], transport
+        )
+        self.assertEqual(code, EXIT_AUTH_REQUIRED)
+        self.assertIn("auth login --enable banner-write", err)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_watermark_apply_requires_its_own_capability(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["comments-read"],
+        )
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        code, _, err = self.run_cli(
+            ["channel", "set-watermark", "--file", str(self.watermark), "--apply"], transport
+        )
+        self.assertEqual(code, EXIT_AUTH_REQUIRED)
+        self.assertIn("auth login --enable watermark-write", err)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_banner_apply_uploads_then_preserves_complete_branding_object(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["banner-write"],
+        )
+        transport = self._read_routes()
+        transport.route(
+            "POST", "/upload/youtube/v3/channelBanners/insert", payload={"url": "https://yt.example/new"}
+        )
+        transport.route("PUT", "/channels", payload={"id": CHANNEL_ID})
+        current = branding_resource()["items"][0]["brandingSettings"]
+        transport.route(
+            "GET",
+            "brandingSettings",
+            payload={
+                "items": [{
+                    "id": CHANNEL_ID,
+                    "brandingSettings": {
+                        "channel": current["channel"],
+                        "image": {"bannerExternalUrl": "https://yt.example/new"},
+                    },
+                }]
+            },
+        )
+
+        code, out, _ = self.run_cli(
+            ["channel", "set-banner", "--file", str(self.banner), "--apply"], transport
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("APPLIED", out)
+        writes = transport.mutating_requests
+        self.assertEqual([request.method for request in writes], ["POST", "PUT"])
+        self.assertIn("multipart/related", writes[0].headers["Content-Type"])
+        update = writes[1].json_body()
+        self.assertEqual(update["brandingSettings"]["image"]["bannerExternalUrl"], "https://yt.example/new")
+        self.assertEqual(update["brandingSettings"]["channel"]["description"], "Original description")
+
+    def test_banner_apply_stops_before_upload_when_branding_changed(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["banner-write"],
+        )
+        transport = FakeTransport()
+        transport.route("GET", "mine=true", payload=channel_resource())
+        transport.route("GET", "brandingSettings", payload=branding_resource(), times=1)
+        transport.route(
+            "GET", "brandingSettings", payload=branding_resource(description="Changed elsewhere"), times=1
+        )
+        transport.route(
+            "POST", "/upload/youtube/v3/channelBanners/insert", payload={"url": "should-not-run"}
+        )
+        code, _, err = self.run_cli(
+            ["channel", "set-banner", "--file", str(self.banner), "--apply"], transport
+        )
+        self.assertNotEqual(code, EXIT_OK)
+        self.assertIn("changed between the plan and the apply step", err)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_banner_second_step_failure_reports_partial_state(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["banner-write"],
+        )
+        transport = self._read_routes()
+        transport.route(
+            "POST", "/upload/youtube/v3/channelBanners/insert", payload={"url": "https://yt.example/new"}
+        )
+        transport.route("PUT", "/channels", status=500, payload=error_payload(500, "backendError"))
+        code, _, err = self.run_cli(
+            ["channel", "set-banner", "--file", str(self.banner), "--apply"], transport
+        )
+        self.assertNotEqual(code, EXIT_OK)
+        self.assertIn("image upload completed", err)
+        self.assertIn("may or may not have changed", err)
+        self.assertEqual(len(transport.mutating_requests), 2)
+
+    def test_banner_unreadable_upload_response_never_invites_a_blind_retry(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["banner-write"],
+        )
+        transport = self._read_routes()
+        transport.route(
+            "POST", "/upload/youtube/v3/channelBanners/insert", status=200, body=b"truncated"
+        )
+        code, _, err = self.run_cli(
+            ["channel", "set-banner", "--file", str(self.banner), "--apply"], transport
+        )
+        self.assertNotEqual(code, EXIT_OK)
+        self.assertIn("unreadable completion response", err)
+        self.assertIn("may have uploaded", err)
+        self.assertIn("Do not retry blindly", err)
+        self.assertEqual(len(transport.mutating_requests), 1)
+
+    def test_watermark_channel_mismatch_sends_no_write(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["watermark-write"],
+        )
+        transport = FakeTransport().route(
+            "GET", "mine=true", payload=channel_resource(channel_id=OTHER_CHANNEL_ID)
+        )
+        code, _, _ = self.run_cli(
+            ["channel", "set-watermark", "--file", str(self.watermark), "--apply"], transport
+        )
+        self.assertEqual(code, EXIT_CHANNEL_MISMATCH)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_watermark_apply_posts_multipart_metadata_for_the_pinned_channel(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["watermark-write"],
+        )
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route("POST", "/upload/youtube/v3/watermarks/set", status=204, body=b"")
+
+        code, out, _ = self.run_cli(
+            ["channel", "set-watermark", "--file", str(self.watermark), "--apply"], transport
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("APPLIED", out)
+        writes = transport.mutating_requests
+        self.assertEqual(len(writes), 1)
+        self.assertIn(f"channelId={CHANNEL_ID}", writes[0].url)
+        self.assertIn(CHANNEL_ID.encode(), writes[0].body)
+        self.assertIn(b'"offsetMs":0', writes[0].body)
     def test_apply_without_the_write_scope_is_refused(self) -> None:
         self.write_credentials(scopes=list(oauth.READ_ONLY_SCOPES))
         transport = self._read_routes()

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import struct
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 import youtube_support  # noqa: F401 - puts the CLI package on sys.path
@@ -23,6 +25,25 @@ BRANDING = {
     },
     "image": {"bannerExternalUrl": "https://example.invalid/banner"},
 }
+
+
+def write_png(path: Path, width: int, height: int) -> None:
+    """Write a tiny valid RGBA PNG without adding an image-library dependency."""
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + kind
+            + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    rows = b"".join(b"\x00" + b"\x00\x00\x00\x00" * width for _ in range(height))
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows, level=9))
+        + chunk(b"IEND", b"")
+    )
 
 
 class ReadModifyWriteTests(unittest.TestCase):
@@ -71,6 +92,81 @@ class ReadModifyWriteTests(unittest.TestCase):
     def test_empty_branding_is_flagged_as_unsafe(self) -> None:
         plan = operations.plan_channel_description("UC123", {}, "New description")
         self.assertTrue(any("WARNING" in note for note in plan.notes))
+
+    def test_banner_merge_preserves_every_other_branding_field(self) -> None:
+        merged = operations.merge_channel_banner(BRANDING, "https://example.invalid/new-banner")
+        self.assertEqual(
+            merged["image"]["bannerExternalUrl"], "https://example.invalid/new-banner"
+        )
+        self.assertEqual(merged["channel"], BRANDING["channel"])
+        self.assertEqual(BRANDING["image"]["bannerExternalUrl"], "https://example.invalid/banner")
+
+
+class ChannelArtworkPlanTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.banner = root / "banner.png"
+        write_png(self.banner, 2048, 1152)
+        self.watermark = root / "watermark.png"
+        write_png(self.watermark, 150, 150)
+
+    def test_banner_plan_accepts_the_documented_minimum(self) -> None:
+        plan = operations.plan_channel_banner("UC123", BRANDING, self.banner)
+        self.assertEqual(plan.operation, "channel.set-banner")
+        self.assertEqual(plan.payload["mime_type"], "image/png")
+        self.assertTrue(any("2048x1152" in note for note in plan.notes))
+        self.assertTrue(any("two API writes" in note for note in plan.notes))
+
+    def test_banner_rejects_wrong_aspect_ratio(self) -> None:
+        write_png(self.banner, 2048, 1200)
+        with self.assertRaises(UsageError) as raised:
+            operations.plan_channel_banner("UC123", BRANDING, self.banner)
+        self.assertIn("16:9", raised.exception.message)
+
+    def test_banner_rejects_dimensions_below_minimum(self) -> None:
+        write_png(self.banner, 1920, 1080)
+        with self.assertRaises(UsageError) as raised:
+            operations.plan_channel_banner("UC123", BRANDING, self.banner)
+        self.assertIn("2048x1152", raised.exception.message)
+
+    def test_extension_does_not_override_invalid_image_bytes(self) -> None:
+        self.banner.write_bytes(b"not really a PNG")
+        with self.assertRaises(UsageError) as raised:
+            operations.plan_channel_banner("UC123", BRANDING, self.banner)
+        self.assertIn("PNG or JPEG", raised.exception.message)
+
+    def test_jpeg_dimensions_are_read_from_the_file(self) -> None:
+        jpeg = self.banner.with_suffix(".jpg")
+        jpeg.write_bytes(
+            b"\xff\xd8"
+            + b"\xff\xc0\x00\x0b"
+            + b"\x08\x04\x80\x08\x00\x03\x01\x11\x00"
+            + b"\xff\xd9"
+        )
+        plan = operations.plan_channel_banner("UC123", BRANDING, jpeg)
+        self.assertEqual(plan.payload["mime_type"], "image/jpeg")
+
+    def test_banner_size_limit_is_enforced_before_reading_the_file(self) -> None:
+        with self.banner.open("r+b") as handle:
+            handle.truncate(6 * 1024 * 1024 + 1)
+        with self.assertRaises(UsageError) as raised:
+            operations.plan_channel_banner("UC123", BRANDING, self.banner)
+        self.assertIn("6 MiB", raised.exception.message)
+
+    def test_watermark_plan_accepts_the_channel_asset(self) -> None:
+        plan = operations.plan_channel_watermark("UC123", self.watermark)
+        self.assertEqual(plan.operation, "channel.set-watermark")
+        self.assertEqual(plan.payload["mime_type"], "image/png")
+        self.assertEqual(plan.payload["timing"]["offsetMs"], 0)
+        self.assertTrue(any("no read-back endpoint" in note for note in plan.notes))
+
+    def test_watermark_requires_a_150_pixel_square(self) -> None:
+        write_png(self.watermark, 200, 150)
+        with self.assertRaises(UsageError) as raised:
+            operations.plan_channel_watermark("UC123", self.watermark)
+        self.assertIn("150x150", raised.exception.message)
 
 
 class UploadPolicyTests(unittest.TestCase):

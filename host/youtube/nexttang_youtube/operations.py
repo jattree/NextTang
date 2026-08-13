@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import difflib
 import hashlib
+import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -20,6 +21,19 @@ ALLOWED_UPLOAD_PRIVACY = ("private",)
 KNOWN_PRIVACY_VALUES = ("private", "unlisted", "public")
 MAX_COMMENT_CHARACTERS = 10000
 MAX_CHANNEL_DESCRIPTION_CHARACTERS = 1000
+MAX_BANNER_BYTES = 6 * 1024 * 1024
+MAX_WATERMARK_BYTES = 10 * 1024 * 1024
+BANNER_MINIMUM = (2048, 1152)
+WATERMARK_SIZE = (150, 150)
+
+
+@dataclass(frozen=True)
+class ImageInfo:
+    path: Path
+    size: int
+    mime_type: str
+    width: int
+    height: int
 
 
 @dataclass
@@ -57,6 +71,15 @@ def merge_channel_description(branding: Mapping[str, Any], description: str) -> 
     channel_block = dict(merged.get("channel") or {})
     channel_block["description"] = description
     merged["channel"] = channel_block
+    return merged
+
+
+def merge_channel_banner(branding: Mapping[str, Any], banner_url: str) -> dict[str, Any]:
+    """Return complete brandingSettings with only the banner URL replaced."""
+    merged = copy.deepcopy(dict(branding))
+    image_block = dict(merged.get("image") or {})
+    image_block["bannerExternalUrl"] = banner_url
+    merged["image"] = image_block
     return merged
 
 
@@ -119,6 +142,86 @@ def plan_channel_description(
             "quota_units": 50,
         },
         payload={"channel_id": channel_id, "branding": merged},
+    )
+
+
+def plan_channel_banner(
+    channel_id: str,
+    branding: Mapping[str, Any],
+    path: Path,
+) -> Plan:
+    """Plan the upload and read-modify-write needed to replace a banner."""
+    image = inspect_image(path, max_bytes=MAX_BANNER_BYTES, label="banner")
+    if image.width < BANNER_MINIMUM[0] or image.height < BANNER_MINIMUM[1]:
+        raise UsageError(
+            f"banner is {image.width}x{image.height}; YouTube requires at least 2048x1152"
+        )
+    if image.width * 9 != image.height * 16:
+        raise UsageError(
+            f"banner is {image.width}x{image.height}; YouTube channel banners must be 16:9"
+        )
+
+    current_url = str(((branding.get("image") or {}).get("bannerExternalUrl") or ""))
+    return Plan(
+        operation="channel.set-banner",
+        target=channel_id,
+        summary=f"upload {path.name} ({image.width}x{image.height}, {image.size} bytes) as the channel banner",
+        diff=[
+            f"-bannerExternalUrl: {current_url or '(none)'}",
+            "+bannerExternalUrl: URL returned by channelBanners.insert",
+        ],
+        notes=[
+            f"validated {image.mime_type} artwork at {image.width}x{image.height}; minimum is 2048x1152",
+            f"sha256: {sha256_of(path)}",
+            "This operation uses two API writes: it uploads the image, then sets the returned URL with channels.update.",
+            "If the second write fails, the uploaded image may remain in Google's channel-art storage even though the visible banner is unchanged.",
+            "channels.update receives the complete brandingSettings object read immediately before the write.",
+        ],
+        request={
+            "step_1": "POST upload/youtube/v3/channelBanners/insert (channelBanners.insert)",
+            "step_2": "PUT youtube/v3/channels?part=brandingSettings (channels.update)",
+            "quota_units": 100,
+        },
+        payload={
+            "channel_id": channel_id,
+            "path": str(path),
+            "size": image.size,
+            "mime_type": image.mime_type,
+            "branding": copy.deepcopy(dict(branding)),
+        },
+    )
+
+
+def plan_channel_watermark(channel_id: str, path: Path) -> Plan:
+    """Plan setting the channel-wide in-video watermark from the start."""
+    image = inspect_image(path, max_bytes=MAX_WATERMARK_BYTES, label="watermark")
+    if (image.width, image.height) != WATERMARK_SIZE:
+        raise UsageError(
+            f"watermark is {image.width}x{image.height}; this CLI requires the recommended 150x150 asset"
+        )
+    timing = {"type": "offsetFromStart", "offsetMs": 0}
+    return Plan(
+        operation="channel.set-watermark",
+        target=channel_id,
+        summary=f"upload {path.name} ({image.width}x{image.height}, {image.size} bytes) as the video watermark",
+        notes=[
+            f"validated {image.mime_type} artwork at 150x150; sha256: {sha256_of(path)}",
+            "The watermark starts at the beginning; YouTube chooses the default display duration when durationMs is omitted.",
+            "watermarks.set has no read-back endpoint, so success means Google accepted the request, not that every rendered video was visually inspected.",
+        ],
+        request={
+            "method": "POST",
+            "endpoint": "upload/youtube/v3/watermarks/set (watermarks.set)",
+            "upload_type": "multipart",
+            "quota_units": 50,
+        },
+        payload={
+            "channel_id": channel_id,
+            "path": str(path),
+            "size": image.size,
+            "mime_type": image.mime_type,
+            "timing": timing,
+        },
     )
 
 
@@ -214,3 +317,72 @@ def sha256_of(path: Path, chunk_size: int = 1024 * 1024) -> str:
         while chunk := handle.read(chunk_size):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def inspect_image(path: Path, *, max_bytes: int, label: str) -> ImageInfo:
+    """Inspect PNG/JPEG bytes and dimensions without trusting the extension."""
+    if not path.exists():
+        raise UsageError(f"{label} file not found: {path}")
+    if not path.is_file():
+        raise UsageError(f"not a regular file: {path}")
+    size = path.stat().st_size
+    if size == 0:
+        raise UsageError(f"{label} file is empty: {path}")
+    if size > max_bytes:
+        raise UsageError(
+            f"{label} file is {size} bytes; the limit is {max_bytes // (1024 * 1024)} MiB"
+        )
+
+    with path.open("rb") as handle:
+        prefix = handle.read(24)
+        if prefix.startswith(b"\x89PNG\r\n\x1a\n") and prefix[12:16] == b"IHDR":
+            if len(prefix) < 24:
+                raise UsageError(f"{label} is a truncated PNG: {path}")
+            width, height = struct.unpack(">II", prefix[16:24])
+            mime_type = "image/png"
+        elif prefix.startswith(b"\xff\xd8"):
+            handle.seek(2)
+            width, height = _jpeg_dimensions(handle, label, path)
+            mime_type = "image/jpeg"
+        else:
+            raise UsageError(f"{label} must contain a PNG or JPEG image: {path}")
+
+    if width <= 0 or height <= 0:
+        raise UsageError(f"{label} image has invalid dimensions {width}x{height}: {path}")
+    return ImageInfo(path=path, size=size, mime_type=mime_type, width=width, height=height)
+
+
+def _jpeg_dimensions(handle: Any, label: str, path: Path) -> tuple[int, int]:
+    sof_markers = {
+        0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+        0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+    }
+    while True:
+        byte = handle.read(1)
+        if not byte:
+            break
+        if byte != b"\xff":
+            continue
+        while byte == b"\xff":
+            byte = handle.read(1)
+        if not byte:
+            break
+        marker = byte[0]
+        if marker in {0xD8, 0xD9, 0x01} or 0xD0 <= marker <= 0xD7:
+            continue
+        length_bytes = handle.read(2)
+        if len(length_bytes) != 2:
+            break
+        length = struct.unpack(">H", length_bytes)[0]
+        if length < 2:
+            break
+        if marker in sof_markers:
+            payload = handle.read(5)
+            if len(payload) != 5:
+                break
+            height, width = struct.unpack(">HH", payload[1:5])
+            return width, height
+        if marker == 0xDA:
+            break
+        handle.seek(length - 2, 1)
+    raise UsageError(f"{label} is a truncated or unsupported JPEG: {path}")

@@ -228,6 +228,79 @@ def command_channel_set_description(context: Context) -> int:
     return EXIT_OK
 
 
+def command_channel_set_banner(context: Context) -> int:
+    path = Path(context.args.file)
+    identity = context.guarded_channel()
+    branding = context.api.channel_branding(identity.channel_id)
+    plan = operations.plan_channel_banner(identity.channel_id, branding, path)
+
+    if not context.args.apply:
+        _emit_plan(context, plan, applied=False)
+        return EXIT_OK
+
+    context.session.require_scope(oauth.SCOPE_YOUTUBE_FORCE_SSL, capability="banner-write")
+    verified = context.guarded_channel(force=True)
+    fresh_branding = context.api.channel_branding(verified.channel_id)
+    if fresh_branding != branding:
+        raise UsageError(
+            "the channel branding changed between the plan and the apply step",
+            hint="Re-run the dry run, confirm the new diff, then apply again.",
+        )
+
+    banner_url = context.api.upload_channel_banner(path, plan.payload["mime_type"])
+    merged = operations.merge_channel_banner(fresh_branding, banner_url)
+    try:
+        context.api.update_channel_branding(verified.channel_id, merged)
+    except CliError as error:
+        partial = (
+            "The banner image upload completed before this failure. The visible channel banner "
+            "may or may not have changed; inspect 'channel show' and YouTube Studio before retrying."
+        )
+        error.hint = f"{error.hint} {partial}" if error.hint else partial
+        raise
+
+    _emit_plan(
+        context,
+        plan,
+        applied=True,
+        extra={
+            "channel_id": verified.channel_id,
+            "banner_url": banner_url,
+            "verification": "both API writes accepted; visual verification still required",
+        },
+    )
+    return EXIT_OK
+
+
+def command_channel_set_watermark(context: Context) -> int:
+    path = Path(context.args.file)
+    identity = context.guarded_channel()
+    plan = operations.plan_channel_watermark(identity.channel_id, path)
+
+    if not context.args.apply:
+        _emit_plan(context, plan, applied=False)
+        return EXIT_OK
+
+    context.session.require_scope(oauth.SCOPE_YOUTUBE_FORCE_SSL, capability="watermark-write")
+    verified = context.guarded_channel(force=True)
+    context.api.set_channel_watermark(
+        verified.channel_id,
+        path,
+        plan.payload["mime_type"],
+        plan.payload["timing"],
+    )
+    _emit_plan(
+        context,
+        plan,
+        applied=True,
+        extra={
+            "channel_id": verified.channel_id,
+            "verification": "watermarks.set accepted; there is no API read-back endpoint",
+        },
+    )
+    return EXIT_OK
+
+
 # --------------------------------------------------------------------- videos
 
 
@@ -750,6 +823,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     channel_description.add_argument("--file", required=True, help="UTF-8 file holding the new description")
     channel_description.set_defaults(handler=command_channel_set_description)
+    channel_banner = channel_commands.add_parser(
+        "set-banner",
+        parents=[common, apply_flag],
+        help="upload and set channel banner artwork (dry run by default)",
+    )
+    channel_banner.add_argument("--file", required=True, help="2048x1152 or larger 16:9 PNG/JPEG")
+    channel_banner.set_defaults(handler=command_channel_set_banner)
+    channel_watermark = channel_commands.add_parser(
+        "set-watermark",
+        parents=[common, apply_flag],
+        help="upload and set the channel-wide video watermark (dry run by default)",
+    )
+    channel_watermark.add_argument("--file", required=True, help="150x150 PNG/JPEG watermark")
+    channel_watermark.set_defaults(handler=command_channel_set_watermark)
 
     videos = groups.add_parser("videos", help="video commands")
     video_commands = videos.add_subparsers(dest="command", required=True)

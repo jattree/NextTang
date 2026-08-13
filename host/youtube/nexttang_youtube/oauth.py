@@ -65,6 +65,14 @@ CAPABILITIES: dict[str, tuple[str, str]] = {
         SCOPE_YOUTUBE_FORCE_SSL,
         "post a reply to an existing comment",
     ),
+    "banner-write": (
+        SCOPE_YOUTUBE_FORCE_SSL,
+        "upload and set the channel banner",
+    ),
+    "watermark-write": (
+        SCOPE_YOUTUBE_FORCE_SSL,
+        "upload and set the channel-wide video watermark",
+    ),
 }
 WRITE_CAPABILITIES = {
     name: value for name, value in CAPABILITIES.items() if name != "comments-read"

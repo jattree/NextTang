@@ -16,6 +16,7 @@ import datetime
 import email.utils
 import json
 import random
+import secrets
 import time
 import urllib.parse
 from pathlib import Path
@@ -40,6 +41,8 @@ UPLOAD_DEADLINE_SECONDS = 3600.0
 MAX_UPLOAD_ATTEMPTS = 5
 RETRYABLE_STATUSES = {408, 429, 500, 502, 503, 504}
 MAX_BACKOFF_SECONDS = 64.0
+MAX_BANNER_UPLOAD_BYTES = 6 * 1024 * 1024
+MAX_WATERMARK_UPLOAD_BYTES = 10 * 1024 * 1024
 
 QUOTA_REASONS = {
     "quotaExceeded",
@@ -263,6 +266,53 @@ class YouTubeApi:
             json_body=body,
         )
 
+    def upload_channel_banner(self, path: Path, mime_type: str) -> str:
+        """Upload banner bytes and return the temporary URL used by channels.update."""
+        response = self._multipart_upload(
+            f"{UPLOAD_API_ROOT}/channelBanners/insert",
+            parameters={"uploadType": "multipart"},
+            metadata={},
+            path=path,
+            mime_type=mime_type,
+            max_bytes=MAX_BANNER_UPLOAD_BYTES,
+        )
+        try:
+            payload = response.json()
+        except ApiError as error:
+            raise ApiError(
+                "channelBanners.insert returned an unreadable completion response",
+                hint="The image may have uploaded. Do not retry blindly; inspect the channel and Google Photos/channel-art storage first.",
+            ) from error
+        url = payload.get("url") if isinstance(payload, dict) else None
+        if not url:
+            raise ApiError(
+                "channelBanners.insert succeeded but returned no banner URL",
+                hint="Do not retry blindly; inspect the channel and Google Photos/channel-art storage first.",
+            )
+        return str(url)
+
+    def set_channel_watermark(
+        self,
+        channel_id: str,
+        path: Path,
+        mime_type: str,
+        timing: Mapping[str, Any],
+    ) -> None:
+        """Set the in-video branding watermark for the pinned channel."""
+        metadata = {
+            "timing": dict(timing),
+            "position": {"type": "corner", "cornerPosition": "topRight"},
+            "targetChannelId": channel_id,
+        }
+        self._multipart_upload(
+            f"{UPLOAD_API_ROOT}/watermarks/set",
+            parameters={"uploadType": "multipart", "channelId": channel_id},
+            metadata=metadata,
+            path=path,
+            mime_type=mime_type,
+            max_bytes=MAX_WATERMARK_UPLOAD_BYTES,
+        )
+
     def insert_comment_reply(self, parent_id: str, text: str) -> dict[str, Any]:
         body = {"snippet": {"parentId": parent_id, "textOriginal": text}}
         return self._request(
@@ -271,6 +321,57 @@ class YouTubeApi:
             parameters={"part": "snippet"},
             json_body=body,
         )
+
+    def _multipart_upload(
+        self,
+        url: str,
+        *,
+        parameters: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+        path: Path,
+        mime_type: str,
+        max_bytes: int,
+    ) -> Response:
+        """Send one bounded multipart/related image upload."""
+        observed_size = path.stat().st_size
+        if observed_size > max_bytes:
+            raise ApiError(
+                f"refusing to read {observed_size} bytes for an image upload capped at {max_bytes}"
+            )
+        boundary = f"nexttang-{secrets.token_hex(16)}"
+        metadata_bytes = json.dumps(metadata, separators=(",", ":")).encode("utf-8")
+        image_bytes = path.read_bytes()
+        if len(image_bytes) > max_bytes:
+            raise ApiError(
+                f"image grew to {len(image_bytes)} bytes while being read; upload limit is {max_bytes}"
+            )
+        body = b"".join(
+            (
+                f"--{boundary}\r\n".encode(),
+                b"Content-Type: application/json; charset=UTF-8\r\n\r\n",
+                metadata_bytes,
+                b"\r\n",
+                f"--{boundary}\r\n".encode(),
+                f"Content-Type: {mime_type}\r\n\r\n".encode(),
+                image_bytes,
+                b"\r\n",
+                f"--{boundary}--\r\n".encode(),
+            )
+        )
+        target = f"{url}?{urllib.parse.urlencode(parameters)}"
+        response = self._transport.request(
+            "POST",
+            target,
+            headers={
+                "Authorization": f"Bearer {self._token()}",
+                "Content-Type": f"multipart/related; boundary={boundary}",
+                "Content-Length": str(len(body)),
+            },
+            body=body,
+        )
+        if not response.ok:
+            raise _map_error(response)
+        return response
 
     def start_resumable_upload(self, metadata: Mapping[str, Any], size: int, mime_type: str) -> str:
         """Open a resumable upload session and return its session URL."""

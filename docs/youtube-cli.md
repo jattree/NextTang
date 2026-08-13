@@ -122,11 +122,13 @@ Every command accepts `--json` for machine-readable output.
 
 ### Write commands
 
-All three are dry runs unless `--apply` is given.
+All five are dry runs unless `--apply` is given.
 
 | Command | What it does |
 | --- | --- |
 | `channel set-description --file FILE` | Replaces the channel description from a UTF-8 file. |
+| `channel set-banner --file FILE` | Uploads 16:9 channel art (minimum 2048x1152) and sets it with a safe branding read-modify-write. |
+| `channel set-watermark --file FILE` | Sets a 150x150 channel-wide video watermark from the start of playback. |
 | `videos upload PATH --privacy private` | Uploads a video as private. `--privacy` is required and only `private` is accepted. |
 | `comments reply COMMENT_ID --text-file FILE` | Posts one reply to one comment on the channel's own content. |
 
@@ -145,6 +147,8 @@ Anything beyond that must be named explicitly with `--enable`:
 | --- | --- | --- |
 | `comments-read` | `youtube.force-ssl` | `comments list` |
 | `channel-write` | `youtube` | `channel set-description --apply` |
+| `banner-write` | `youtube.force-ssl` | `channel set-banner --apply` |
+| `watermark-write` | `youtube.force-ssl` | `channel set-watermark --apply` |
 | `upload` | `youtube.upload` | `videos upload --apply` |
 | `comment-reply` | `youtube.force-ssl` | `comments reply --apply` |
 
@@ -157,11 +161,12 @@ and deleting comments. There is no narrower scope for reading a channel's
 comments. Granting it therefore widens the token beyond reading, which is why it
 is a named opt-in rather than part of the default set.
 
-Because `comments-read` and `comment-reply` share one scope, the tool records
+Because several capabilities share `youtube.force-ssl`, the tool records
 which capabilities were requested at login and checks that list as well as the
-scope. Granting comment reading does not enable replying. The scope is the real
-security boundary and Google enforces it; the capability list is a local
-interlock so one grant does not quietly imply another.
+scope. Granting comment reading does not enable replying, banner changes or
+watermark changes. The scope is the real security boundary and Google enforces
+it; the capability list is a local interlock so one grant does not quietly imply
+another.
 
 ## Quota behaviour
 
@@ -175,6 +180,8 @@ Costs relevant here:
 | --- | --- |
 | `channels.list`, `playlistItems.list`, `playlists.list`, `videos.list`, `commentThreads.list` | 1 unit per page |
 | `channels.update` | 50 units |
+| `channelBanners.insert` | 50 units |
+| `watermarks.set` | 50 units |
 | `comments.insert` | 50 units |
 | `videos.insert` | 1 call from the 100-per-day upload bucket |
 
@@ -187,7 +194,9 @@ wrong channel.
 listing videos costs 1 unit per page instead of consuming the separate
 100-call-per-day search bucket.
 
-Quota and rate-limit failures exit 6 and change nothing.
+Quota and rate-limit failures exit 6. A refusal before a write changes nothing;
+for the banner's two-write flow, a refusal of the second step can leave only the
+uploaded channel-art object behind, and the command reports that partial state.
 
 ## Dry run and apply
 
@@ -200,20 +209,38 @@ it works with read-only authorisation. Only `--apply` needs a write scope.
 
 With `--apply` the tool re-resolves the channel through the API immediately
 before the mutating call, so a token that changed hands between planning and
-applying is caught. For `channel set-description` it also re-reads the current
-branding and refuses to continue if it changed since the plan was shown, rather
-than overwriting an edit someone made in the meantime.
+applying is caught. For `channel set-description` and `channel set-banner` it
+also re-reads the current branding and refuses to continue if it changed since
+the plan was shown, rather than overwriting an edit someone made in the
+meantime.
 
 ### Channel updates are read-modify-write
 
 `channels.update` replaces every mutable property in the part it is given, and a
 property omitted from the request has its existing value deleted. The tool
 therefore reads the complete `brandingSettings` object, changes only the
-description, and writes the whole object back. The dry run lists the fields it is
-preserving so you can see nothing is being dropped.
+description or banner URL, and writes the whole object back. The dry run lists
+the fields it is preserving so you can see nothing is being dropped.
 
 Never hand-write a `channels.update` request with only the field you want to
 change. That deletes the rest.
+
+### Banner and watermark writes
+
+Banner changes use two writes. `channelBanners.insert` uploads the bytes and
+returns a URL; `channels.update` then places that URL in the complete
+`brandingSettings.image` block. If the second request fails, the upload may
+remain in Google's channel-art storage even though the visible banner did not
+change. The command reports that ambiguity and tells the operator to inspect
+the channel before retrying.
+
+`watermarks.set` accepts the watermark but exposes no corresponding read method.
+A successful command therefore proves API acceptance only. Visually verify it
+on a channel video once one exists.
+
+References: [channelBanners.insert](https://developers.google.com/youtube/v3/docs/channelBanners/insert),
+[watermarks.set](https://developers.google.com/youtube/v3/docs/watermarks/set),
+and [channels.update](https://developers.google.com/youtube/v3/docs/channels/update).
 
 ### Replies are restricted to the channel's own content
 
@@ -317,7 +344,7 @@ compares the returned ID.
 The Data API cannot do these. Use YouTube Studio or Google account settings:
 
 - changing the channel handle;
-- profile picture, banner and watermark;
+- profile picture;
 - channel links shown on the profile;
 - channel name, which the API exposes read-only through `brandingSettings`;
 - verification, monetisation, and Content ID;
