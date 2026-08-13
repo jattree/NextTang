@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="./assets/brand/logo.svg" width="160" alt="NextTang NT hardware-trace logo">
+  <img src="./assets/brand/logo.png" width="180" alt="NextTang logo">
 </p>
 
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="NextTang: shared ZX Spectrum Next FPGA RTL for Tang Console 60K and 138K boards with a planned hardware debug path">
+  <img src="./assets/readme/hero.png" width="100%" alt="NextTang: ZX Spectrum Next on Sipeed Tang FPGA">
 </p>
 
 <p align="center">
@@ -12,6 +12,7 @@
   <a href="ROADMAP.md"><img alt="Status: planning" src="https://img.shields.io/badge/status-planning-f97316?style=flat-square"></a>
   <a href="#hardware-targets"><img alt="Targets: Tang Nano 20K, Console 60K, and Console 138K" src="https://img.shields.io/badge/targets-Nano_20K_%7C_Console_60K_%7C_138K-334155?style=flat-square"></a>
   <a href="https://t.me/NextTang"><img alt="Telegram: NextTang" src="https://img.shields.io/badge/Telegram-NextTang-26A5E4?style=flat-square&amp;logo=telegram&amp;logoColor=white"></a>
+  <a href="https://www.youtube.com/@NextTangFPGA"><img alt="YouTube: NextTang" src="https://img.shields.io/badge/YouTube-NextTang-FF0000?style=flat-square&amp;logo=youtube&amp;logoColor=white"></a>
   <a href="https://github.com/jattree/NextTang/issues"><img alt="Open issues" src="https://img.shields.io/github/issues/jattree/NextTang?style=flat-square"></a>
 </p>
 
@@ -21,6 +22,7 @@
   <a href="docs/provenance.md">Provenance</a> ·
   <a href="docs/toolchain.md">Toolchain</a> ·
   <a href="https://t.me/NextTang">Telegram</a> ·
+  <a href="https://www.youtube.com/@NextTangFPGA">YouTube</a> ·
   <a href="#contributing">Contributing</a> ·
   <a href="#references">References</a>
 </p>
@@ -161,7 +163,8 @@ toolchain you can use, and the area you would like to work on. Small,
 independently verifiable contributions are preferred.
 
 Project discussion, coordination, announcements, and roadmap updates are hosted
-in the [NextTang Telegram group](https://t.me/NextTang).
+in the [NextTang Telegram group](https://t.me/NextTang). Less technical project
+updates and build videos are on the [NextTang YouTube channel](https://www.youtube.com/@NextTangFPGA).
 
 ## References
 
