@@ -91,8 +91,10 @@
     <g transform="translate(355 48)">
       <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
          font-size="25" font-weight="700" letter-spacing="4">
-        <text x="2" y="35" fill="#f8fafc" stroke="#080a0f" stroke-width="2"
-              paint-order="stroke fill">OPEN-SOURCE FPGA DEVELOPMENT</text>
+        <rect x="-12" y="-3" width="1180" height="50" rx="12"
+              fill="#080a0f" fill-opacity="0.82"
+              stroke="#263141" stroke-opacity="0.55"/>
+        <text x="2" y="35" fill="#cbd5e1">OPEN-SOURCE FPGA DEVELOPMENT</text>
         <rect x="718" y="13" width="13" height="13" rx="3" fill="#f97316"/>
         <rect x="741" y="13" width="13" height="13" rx="3" fill="#22d3ee"/>
       </g>
@@ -107,8 +109,10 @@
             font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
         ZX Spectrum Next on Sipeed Tang FPGA
       </text>
-      <text x="2" y="322" fill="#f8fafc" stroke="#080a0f" stroke-width="2"
-            paint-order="stroke fill" font-size="23" font-weight="700"
+      <rect x="-12" y="286" width="1180" height="48" rx="12"
+            fill="#080a0f" fill-opacity="0.82"
+            stroke="#263141" stroke-opacity="0.55"/>
+      <text x="2" y="322" fill="#cbd5e1" font-size="23" font-weight="700"
             font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
             letter-spacing="2.2">BRING-UP  /  PORTING  /  HARDWARE DEBUGGING</text>
     </g>
