@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="./assets/brand/logo.png" width="180" alt="NextTang logo">
-</p>
-
-<p align="center">
   <img src="./assets/readme/hero.png" width="100%" alt="NextTang: ZX Spectrum Next on Sipeed Tang FPGA">
 </p>
 
