@@ -63,6 +63,16 @@ class ChannelMismatchError(CliError):
         self.observed_title = observed_title
 
 
+class ForeignContentError(CliError):
+    """The operation would act on content the pinned channel does not own.
+
+    Distinct from ChannelMismatchError: the credential is correct, the target is
+    not. Replying to a comment on someone else's video is the case that matters.
+    """
+
+    exit_code = EXIT_CHANNEL_MISMATCH
+
+
 class QuotaError(CliError):
     """The API refused the call for quota or rate-limit reasons."""
 

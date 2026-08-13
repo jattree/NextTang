@@ -13,11 +13,14 @@ References:
 from __future__ import annotations
 
 import json
+import random
+import time
 import urllib.parse
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .channel import ChannelIdentity
-from .errors import ApiError, AuthorisationError, QuotaError, ScopeError
+from .errors import ApiError, AuthorisationError, ForeignContentError, QuotaError, ScopeError
 from .redaction import redact
 from .transport import Response, Transport
 
@@ -30,6 +33,11 @@ MAX_LIMIT = 200
 DATA_PAGE_SIZE = 50
 COMMENT_PAGE_SIZE = 100
 UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+UPLOAD_TIMEOUT_SECONDS = 600.0
+UPLOAD_DEADLINE_SECONDS = 3600.0
+MAX_UPLOAD_ATTEMPTS = 5
+RETRYABLE_STATUSES = {408, 429, 500, 502, 503, 504}
+MAX_BACKOFF_SECONDS = 64.0
 
 QUOTA_REASONS = {
     "quotaExceeded",
@@ -147,6 +155,77 @@ class YouTubeApi:
             page_size=COMMENT_PAGE_SIZE,
         )
 
+    def comment_snippet(self, comment_id: str) -> dict[str, Any]:
+        """Fetch one comment so its target can be checked before replying."""
+        payload = self._get(
+            f"{DATA_API_ROOT}/comments",
+            {"part": "snippet", "id": comment_id, "textFormat": "plainText"},
+        )
+        items = payload.get("items") or []
+        if not items:
+            raise ApiError(
+                f"no comment found with ID {comment_id}",
+                hint="Check the ID. Use 'comments list' to find the exact comment_id.",
+            )
+        return items[0].get("snippet") or {}
+
+    def video_owner(self, video_id: str) -> str | None:
+        """Return the channel ID that owns a video, or None if it is unknown."""
+        payload = self._get(
+            f"{DATA_API_ROOT}/videos", {"part": "snippet", "id": video_id}
+        )
+        items = payload.get("items") or []
+        if not items:
+            return None
+        return (items[0].get("snippet") or {}).get("channelId")
+
+    def resolve_reply_target(self, comment_id: str, expected_channel_id: str) -> dict[str, Any]:
+        """Prove a comment sits on the pinned channel's content before replying.
+
+        Guarding only the speaking channel is not enough: comments.insert takes
+        a parentId, and a mistyped or copied ID would post a NextTang reply
+        under someone else's video.
+        """
+        snippet = self.comment_snippet(comment_id)
+        video_id = snippet.get("videoId")
+        parent_id = snippet.get("parentId")
+        owner = None
+        basis = None
+
+        if video_id:
+            owner = self.video_owner(video_id)
+            basis = f"video {video_id}"
+            if owner is None:
+                raise ForeignContentError(
+                    f"comment {comment_id} is on video {video_id}, which could not be resolved",
+                    hint="The video may be private, deleted, or on another channel. Not replying.",
+                )
+        elif snippet.get("channelId"):
+            owner = snippet["channelId"]
+            basis = "channel discussion"
+
+        if owner is None:
+            raise ForeignContentError(
+                f"could not establish which channel owns the content behind comment {comment_id}",
+                hint="Refusing to reply to a target that cannot be attributed.",
+            )
+        if owner != expected_channel_id:
+            raise ForeignContentError(
+                f"comment {comment_id} is on content owned by {owner}, not the pinned channel "
+                f"{expected_channel_id}",
+                hint="This CLI only replies to comments on its own channel's content.",
+            )
+
+        return {
+            "comment_id": comment_id,
+            "video_id": video_id,
+            "parent_id": parent_id,
+            "owner_channel_id": owner,
+            "basis": basis,
+            "author": snippet.get("authorDisplayName"),
+            "text": snippet.get("textOriginal") or snippet.get("textDisplay"),
+        }
+
     def analytics_report(
         self,
         channel_id: str,
@@ -214,29 +293,119 @@ class YouTubeApi:
             raise ApiError("the upload session response carried no Location header")
         return location
 
-    def upload_chunks(self, session_url: str, data: bytes, chunk_size: int = UPLOAD_CHUNK_BYTES) -> dict[str, Any]:
-        """Send the file in bounded chunks, honouring 308 Resume Incomplete."""
-        total = len(data)
+    def upload_file(
+        self,
+        session_url: str,
+        path: Path,
+        mime_type: str = "video/*",
+        *,
+        chunk_size: int = UPLOAD_CHUNK_BYTES,
+        max_attempts: int = MAX_UPLOAD_ATTEMPTS,
+        deadline_seconds: float = UPLOAD_DEADLINE_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> dict[str, Any]:
+        """Send a file to an open resumable session.
+
+        Chunks are read from disk one at a time, so a 200 GB upload costs one
+        chunk of memory rather than the whole file. Transient failures are
+        retried with bounded backoff, and each retry first asks the server how
+        much it actually holds rather than assuming the last offset.
+
+        Protocol: https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol
+        """
+        total = path.stat().st_size
+        if total == 0:
+            raise ApiError(f"refusing to upload an empty file: {path}")
+
+        started = clock()
         offset = 0
-        while offset < total:
-            end = min(offset + chunk_size, total) - 1
-            response = self._transport.request(
-                "PUT",
-                session_url,
-                headers={
-                    "Content-Length": str(end - offset + 1),
-                    "Content-Range": f"bytes {offset}-{end}/{total}",
-                },
-                body=data[offset : end + 1],
-                timeout=600.0,
-            )
-            if response.status in {200, 201}:
-                return response.json()
-            if response.status == 308:
-                offset = _resume_offset(response, fallback=end + 1)
-                continue
-            raise _map_error(response)
+        attempts = 0
+
+        with path.open("rb") as handle:
+            while offset < total:
+                if clock() - started > deadline_seconds:
+                    raise ApiError(
+                        f"upload exceeded its {int(deadline_seconds)} second deadline at "
+                        f"{offset} of {total} bytes",
+                        hint="The session may still be resumable. Re-run the command to start again.",
+                    )
+
+                handle.seek(offset)
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    raise ApiError(f"read no data at offset {offset} of {total}")
+                end = offset + len(chunk) - 1
+
+                response, failure = self._send_chunk(
+                    session_url, chunk, offset, end, total, mime_type
+                )
+
+                if response is not None and response.status in {200, 201}:
+                    return response.json()
+                if response is not None and response.status == 308:
+                    offset = _resume_offset(response, fallback=end + 1)
+                    attempts = 0
+                    continue
+                if response is not None and not _is_retryable(response.status):
+                    raise _map_error(response)
+
+                attempts += 1
+                if attempts >= max_attempts:
+                    detail = failure or f"HTTP {response.status if response else 'unknown'}"
+                    raise ApiError(
+                        f"upload failed after {attempts} attempts at byte {offset}: {detail}",
+                        hint="Nothing was published. Re-run the command to start a new upload.",
+                    )
+                sleeper(_backoff_seconds(attempts))
+                resumed = self._query_upload_offset(session_url, total)
+                if resumed is not None:
+                    offset = resumed
+
         raise ApiError("the upload finished without a completion response")
+
+    def _send_chunk(
+        self,
+        session_url: str,
+        chunk: bytes,
+        offset: int,
+        end: int,
+        total: int,
+        mime_type: str,
+    ) -> tuple[Response | None, str | None]:
+        """Send one chunk. Returns (response, None) or (None, failure text)."""
+        headers = {
+            "Authorization": f"Bearer {self._token()}",
+            "Content-Type": mime_type,
+            "Content-Length": str(len(chunk)),
+            "Content-Range": f"bytes {offset}-{end}/{total}",
+        }
+        try:
+            return self._transport.request(
+                "PUT", session_url, headers=headers, body=chunk, timeout=UPLOAD_TIMEOUT_SECONDS
+            ), None
+        except ApiError as error:
+            # A network failure mid-upload is exactly what resumption exists for.
+            return None, error.message
+
+    def _query_upload_offset(self, session_url: str, total: int) -> int | None:
+        """Ask the server how many bytes it holds, per the resumable protocol."""
+        headers = {
+            "Authorization": f"Bearer {self._token()}",
+            "Content-Length": "0",
+            "Content-Range": f"bytes */{total}",
+        }
+        try:
+            response = self._transport.request(
+                "PUT", session_url, headers=headers, body=b"", timeout=UPLOAD_TIMEOUT_SECONDS
+            )
+        except ApiError:
+            return None
+        if response.status in {200, 201}:
+            return total
+        if response.status == 308:
+            return _resume_offset(response, fallback=0)
+        return None
 
     # --------------------------------------------------------------- plumbing
 
@@ -317,6 +486,16 @@ def _header(response: Response, name: str) -> str | None:
         if key.lower() == name.lower():
             return value
     return None
+
+
+def _is_retryable(status: int) -> bool:
+    return status in RETRYABLE_STATUSES
+
+
+def _backoff_seconds(attempt: int) -> float:
+    """Exponential backoff with jitter, as Google's upload guide recommends."""
+    ceiling = min(2.0**attempt, MAX_BACKOFF_SECONDS)
+    return ceiling / 2 + random.random() * (ceiling / 2)
 
 
 def _resume_offset(response: Response, *, fallback: int) -> int:

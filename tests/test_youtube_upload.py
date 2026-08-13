@@ -1,0 +1,245 @@
+"""Resumable upload behaviour: headers, streaming, retries, and bounds.
+
+These cover the failure paths that a dry run can never reach, so the uploader is
+not trusted purely on the strength of its happy path.
+
+Protocol reference:
+https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol
+"""
+
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from youtube_support import FakeTransport, error_payload
+
+from nexttang_youtube.api import MAX_UPLOAD_ATTEMPTS, YouTubeApi
+from nexttang_youtube.errors import ApiError, AuthorisationError
+
+SESSION = "https://www.googleapis.com/upload/session/abc"
+
+
+class UploadTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.slept: list[float] = []
+        self.now = 0.0
+
+    def make_file(self, size: int) -> Path:
+        path = Path(self.temporary.name) / "video.mp4"
+        path.write_bytes(bytes(index % 251 for index in range(size)))
+        return path
+
+    def api(self, transport: FakeTransport) -> YouTubeApi:
+        return YouTubeApi(transport, lambda: "test-access-token")
+
+    def sleeper(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+    def clock(self) -> float:
+        self.now += 0.001
+        return self.now
+
+
+class ChunkTransmissionTests(UploadTestCase):
+    def test_every_chunk_carries_authorisation_and_content_type(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport().route(
+            "PUT", SESSION, payload={"id": "vid", "status": {"privacyStatus": "private"}}
+        )
+        self.api(transport).upload_file(SESSION, path, "video/mp4", chunk_size=1024)
+
+        puts = transport.calls_to(SESSION)
+        self.assertTrue(puts)
+        for request in puts:
+            self.assertEqual(request.headers.get("Authorization"), "Bearer test-access-token")
+            self.assertEqual(request.headers.get("Content-Type"), "video/mp4")
+            self.assertIn("Content-Range", request.headers)
+
+    def test_a_large_file_is_sent_in_bounded_chunks(self) -> None:
+        path = self.make_file(2500)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-999"}, times=1)
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-1999"}, times=1)
+        transport.route("PUT", SESSION, payload={"id": "vid"}, times=1)
+
+        result = self.api(transport).upload_file(SESSION, path, chunk_size=1000)
+
+        self.assertEqual(result["id"], "vid")
+        ranges = [request.headers["Content-Range"] for request in transport.calls_to(SESSION)]
+        self.assertEqual(
+            ranges,
+            ["bytes 0-999/2500", "bytes 1000-1999/2500", "bytes 2000-2499/2500"],
+        )
+        sizes = [len(request.body or b"") for request in transport.calls_to(SESSION)]
+        self.assertEqual(sizes, [1000, 1000, 500])
+        self.assertTrue(
+            all(size <= 1000 for size in sizes),
+            "no request may carry more than one chunk, or the file is being held in memory",
+        )
+
+    def test_the_server_offset_overrides_the_local_one(self) -> None:
+        """A 308 that acknowledges fewer bytes must rewind, not skip data."""
+        path = self.make_file(3000)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-499"}, times=1)
+        transport.route("PUT", SESSION, payload={"id": "vid"}, times=1)
+
+        self.api(transport).upload_file(SESSION, path, chunk_size=1000)
+
+        ranges = [request.headers["Content-Range"] for request in transport.calls_to(SESSION)]
+        self.assertEqual(ranges, ["bytes 0-999/3000", "bytes 500-1499/3000"])
+
+    def test_an_empty_file_is_refused_before_any_request(self) -> None:
+        path = Path(self.temporary.name) / "empty.mp4"
+        path.write_bytes(b"")
+        transport = FakeTransport()
+        with self.assertRaises(ApiError):
+            self.api(transport).upload_file(SESSION, path)
+        self.assertEqual(transport.requests, [])
+
+
+class RetryTests(UploadTestCase):
+    def test_a_transient_server_error_is_retried(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=503, payload=error_payload(503, "backendError"), times=1)
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-49"}, times=1)
+        transport.route("PUT", SESSION, payload={"id": "vid"}, times=1)
+
+        result = self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+
+        self.assertEqual(result["id"], "vid")
+        self.assertEqual(len(self.slept), 1, "one failure means one backoff")
+        self.assertGreater(self.slept[0], 0)
+
+    def test_a_network_failure_is_retried(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, times=1, error="connection reset")
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-9"}, times=1)
+        transport.route("PUT", SESSION, payload={"id": "vid"}, times=1)
+
+        result = self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+        self.assertEqual(result["id"], "vid")
+
+    def test_retries_are_capped(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=500, payload=error_payload(500, "backendError"))
+
+        with self.assertRaises(ApiError) as raised:
+            self.api(transport).upload_file(
+                SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+            )
+
+        self.assertIn("after", raised.exception.message)
+        self.assertIn("attempts", raised.exception.message)
+        self.assertEqual(len(self.slept), MAX_UPLOAD_ATTEMPTS - 1)
+
+    def test_backoff_grows_and_stays_bounded(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=503, payload=error_payload(503, "backendError"))
+
+        with self.assertRaises(ApiError):
+            self.api(transport).upload_file(
+                SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+            )
+
+        self.assertEqual(self.slept, sorted(self.slept), "backoff must not shrink")
+        self.assertTrue(all(delay <= 64.0 for delay in self.slept), "backoff must stay bounded")
+
+    def test_the_overall_deadline_is_enforced(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=503, payload=error_payload(503, "backendError"))
+
+        def impatient_sleeper(seconds: float) -> None:
+            self.slept.append(seconds)
+            self.now += 10_000.0
+
+        with self.assertRaises(ApiError) as raised:
+            self.api(transport).upload_file(
+                SESSION,
+                path,
+                chunk_size=1000,
+                deadline_seconds=60.0,
+                clock=self.clock,
+                sleeper=impatient_sleeper,
+            )
+        self.assertIn("deadline", raised.exception.message)
+
+    def test_a_retry_asks_the_server_what_it_holds(self) -> None:
+        path = self.make_file(2000)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=503, payload=error_payload(503, "backendError"), times=1)
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-1499"}, times=1)
+        transport.route("PUT", SESSION, payload={"id": "vid"}, times=1)
+
+        self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+
+        ranges = [request.headers["Content-Range"] for request in transport.calls_to(SESSION)]
+        self.assertEqual(ranges[1], "bytes */2000", "the retry must query the committed offset")
+        self.assertEqual(ranges[2], "bytes 1500-1999/2000", "and resume from what the server holds")
+
+    def test_a_permanent_failure_is_not_retried(self) -> None:
+        """404 means the upload session is gone. Retrying it wastes the deadline."""
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route(
+            "PUT", SESSION, status=404, payload=error_payload(404, "notFound"), times=1
+        )
+
+        with self.assertRaises(ApiError):
+            self.api(transport).upload_file(
+                SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+            )
+        self.assertEqual(self.slept, [], "a permanent refusal must fail fast")
+        self.assertEqual(len(transport.calls_to(SESSION)), 1)
+
+    def test_an_expired_token_surfaces_as_an_auth_error(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route(
+            "PUT", SESSION, status=401, payload=error_payload(401, "authError"), times=1
+        )
+
+        with self.assertRaises(AuthorisationError):
+            self.api(transport).upload_file(
+                SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+            )
+
+
+class SessionTests(UploadTestCase):
+    def test_the_session_request_declares_length_and_type(self) -> None:
+        transport = FakeTransport().route(
+            "POST", "/upload/youtube/v3/videos", headers={"Location": SESSION}, payload={}
+        )
+        url = self.api(transport).start_resumable_upload(
+            {"snippet": {"title": "t"}, "status": {"privacyStatus": "private"}}, 4096, "video/mp4"
+        )
+        self.assertEqual(url, SESSION)
+        request = transport.calls_to("/upload/youtube/v3/videos")[0]
+        self.assertEqual(request.headers["X-Upload-Content-Length"], "4096")
+        self.assertEqual(request.headers["X-Upload-Content-Type"], "video/mp4")
+        self.assertIn("uploadType=resumable", request.url)
+
+    def test_a_session_response_without_a_location_is_an_error(self) -> None:
+        transport = FakeTransport().route("POST", "/upload/youtube/v3/videos", payload={})
+        with self.assertRaises(ApiError):
+            self.api(transport).start_resumable_upload({}, 10, "video/mp4")
+
+
+if __name__ == "__main__":
+    unittest.main()

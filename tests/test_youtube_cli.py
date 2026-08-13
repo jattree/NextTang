@@ -284,6 +284,32 @@ class DryRunTests(CliTestCase):
         transport.route("GET", "brandingSettings", payload=branding_resource())
         return transport
 
+    def _reply_routes(self, owner: str = CHANNEL_ID) -> FakeTransport:
+        """Routes for a reply whose target resolves to our own video."""
+        transport = FakeTransport()
+        transport.route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET",
+            "/comments",
+            payload={
+                "items": [
+                    {
+                        "id": "Ugx123",
+                        "snippet": {
+                            "videoId": "vid123",
+                            "channelId": owner,
+                            "authorDisplayName": "A Viewer",
+                            "textOriginal": "nice work",
+                        },
+                    }
+                ]
+            },
+        )
+        transport.route(
+            "GET", "/videos", payload={"items": [{"id": "vid123", "snippet": {"channelId": owner}}]}
+        )
+        return transport
+
     def test_set_description_dry_run_sends_no_write(self) -> None:
         transport = self._read_routes()
         code, out, _ = self.run_cli(
@@ -337,7 +363,7 @@ class DryRunTests(CliTestCase):
         self.assertEqual(transport.requests, [], "the policy is enforced before any API call")
 
     def test_comment_reply_dry_run_sends_no_write(self) -> None:
-        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport = self._reply_routes()
         code, out, _ = self.run_cli(
             ["comments", "reply", "Ugx123", "--text-file", str(self.reply)], transport
         )
@@ -374,8 +400,7 @@ class ApplyTests(DryRunTests):
             scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
             capabilities=["comments-read"],
         )
-        transport = FakeTransport()
-        transport.route("GET", "mine=true", payload=channel_resource())
+        transport = self._reply_routes()
         transport.route("POST", "/comments", payload={"id": "should-not-happen"})
         code, _, err = self.run_cli(
             ["comments", "reply", "Ugx123", "--text-file", str(self.reply), "--apply"], transport
@@ -469,8 +494,7 @@ class ApplyTests(DryRunTests):
             scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
             capabilities=["comment-reply"],
         )
-        transport = FakeTransport()
-        transport.route("GET", "mine=true", payload=channel_resource())
+        transport = self._reply_routes()
         transport.route("POST", "/comments", payload={"id": "Ugx123.reply"})
         code, out, _ = self.run_cli(
             ["comments", "reply", "Ugx123", "--text-file", str(self.reply), "--apply"], transport
@@ -507,6 +531,222 @@ class ApplyTests(DryRunTests):
         session_request = transport.calls_to("/upload/youtube/v3/videos")[0]
         self.assertEqual(session_request.json_body()["status"]["privacyStatus"], "private")
         self.assertIn("uploadType=resumable", session_request.url)
+
+
+class ReplyTargetTests(CliTestCase):
+    """A reply must land on NextTang's own content, not merely be spoken by it."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.reply = Path(self.temporary.name) / "reply.txt"
+        self.reply.write_text("Thanks, the board is still in transit.\n", encoding="utf-8")
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["comment-reply"],
+        )
+
+    def _transport(self, *, owner: str, video_id: str | None = "vid123") -> FakeTransport:
+        transport = FakeTransport()
+        transport.route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET",
+            "/comments",
+            payload={
+                "items": [
+                    {
+                        "id": "Ugx123",
+                        "snippet": {
+                            "videoId": video_id,
+                            "channelId": owner,
+                            "authorDisplayName": "A Viewer",
+                            "textOriginal": "nice work",
+                        },
+                    }
+                ]
+            },
+        )
+        if video_id:
+            transport.route(
+                "GET",
+                "/videos",
+                payload={"items": [{"id": video_id, "snippet": {"channelId": owner}}]},
+            )
+        transport.route("POST", "/comments", payload={"id": "Ugx123.reply"})
+        return transport
+
+    def test_a_reply_to_another_channels_video_is_refused_on_apply(self) -> None:
+        transport = self._transport(owner=OTHER_CHANNEL_ID)
+        code, _, err = self.run_cli(
+            ["comments", "reply", "Ugx123", "--text-file", str(self.reply), "--apply"], transport
+        )
+        self.assertEqual(code, EXIT_CHANNEL_MISMATCH)
+        self.assertIn(OTHER_CHANNEL_ID, err)
+        self.assertEqual(transport.mutating_requests, [], "no reply may be posted")
+
+    def test_a_foreign_target_is_refused_during_the_dry_run_too(self) -> None:
+        transport = self._transport(owner=OTHER_CHANNEL_ID)
+        code, _, err = self.run_cli(
+            ["comments", "reply", "Ugx123", "--text-file", str(self.reply)], transport
+        )
+        self.assertEqual(code, EXIT_CHANNEL_MISMATCH)
+        self.assertIn("only replies to comments on its own", err)
+
+    def test_a_reply_on_our_own_video_is_allowed(self) -> None:
+        transport = self._transport(owner=CHANNEL_ID)
+        code, out, _ = self.run_cli(
+            ["comments", "reply", "Ugx123", "--text-file", str(self.reply), "--apply"], transport
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("APPLIED", out)
+        self.assertEqual(len(transport.mutating_requests), 1)
+
+    def test_the_dry_run_shows_the_resolved_target(self) -> None:
+        transport = self._transport(owner=CHANNEL_ID)
+        code, out, _ = self.run_cli(
+            ["comments", "reply", "Ugx123", "--text-file", str(self.reply)], transport
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("target verified", out)
+        self.assertIn("vid123", out)
+        self.assertIn("A Viewer", out)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_an_unresolvable_video_is_refused(self) -> None:
+        transport = FakeTransport()
+        transport.route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET",
+            "/comments",
+            payload={"items": [{"id": "Ugx123", "snippet": {"videoId": "gone", "channelId": CHANNEL_ID}}]},
+        )
+        transport.route("GET", "/videos", payload={"items": []})
+        transport.route("POST", "/comments", payload={"id": "should-not-happen"})
+
+        code, _, err = self.run_cli(
+            ["comments", "reply", "Ugx123", "--text-file", str(self.reply), "--apply"], transport
+        )
+        self.assertEqual(code, EXIT_CHANNEL_MISMATCH)
+        self.assertIn("could not be resolved", err)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_a_missing_comment_is_reported_clearly(self) -> None:
+        transport = FakeTransport()
+        transport.route("GET", "mine=true", payload=channel_resource())
+        transport.route("GET", "/comments", payload={"items": []})
+        code, _, err = self.run_cli(
+            ["comments", "reply", "Ugx404", "--text-file", str(self.reply)], transport
+        )
+        self.assertNotEqual(code, EXIT_OK)
+        self.assertIn("no comment found", err)
+
+
+class CapabilityGuardTests(CliTestCase):
+    def test_a_token_without_recorded_capabilities_grants_none(self) -> None:
+        """Fail closed: an older or hand-edited token must not bypass the interlock."""
+        storage.write_secret_json(
+            storage.token_path(),
+            {
+                "refresh_token": "1//04-legacy",
+                "access_token": "ya29.legacy",
+                "expires_at": time.time() + 3600,
+                "scopes": [oauth.SCOPE_YOUTUBE_READONLY, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            },
+        )
+        reply = Path(self.temporary.name) / "reply.txt"
+        reply.write_text("text\n", encoding="utf-8")
+
+        transport = FakeTransport()
+        transport.route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET",
+            "/comments",
+            payload={"items": [{"id": "Ugx1", "snippet": {"videoId": "v", "channelId": CHANNEL_ID}}]},
+        )
+        transport.route("GET", "/videos", payload={"items": [{"id": "v", "snippet": {"channelId": CHANNEL_ID}}]})
+        transport.route("POST", "/comments", payload={"id": "should-not-happen"})
+
+        code, _, err = self.run_cli(
+            ["comments", "reply", "Ugx1", "--text-file", str(reply), "--apply"], transport
+        )
+        self.assertEqual(code, EXIT_AUTH_REQUIRED)
+        self.assertIn("recorded: none", err)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_comments_read_also_fails_closed(self) -> None:
+        storage.write_secret_json(
+            storage.token_path(),
+            {
+                "refresh_token": "1//04-legacy",
+                "access_token": "ya29.legacy",
+                "expires_at": time.time() + 3600,
+                "scopes": [oauth.SCOPE_YOUTUBE_READONLY, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            },
+        )
+        code, _, err = self.run_cli(["comments", "list"], FakeTransport())
+        self.assertEqual(code, EXIT_AUTH_REQUIRED)
+        self.assertIn("recorded: none", err)
+
+
+class LoginPersistenceTests(CliTestCase):
+    """A login for the wrong channel must leave nothing usable behind."""
+
+    def _run_login(self, transport: FakeTransport, channel_payload: dict) -> tuple[int, str, str]:
+        request = oauth.LoginRequest(
+            authorisation_url="https://accounts.google.com/o/oauth2/v2/auth?client_id=x",
+            redirect_uri="http://127.0.0.1:9999",
+            state="state",
+            code_verifier="verifier",
+            scopes=oauth.READ_ONLY_SCOPES,
+            server=None,
+        )
+        transport.route(
+            "POST",
+            "oauth2.googleapis.com/token",
+            payload={
+                "access_token": "ya29.new-token",
+                "refresh_token": "1//04-new-refresh",
+                "expires_in": 3600,
+                "scope": " ".join(oauth.READ_ONLY_SCOPES),
+            },
+        )
+        transport.route("GET", "mine=true", payload=channel_payload)
+        transport.route("POST", "oauth2.googleapis.com/revoke", payload={})
+
+        with mock.patch.object(oauth, "start_login", return_value=request), mock.patch.object(
+            oauth, "await_authorisation_code", return_value="auth-code"
+        ):
+            return self.run_cli(["auth", "login", "--no-browser"], transport)
+
+    def test_a_wrong_channel_login_stores_no_token(self) -> None:
+        storage.remove(storage.token_path())
+        transport = FakeTransport()
+        code, _, err = self._run_login(
+            transport, channel_resource(channel_id=OTHER_CHANNEL_ID, title="jonattree")
+        )
+
+        self.assertEqual(code, EXIT_CHANNEL_MISMATCH)
+        self.assertFalse(storage.token_path().exists(), "a rejected grant must not be persisted")
+        self.assertIn(OTHER_CHANNEL_ID, err)
+
+    def test_a_wrong_channel_login_revokes_the_new_grant(self) -> None:
+        storage.remove(storage.token_path())
+        transport = FakeTransport()
+        self._run_login(transport, channel_resource(channel_id=OTHER_CHANNEL_ID))
+
+        revocations = transport.calls_to("revoke")
+        self.assertEqual(len(revocations), 1, "the unwanted authorisation must be withdrawn")
+        self.assertIn(b"token=", revocations[0].body or b"")
+
+    def test_a_correct_login_stores_the_token_at_0600(self) -> None:
+        storage.remove(storage.token_path())
+        transport = FakeTransport()
+        code, out, _ = self._run_login(transport, channel_resource())
+
+        self.assertEqual(code, EXIT_OK)
+        self.assertTrue(storage.token_path().exists())
+        self.assertEqual(storage.permissions(storage.token_path()), 0o600)
+        self.assertIn(CHANNEL_ID, out)
+        self.assertEqual(transport.calls_to("revoke"), [], "a good login revokes nothing")
 
 
 class AuthCommandTests(CliTestCase):

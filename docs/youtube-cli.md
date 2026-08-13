@@ -128,7 +128,7 @@ All three are dry runs unless `--apply` is given.
 | --- | --- |
 | `channel set-description --file FILE` | Replaces the channel description from a UTF-8 file. |
 | `videos upload PATH --privacy private` | Uploads a video as private. `--privacy` is required and only `private` is accepted. |
-| `comments reply COMMENT_ID --text-file FILE` | Posts one reply to one comment. |
+| `comments reply COMMENT_ID --text-file FILE` | Posts one reply to one comment on the channel's own content. |
 
 ## Scopes and capabilities
 
@@ -215,6 +215,28 @@ preserving so you can see nothing is being dropped.
 Never hand-write a `channels.update` request with only the field you want to
 change. That deletes the rest.
 
+### Replies are restricted to the channel's own content
+
+`comments.insert` takes a `parentId` and will happily post under any comment,
+including one on another channel's video. Verifying who is speaking is therefore
+not enough. Before replying, the tool resolves the parent comment, resolves the
+video it sits on, and refuses with exit 5 unless that video belongs to the pinned
+channel. The check runs during the dry run as well, so a mistyped or copied ID is
+caught before you are asked to approve anything, and the dry run prints the
+resolved video and the author being replied to.
+
+### Uploads stream, retry, and stop
+
+Chunks are read from disk one at a time, so file size does not become memory use.
+Each chunk request carries its own `Authorization` and `Content-Type` headers.
+Transient failures (network errors and HTTP 408, 429, 500, 502, 503, 504) are
+retried with exponential backoff and jitter, capped at 5 attempts per chunk and
+64 seconds per wait, under an overall deadline of one hour. Before each retry the
+tool asks the server how many bytes it actually holds, using a
+`Content-Range: bytes */TOTAL` query, and resumes from there rather than assuming.
+A permanent failure such as an expired session (404) fails immediately instead of
+burning the deadline.
+
 ## Channel mismatch protection
 
 The channel ID `UCzUSXeiPI3JMhlE5rmES4zA` is compiled in. Before any
@@ -226,6 +248,11 @@ compares the returned ID.
   guessed at.
 - Title and handle are also displayed and compared, but they are mutable, so a
   difference there is a warning and not a refusal. Only the immutable ID decides.
+- `auth login` verifies the channel before writing the token. A login that
+  resolves to a different channel revokes the grant it just obtained and stores
+  nothing, so a mistaken account choice leaves no token behind.
+- Capability checks fail closed. A token that records no capabilities grants
+  none, so an older or hand-edited token file cannot bypass the interlock.
 
 ## Exit codes
 

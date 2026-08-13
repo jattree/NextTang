@@ -18,7 +18,8 @@ PACKAGE_ROOT = REPO_ROOT / "host" / "youtube"
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
-from nexttang_youtube.transport import Response  # noqa: E402 - path setup must run first
+from nexttang_youtube.errors import ApiError  # noqa: E402 - path setup must run first
+from nexttang_youtube.transport import Response  # noqa: E402
 
 CHANNEL_ID = "UCzUSXeiPI3JMhlE5rmES4zA"
 OTHER_CHANNEL_ID = "UCjonattreeOtherChannel00"
@@ -46,6 +47,7 @@ class Route:
     contains: str
     response: Response
     remaining: int | None
+    error: str | None = None
 
 
 class UnexpectedRequest(AssertionError):
@@ -69,7 +71,9 @@ class FakeTransport:
         headers: Mapping[str, str] | None = None,
         body: bytes | None = None,
         times: int | None = None,
+        error: str | None = None,
     ) -> "FakeTransport":
+        """Script a response. Pass `error` to simulate a network failure."""
         encoded = body if body is not None else json.dumps(payload or {}).encode("utf-8")
         self._routes.append(
             Route(
@@ -77,6 +81,7 @@ class FakeTransport:
                 contains=contains,
                 response=Response(status=status, headers=dict(headers or {}), body=encoded),
                 remaining=times,
+                error=error,
             )
         )
         return self
@@ -92,6 +97,8 @@ class FakeTransport:
                 if route.remaining <= 0:
                     continue
                 route.remaining -= 1
+            if route.error:
+                raise ApiError(route.error)
             return route.response
         raise UnexpectedRequest(f"no route for {method.upper()} {url.split('?', 1)[0]}")
 

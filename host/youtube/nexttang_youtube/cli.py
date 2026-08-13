@@ -30,6 +30,7 @@ from .output import Printer, truncate
 from .transport import Transport, UrllibTransport
 
 PROGRAM = "nexttang-youtube"
+UPLOAD_MIME_TYPE = "video/*"
 
 
 @dataclass
@@ -294,11 +295,10 @@ def command_videos_upload(context: Context) -> int:
 
     context.session.require_scope(oauth.SCOPE_YOUTUBE_UPLOAD, capability="upload")
     verified = context.guarded_channel(force=True)
-    data = path.read_bytes()
     session_url = context.api.start_resumable_upload(
-        plan.payload["metadata"], len(data), "video/*"
+        plan.payload["metadata"], plan.payload["size"], UPLOAD_MIME_TYPE
     )
-    result = context.api.upload_chunks(session_url, data)
+    result = context.api.upload_file(session_url, path, UPLOAD_MIME_TYPE)
     _emit_plan(
         context,
         plan,
@@ -427,7 +427,19 @@ def _render_comments(printer: Printer, payload: dict[str, Any]) -> None:
 def command_comments_reply(context: Context) -> int:
     text = _read_text_file(Path(context.args.text_file), "reply")
     plan = operations.plan_comment_reply(context.args.comment_id, text)
-    context.guarded_channel()
+    identity = context.guarded_channel()
+
+    # Checked in the dry run too, so the operator sees the resolved target
+    # before deciding, and a foreign target is refused without --apply.
+    target = context.api.resolve_reply_target(context.args.comment_id, identity.channel_id)
+    plan.target = f"comment {target['comment_id']} on {target['basis']}"
+    plan.notes.insert(
+        0,
+        f"target verified: owned by {target['owner_channel_id']}"
+        + (f", video {target['video_id']}" if target["video_id"] else ""),
+    )
+    if target["author"]:
+        plan.notes.insert(1, f"replying to {target['author']}")
 
     if not context.args.apply:
         _emit_plan(context, plan, applied=False)
@@ -435,6 +447,7 @@ def command_comments_reply(context: Context) -> int:
 
     context.session.require_scope(oauth.SCOPE_YOUTUBE_FORCE_SSL, capability="comment-reply")
     verified = context.guarded_channel(force=True)
+    context.api.resolve_reply_target(context.args.comment_id, verified.channel_id)
     result = context.api.insert_comment_reply(plan.payload["parent_id"], plan.payload["text"])
     _emit_plan(
         context,
@@ -536,9 +549,22 @@ def command_auth_login(context: Context) -> int:
     state = oauth.exchange_code(
         context.transport, credentials, request, code, capabilities=capabilities
     )
-    context.session.persist(state)
 
-    identity = context.guarded_channel(force=True)
+    # Verify before storing. A grant for the wrong channel is withdrawn rather
+    # than left on disk, where it would be an unusable and possibly wider
+    # authorisation than the operator intended.
+    probe = YouTubeApi(context.transport, lambda: str(state.access_token))
+    try:
+        identity = probe.my_channel()
+        warnings = channel_module.verify(identity)
+    except CliError:
+        oauth.post_revocation(context.transport, state.refresh_token)
+        printer.warn("the new authorisation was revoked and no token was stored")
+        raise
+    for warning in warnings:
+        printer.warn(warning)
+
+    context.session.persist(state)
     payload = {
         "authorised": True,
         "channel_id": identity.channel_id,

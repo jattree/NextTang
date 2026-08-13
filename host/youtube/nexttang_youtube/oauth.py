@@ -241,10 +241,13 @@ class AuthSession:
                     "to grant it, then repeat the command."
                 ),
             )
+        # Fails closed. A token with no recorded capabilities grants none, so an
+        # older or hand-edited token file cannot bypass the interlock.
         granted = self.granted_capabilities()
-        if granted and capability not in granted:
+        if capability not in granted:
+            recorded = ", ".join(granted) if granted else "none"
             raise ScopeError(
-                f"the '{capability}' capability was not requested at login",
+                f"the '{capability}' capability was not requested at login (recorded: {recorded})",
                 hint=(
                     f"The token carries {scope}, but this command was not authorised. Re-run "
                     f"'nexttang-youtube auth login --enable {capability}' to enable it."
@@ -305,7 +308,7 @@ class AuthSession:
         if state is None:
             return {"revoked": False, "reason": "no stored authorisation", "local_state_removed": False}
 
-        response = self._post_form(REVOCATION_ENDPOINT, {"token": state.refresh_token})
+        response = post_revocation(self._transport, state.refresh_token)
         removed = storage.remove(self._token_path)
         self._state = None
         result: dict[str, Any] = {
@@ -516,6 +519,21 @@ def exchange_code(
         obtained_at=now,
         client_id=credentials.client_id,
         capabilities=tuple(capabilities),
+    )
+
+
+def post_revocation(transport: Transport, token: str) -> Response:
+    """Revoke a token at Google.
+
+    The token goes in the request body, never the URL, so it cannot reach a
+    proxy log or a shell history through an argument.
+    """
+    body = urllib.parse.urlencode({"token": token}).encode("utf-8")
+    return transport.request(
+        "POST",
+        REVOCATION_ENDPOINT,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        body=body,
     )
 
 
