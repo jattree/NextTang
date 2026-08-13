@@ -238,12 +238,17 @@ holds, using a `Content-Range: bytes */TOTAL` query, and resumes from there
 rather than assuming. A permanent failure such as an expired session (404) fails
 immediately instead of burning the deadline.
 
-That status query is also how a completed upload is recovered. If the response
-completing an upload is lost in transit, the query returns 200 or 201 with the
-video resource, and the tool returns it. Reporting a failure for an upload that
-actually succeeded would invite a duplicate, so the tool asks once more before
-declaring failure, and its failure message tells you to check `videos list`
-before uploading again.
+That status query is also how a completed upload is recovered. An interrupted
+request may still have been received, so **no exit path reports failure without
+asking the server first**: the retry limit, the deadline, and the end of the
+send loop all perform a status query before giving up. If the query returns 200
+or 201 the video resource is returned as a success, because reporting a
+completed upload as failed would invite a duplicate.
+
+When the query shows the upload genuinely is not complete, the tool says the
+server may still hold part of the file and a video may exist, and tells you to
+check `videos list` before uploading again. It never claims nothing was
+published, because it cannot know that.
 
 ### Replying to a reply
 

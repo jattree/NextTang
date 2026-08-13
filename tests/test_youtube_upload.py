@@ -276,6 +276,75 @@ class CompletionRecoveryTests(UploadTestCase):
             "the final check must be a status probe",
         )
 
+    def test_the_retry_limit_probes_before_declaring_failure(self) -> None:
+        """The last permitted request reaches Google, which commits, then the response is lost."""
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, times=1, error="connection reset")
+        transport.route("PUT", SESSION, status=201, payload={"id": "COMMITTED-VIDEO"}, times=1)
+
+        result = self.api(transport).upload_file(
+            SESSION,
+            path,
+            chunk_size=1000,
+            max_attempts=1,
+            clock=self.clock,
+            sleeper=self.sleeper,
+        )
+
+        self.assertEqual(result["id"], "COMMITTED-VIDEO")
+        probes = [
+            request
+            for request in transport.calls_to(SESSION)
+            if request.headers.get("Content-Range") == "bytes */100"
+        ]
+        self.assertEqual(len(probes), 1, "the retry limit must ask before giving up")
+
+    def test_the_deadline_probes_before_declaring_failure(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=503, payload=error_payload(503, "backendError"), times=1)
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-49"}, times=1)
+        transport.route("PUT", SESSION, status=201, payload={"id": "LATE-BUT-REAL"}, times=1)
+
+        def impatient_sleeper(seconds: float) -> None:
+            self.slept.append(seconds)
+            self.now += 10_000.0
+
+        result = self.api(transport).upload_file(
+            SESSION,
+            path,
+            chunk_size=1000,
+            deadline_seconds=60.0,
+            clock=self.clock,
+            sleeper=impatient_sleeper,
+        )
+        self.assertEqual(result["id"], "LATE-BUT-REAL")
+
+    def test_no_failure_path_claims_that_nothing_was_published(self) -> None:
+        """The tool cannot know that, so it must not say it."""
+        path = self.make_file(100)
+        for limit_kwargs in ({"max_attempts": 1}, {"deadline_seconds": 0.0}):
+            with self.subTest(**limit_kwargs):
+                transport = FakeTransport()
+                transport.route("PUT", SESSION, times=1, error="connection reset")
+                transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-49"})
+
+                with self.assertRaises(ApiError) as raised:
+                    self.api(transport).upload_file(
+                        SESSION,
+                        path,
+                        chunk_size=1000,
+                        clock=self.clock,
+                        sleeper=self.sleeper,
+                        **limit_kwargs,
+                    )
+
+                combined = f"{raised.exception.message} {raised.exception.hint or ''}"
+                self.assertNotIn("Nothing was published", combined)
+                self.assertIn("videos list", combined)
+                self.assertIn("may", combined, "the wording must express uncertainty")
+
     def test_a_genuinely_incomplete_upload_still_fails(self) -> None:
         path = self.make_file(100)
         transport = FakeTransport()

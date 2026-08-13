@@ -327,10 +327,11 @@ class YouTubeApi:
         with path.open("rb") as handle:
             while offset < total:
                 if clock() - started > deadline_seconds:
-                    raise ApiError(
+                    return self._abandon_upload(
+                        session_url,
+                        total,
                         f"upload exceeded its {int(deadline_seconds)} second deadline at "
                         f"{offset} of {total} bytes",
-                        hint="The session may still be resumable. Re-run the command to start again.",
                     )
 
                 handle.seek(offset)
@@ -355,9 +356,10 @@ class YouTubeApi:
                 attempts += 1
                 if attempts >= max_attempts:
                     detail = failure or f"HTTP {response.status if response else 'unknown'}"
-                    raise ApiError(
+                    return self._abandon_upload(
+                        session_url,
+                        total,
                         f"upload failed after {attempts} attempts at byte {offset}: {detail}",
-                        hint="Nothing was published. Re-run the command to start a new upload.",
                     )
                 # Honour a server-supplied delay when there is one, as Google's
                 # upload guide instructs, and fall back to local backoff.
@@ -368,17 +370,28 @@ class YouTubeApi:
                 if resumed is not None:
                     offset = resumed
 
-        # The loop can end with everything committed but the completing response
-        # lost in transit. Ask once more before calling a finished upload a
-        # failure, because reporting failure here invites a duplicate upload.
+        return self._abandon_upload(
+            session_url, total, "the upload sent every byte but no completion response was received"
+        )
+
+    def _abandon_upload(self, session_url: str, total: int, message: str) -> dict[str, Any]:
+        """Check the server before giving up, then fail honestly.
+
+        Google's protocol is explicit that an interrupted request may still have
+        been received, so no exit path may declare failure without asking. If
+        the video exists, return it: reporting a completed upload as failed
+        invites the operator to upload it a second time. If it does not, say
+        what is unknown rather than claiming nothing was published, which this
+        tool cannot know.
+        """
         _, completed = self._query_upload_status(session_url, total)
         if completed is not None:
             return completed
         raise ApiError(
-            "the upload sent every byte but no completion response was received",
+            message,
             hint=(
-                "The video may already exist on the channel. Check 'videos list' before "
-                "uploading again."
+                "The server may still hold some or all of the file, and a video may exist on "
+                "the channel. Check 'videos list' before uploading again."
             ),
         )
 
