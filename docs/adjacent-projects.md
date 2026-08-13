@@ -14,6 +14,12 @@ and none of these results is a NextTang build or hardware result.
 | [Tang Mega 138K FPGA projects](https://github.com/vdalex/tangmega-138k-fpga-projects) | [`7c17183`](https://github.com/vdalex/tangmega-138k-fpga-projects/tree/7c17183b7978238023a49c8d29220337142d4133) | 50 MHz input and 150/750 MHz DVI path using `OSER10` and differential outputs | Five bitstreams generated; one project missed its 150 MHz setup constraint |
 | [MSXnano](https://github.com/Papipapito/MSXnano) | [`v1.9`](https://github.com/Papipapito/MSXnano/tree/ce46ef93b3a284334b69c73636a0047b890d8c96), commit `ce46ef9` | Nano 20K shell, BL616 FPGA Companion boundary and focused regressions | Two regressions passed; a compatibility-adjusted build generated a bitstream with 36 setup and 12 hold violations |
 | [MSXgoauldSD_usbkb](https://github.com/Papipapito/MSXgoauldSD_usbkb) | [`15f1a7f`](https://github.com/Papipapito/MSXgoauldSD_usbkb/tree/15f1a7fc697129265745e3de8a7d7acca102b945) | External RP2040 USB-input boundary and shared MSXnano lineage | Clean FPGA build failed because four required Verilog files are absent; `gw_sh` still returned zero |
+| [TangCore](https://github.com/nand2mario/tangcore) | [`f69c6ff`](https://github.com/nand2mario/tangcore/tree/f69c6ff7e21dc43af70465d9428c079f4550abf6) | BL616-managed multi-core shell, storage and FPGA loading | Source reviewed; release images not run |
+| [SNESTang](https://github.com/nand2mario/snestang) | [`427af30`](https://github.com/nand2mario/snestang/tree/427af30953513324937d8811359ede630cb992bd) | Toggle-mailbox and video-arbitration failure precedent | Source and issues reviewed only |
+| [NESTang](https://github.com/nand2mario/nestang) | [`5b24a71`](https://github.com/nand2mario/nestang/tree/5b24a710b176fc33575cb7a69d3afabad92f1f7d) | Explicit SDRAM client priority and bank ownership | Source and issues reviewed only |
+| [486tang](https://github.com/nand2mario/486tang) | [`b3de0a8`](https://github.com/nand2mario/486tang/tree/b3de0a803cd44b61f482872df3546e604b8edf01) | Console 138K onboard-DDR3 framebuffer and read-ahead pattern | Released bitstream exists upstream; source reviewed only |
+| [ddr3_framebuffer_gowin](https://github.com/nand2mario/ddr3_framebuffer_gowin) | [`d3c2773`](https://github.com/nand2mario/ddr3_framebuffer_gowin/tree/d3c2773371cb3d6eb346398a8afe5a2adf849e32) | Buffered DDR3 framebuffer for Console 60K/138K | Upstream reports hardware tests; not reproduced by NextTang |
+| [usb_hid_host](https://github.com/nand2mario/usb_hid_host) | [`678b013`](https://github.com/nand2mario/usb_hid_host/tree/678b0137bd32d1ca99fb2d48865f4eb1df712c4e) | Small low-speed direct-device USB host | Source and issues reviewed only |
 
 The local builds used GOWIN EDA Standard `V1.9.12.03`. Simulation checks used
 Icarus Verilog and Verilator `5.020` where applicable.
@@ -41,6 +47,40 @@ repository contained older generated output. MSXnano generated a fresh
 bitstream but failed timing. Future NextTang board drivers must therefore use
 clean outputs, inspect tool logs, require fresh reports and artefacts, and reject
 violated required timing constraints.
+
+## What the issue histories add
+
+The most useful result is a sharper memory-controller contract. [SNESTang issue
+17](https://github.com/nand2mario/snestang/issues/17) contains an unmerged
+analysis of request toggles and addresses changing while a read is outstanding.
+The described result is a cancelled request or a response associated with a
+mixed old/new address. It is not a NextTang diagnosis, but it is close enough to
+the upstream Layer 2 toggle interface to become a required simulation case.
+
+The NextTang adapter must keep request metadata stable until acknowledgement,
+define what happens to a second request, bind each response to its accepted
+address, prioritise fixed-deadline video work and report any overrun. DDR latency
+and refresh injection must cover back-to-back address changes, CPU/video
+collisions, reset during an outstanding request and buffer underflow.
+
+The onboard DDR3 examples do not remove that work. 486tang uses DDR3 only for a
+continuously rewritten framebuffer, while main RAM remains on external SDRAM.
+Its wrapper and `ddr3_framebuffer_gowin` read ahead and disable refresh. That is a
+useful framebuffer precedent, but it cannot retain NextTang's 2 MB memory and
+does not satisfy its two-port contract.
+
+[TangCore issue 8](https://github.com/nand2mario/tangcore/issues/8) adds a
+separate transport requirement. Reports describe ROM loading reaching completion
+before a black screen or audio pops. The suspected BL616-to-FPGA loss is not
+confirmed. NextTang will make the boundary testable through transfer length,
+integrity checks, acknowledgements, timeouts and error counters rather than
+adopting the suspected diagnosis.
+
+Tool and source identity also need to be exact. NESTang and SNESTang reports show
+behaviour changing between Gowin patch releases. TangCore has a reported missing
+pinned submodule commit, and the reviewed source tree does not reproduce every
+Console image shipped in `v0.9`. A clean source build, timing result, release
+image and hardware observation remain separate evidence.
 
 ## Licence and reuse boundaries
 

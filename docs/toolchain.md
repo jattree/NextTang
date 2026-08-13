@@ -123,6 +123,15 @@ classify known warnings explicitly rather than treating all warning text as eith
 success or failure. See the [adjacent-project review](adjacent-projects.md) for
 the observations that established these requirements.
 
+Related-project issue histories add one more requirement: pin the exact tool
+patch release and complete source tree. NESTang and SNESTang report different
+resource or display results across Gowin patch releases. TangCore has a reported
+missing pinned submodule object, and its reviewed source tree does not reproduce
+every Console image in its release. These are upstream reports, not NextTang
+results, but they rule out treating a release label, a nearby tool version or a
+binary archive as a reproducible build. Record root and submodule commits, the
+exact tool build, the manifest and fresh output hashes for every promoted result.
+
 ## Promoting a toolchain version
 
 Change `provisional-unvalidated` only after the exact tool build, source revision,
