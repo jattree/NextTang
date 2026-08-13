@@ -345,7 +345,7 @@ class YouTubeApi:
                 )
 
                 if response is not None and response.status in {200, 201}:
-                    return response.json()
+                    return self._accept_upload_completion(response, session_url, total)
                 if response is not None and response.status == 308:
                     offset = _resume_offset(response, fallback=end + 1)
                     attempts = 0
@@ -372,6 +372,24 @@ class YouTubeApi:
 
         return self._abandon_upload(
             session_url, total, "the upload sent every byte but no completion response was received"
+        )
+
+    def _accept_upload_completion(
+        self, response: Response, session_url: str, total: int
+    ) -> dict[str, Any]:
+        """Return a readable completion resource or recover it with a status probe.
+
+        A 200 or 201 means Google completed the upload even if its response body
+        was empty, truncated, or malformed in transit. Treating a body-decoding
+        problem as a failed upload would invite the operator to create a duplicate.
+        """
+        payload = _completed_video_resource(response)
+        if payload is not None:
+            return payload
+        return self._abandon_upload(
+            session_url,
+            total,
+            "the server reported upload completion but returned no readable video resource",
         )
 
     def _abandon_upload(self, session_url: str, total: int, message: str) -> dict[str, Any]:
@@ -441,11 +459,7 @@ class YouTubeApi:
         except ApiError:
             return None, None
         if response.status in {200, 201}:
-            try:
-                payload = response.json()
-            except ApiError:
-                payload = {}
-            return total, payload if isinstance(payload, dict) and payload else None
+            return total, _completed_video_resource(response)
         if response.status == 308:
             return _resume_offset(response, fallback=0), None
         return None, None
@@ -529,6 +543,17 @@ def _header(response: Response, name: str) -> str | None:
         if key.lower() == name.lower():
             return value
     return None
+
+
+def _completed_video_resource(response: Response) -> dict[str, Any] | None:
+    """Accept only a readable video resource with its immutable ID."""
+    try:
+        payload = response.json()
+    except ApiError:
+        return None
+    if not isinstance(payload, dict) or not str(payload.get("id") or "").strip():
+        return None
+    return payload
 
 
 def _is_retryable(status: int) -> bool:

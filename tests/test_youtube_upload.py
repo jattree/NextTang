@@ -9,14 +9,19 @@ https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol
 
 from __future__ import annotations
 
+import http.client
+import json
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest import mock
 
 from youtube_support import FakeTransport, error_payload
 
 from nexttang_youtube.api import MAX_UPLOAD_ATTEMPTS, YouTubeApi
 from nexttang_youtube.errors import ApiError, AuthorisationError
+from nexttang_youtube.transport import UrllibTransport
 
 SESSION = "https://www.googleapis.com/upload/session/abc"
 
@@ -43,6 +48,20 @@ class UploadTestCase(unittest.TestCase):
     def clock(self) -> float:
         self.now += 0.001
         return self.now
+
+
+class TransportFailureTests(unittest.TestCase):
+    def test_network_failure_does_not_claim_remote_state_is_unchanged(self) -> None:
+        with mock.patch(
+            "nexttang_youtube.transport.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("connection reset"),
+        ):
+            with self.assertRaises(ApiError) as raised:
+                UrllibTransport().request("PUT", SESSION, body=b"video bytes")
+
+        hint = raised.exception.hint or ""
+        self.assertNotIn("No API state changed", hint)
+        self.assertIn("remote result may be unknown", hint)
 
 
 class ChunkTransmissionTests(UploadTestCase):
@@ -257,6 +276,92 @@ class CompletionRecoveryTests(UploadTestCase):
             SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
         )
         self.assertEqual(result["id"], "VID-200")
+
+    def test_malformed_completion_resource_is_recovered_with_a_status_probe(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=201, body=b'{"id":', times=1)
+        transport.route("PUT", SESSION, status=201, payload={"id": "RECOVERED"}, times=1)
+
+        result = self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+
+        self.assertEqual(result["id"], "RECOVERED")
+        self.assertEqual(
+            transport.calls_to(SESSION)[-1].headers["Content-Range"],
+            "bytes */100",
+        )
+
+    def test_empty_completion_resource_is_recovered_with_a_status_probe(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=201, body=b"", times=1)
+        transport.route("PUT", SESSION, status=201, payload={"id": "RECOVERED"}, times=1)
+
+        result = self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+
+        self.assertEqual(result["id"], "RECOVERED")
+
+    def test_completion_resource_without_a_video_id_is_recovered_with_a_status_probe(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route(
+            "PUT",
+            SESSION,
+            status=201,
+            payload={"status": {"privacyStatus": "private"}},
+            times=1,
+        )
+        transport.route("PUT", SESSION, status=201, payload={"id": "RECOVERED"}, times=1)
+
+        result = self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+
+        self.assertEqual(result["id"], "RECOVERED")
+
+    def test_interrupted_completion_body_is_normalized_and_recovered(self) -> None:
+        class BrokenCompletion:
+            status = 201
+            headers: dict[str, str] = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                raise http.client.IncompleteRead(b'{"id":', 20)
+
+        class RecoveredCompletion:
+            status = 201
+            headers: dict[str, str] = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps({"id": "RECOVERED"}).encode("utf-8")
+
+        path = self.make_file(100)
+        api = YouTubeApi(UrllibTransport(), lambda: "test-access-token")
+        with mock.patch(
+            "nexttang_youtube.transport.urllib.request.urlopen",
+            side_effect=[BrokenCompletion(), RecoveredCompletion()],
+        ) as urlopen:
+            result = api.upload_file(
+                SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+            )
+
+        self.assertEqual(result["id"], "RECOVERED")
+        self.assertEqual(urlopen.call_count, 2, "the second request must probe upload status")
 
     def test_a_lost_final_response_is_recovered_before_declaring_failure(self) -> None:
         """Every byte is committed but the completing response never arrives."""

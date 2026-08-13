@@ -245,6 +245,13 @@ send loop all perform a status query before giving up. If the query returns 200
 or 201 the video resource is returned as a success, because reporting a
 completed upload as failed would invite a duplicate.
 
+A 200 or 201 whose response resource is empty, truncated, or malformed is also
+treated as an ambiguous completion and recovered with the same status query.
+Low-level HTTP body interruptions are normalized as network errors so they
+cannot escape that recovery path. More generally, the transport never claims
+remote state is unchanged after a network failure: once a write request has
+left the process, only a follow-up read can establish what Google accepted.
+
 When the query shows the upload genuinely is not complete, the tool says the
 server may still hold part of the file and a video may exist, and tells you to
 check `videos list` before uploading again. It never claims nothing was

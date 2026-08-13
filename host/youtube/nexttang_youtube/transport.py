@@ -7,6 +7,7 @@ than raised, because the API layer owns the mapping from status to CLI error.
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -87,13 +88,25 @@ class UrllibTransport:
                     body=handle.read(),
                 )
         except urllib.error.HTTPError as error:
+            try:
+                response_body = error.read()
+            except (http.client.HTTPException, OSError) as read_error:
+                raise _network_error(url, read_error) from read_error
             return Response(
                 status=error.code,
                 headers=dict(error.headers.items()) if error.headers else {},
-                body=error.read(),
+                body=response_body,
             )
         except urllib.error.URLError as error:
-            raise ApiError(
-                f"network error contacting {redact_url(url)}: {error.reason}",
-                hint="Check connectivity and retry. No API state changed.",
-            ) from error
+            raise _network_error(url, error) from error
+        except (http.client.HTTPException, OSError) as error:
+            raise _network_error(url, error) from error
+
+
+def _network_error(url: str, error: BaseException) -> ApiError:
+    """Normalize transport failures without pretending the remote result is known."""
+    detail = getattr(error, "reason", None) or type(error).__name__
+    return ApiError(
+        f"network error contacting {redact_url(url)}: {detail}",
+        hint="Check connectivity before retrying; the remote result may be unknown.",
+    )
