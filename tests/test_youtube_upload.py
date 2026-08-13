@@ -221,6 +221,160 @@ class RetryTests(UploadTestCase):
             )
 
 
+class CompletionRecoveryTests(UploadTestCase):
+    """A finished upload must never be reported as a failure.
+
+    Reporting failure for an upload that actually completed invites the operator
+    to upload the same video twice.
+    """
+
+    def test_a_status_probe_returning_201_yields_the_video_resource(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, times=1, error="connection reset")
+        transport.route(
+            "PUT",
+            SESSION,
+            status=201,
+            payload={"id": "REAL-VIDEO-ID", "status": {"privacyStatus": "private"}},
+            times=1,
+        )
+
+        result = self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+
+        self.assertEqual(result["id"], "REAL-VIDEO-ID")
+        self.assertEqual(result["status"]["privacyStatus"], "private")
+
+    def test_a_status_probe_returning_200_yields_the_video_resource(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=503, payload=error_payload(503, "backendError"), times=1)
+        transport.route("PUT", SESSION, status=200, payload={"id": "VID-200"}, times=1)
+
+        result = self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+        self.assertEqual(result["id"], "VID-200")
+
+    def test_a_lost_final_response_is_recovered_before_declaring_failure(self) -> None:
+        """Every byte is committed but the completing response never arrives."""
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-99"}, times=1)
+        transport.route("PUT", SESSION, status=201, payload={"id": "RECOVERED"}, times=1)
+
+        result = self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+
+        self.assertEqual(result["id"], "RECOVERED")
+        self.assertEqual(
+            transport.calls_to(SESSION)[-1].headers["Content-Range"],
+            "bytes */100",
+            "the final check must be a status probe",
+        )
+
+    def test_a_genuinely_incomplete_upload_still_fails(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-99"}, times=1)
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-49"}, times=1)
+
+        with self.assertRaises(ApiError) as raised:
+            self.api(transport).upload_file(
+                SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+            )
+        self.assertIn("no completion response", raised.exception.message)
+        self.assertIn("videos list", raised.exception.hint or "")
+
+
+class RetryAfterTests(UploadTestCase):
+    def test_a_numeric_retry_after_is_honoured(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route(
+            "PUT",
+            SESSION,
+            status=503,
+            headers={"Retry-After": "7"},
+            payload=error_payload(503, "backendError"),
+            times=1,
+        )
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-9"}, times=1)
+        transport.route("PUT", SESSION, payload={"id": "vid"}, times=1)
+
+        self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+        self.assertEqual(self.slept, [7.0])
+
+    def test_a_http_date_retry_after_is_honoured(self) -> None:
+        import email.utils
+        import time as time_module
+
+        when = email.utils.formatdate(time_module.time() + 30, usegmt=True)
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route(
+            "PUT",
+            SESSION,
+            status=429,
+            headers={"Retry-After": when},
+            payload=error_payload(429, "rateLimitExceeded"),
+            times=1,
+        )
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-9"}, times=1)
+        transport.route("PUT", SESSION, payload={"id": "vid"}, times=1)
+
+        self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+        self.assertEqual(len(self.slept), 1)
+        self.assertGreater(self.slept[0], 20.0)
+        self.assertLessEqual(self.slept[0], 31.0)
+
+    def test_an_excessive_retry_after_is_capped(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route(
+            "PUT",
+            SESSION,
+            status=503,
+            headers={"Retry-After": "86400"},
+            payload=error_payload(503, "backendError"),
+            times=1,
+        )
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-9"}, times=1)
+        transport.route("PUT", SESSION, payload={"id": "vid"}, times=1)
+
+        self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+        self.assertEqual(self.slept, [64.0], "a day-long delay must be bounded")
+
+    def test_an_unparsable_retry_after_falls_back_to_backoff(self) -> None:
+        path = self.make_file(100)
+        transport = FakeTransport()
+        transport.route(
+            "PUT",
+            SESSION,
+            status=503,
+            headers={"Retry-After": "not-a-date"},
+            payload=error_payload(503, "backendError"),
+            times=1,
+        )
+        transport.route("PUT", SESSION, status=308, headers={"Range": "bytes=0-9"}, times=1)
+        transport.route("PUT", SESSION, payload={"id": "vid"}, times=1)
+
+        self.api(transport).upload_file(
+            SESSION, path, chunk_size=1000, clock=self.clock, sleeper=self.sleeper
+        )
+        self.assertEqual(len(self.slept), 1)
+        self.assertGreater(self.slept[0], 0.0)
+
+
 class SessionTests(UploadTestCase):
     def test_the_session_request_declares_length_and_type(self) -> None:
         transport = FakeTransport().route(

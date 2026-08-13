@@ -12,6 +12,8 @@ References:
 
 from __future__ import annotations
 
+import datetime
+import email.utils
 import json
 import random
 import time
@@ -357,12 +359,28 @@ class YouTubeApi:
                         f"upload failed after {attempts} attempts at byte {offset}: {detail}",
                         hint="Nothing was published. Re-run the command to start a new upload.",
                     )
-                sleeper(_backoff_seconds(attempts))
-                resumed = self._query_upload_offset(session_url, total)
+                # Honour a server-supplied delay when there is one, as Google's
+                # upload guide instructs, and fall back to local backoff.
+                sleeper(_retry_delay(response, attempts))
+                resumed, completed = self._query_upload_status(session_url, total)
+                if completed is not None:
+                    return completed
                 if resumed is not None:
                     offset = resumed
 
-        raise ApiError("the upload finished without a completion response")
+        # The loop can end with everything committed but the completing response
+        # lost in transit. Ask once more before calling a finished upload a
+        # failure, because reporting failure here invites a duplicate upload.
+        _, completed = self._query_upload_status(session_url, total)
+        if completed is not None:
+            return completed
+        raise ApiError(
+            "the upload sent every byte but no completion response was received",
+            hint=(
+                "The video may already exist on the channel. Check 'videos list' before "
+                "uploading again."
+            ),
+        )
 
     def _send_chunk(
         self,
@@ -388,8 +406,16 @@ class YouTubeApi:
             # A network failure mid-upload is exactly what resumption exists for.
             return None, error.message
 
-    def _query_upload_offset(self, session_url: str, total: int) -> int | None:
-        """Ask the server how many bytes it holds, per the resumable protocol."""
+    def _query_upload_status(
+        self, session_url: str, total: int
+    ) -> tuple[int | None, dict[str, Any] | None]:
+        """Ask the server how much it holds, per the resumable protocol.
+
+        Returns (committed offset, completed resource). A 200 or 201 to this
+        probe means the upload already finished and carries the video resource,
+        so it is returned rather than discarded: treating a finished upload as a
+        failure would prompt a duplicate.
+        """
         headers = {
             "Authorization": f"Bearer {self._token()}",
             "Content-Length": "0",
@@ -400,12 +426,16 @@ class YouTubeApi:
                 "PUT", session_url, headers=headers, body=b"", timeout=UPLOAD_TIMEOUT_SECONDS
             )
         except ApiError:
-            return None
+            return None, None
         if response.status in {200, 201}:
-            return total
+            try:
+                payload = response.json()
+            except ApiError:
+                payload = {}
+            return total, payload if isinstance(payload, dict) and payload else None
         if response.status == 308:
-            return _resume_offset(response, fallback=0)
-        return None
+            return _resume_offset(response, fallback=0), None
+        return None, None
 
     # --------------------------------------------------------------- plumbing
 
@@ -496,6 +526,38 @@ def _backoff_seconds(attempt: int) -> float:
     """Exponential backoff with jitter, as Google's upload guide recommends."""
     ceiling = min(2.0**attempt, MAX_BACKOFF_SECONDS)
     return ceiling / 2 + random.random() * (ceiling / 2)
+
+
+def _retry_after_seconds(response: Response | None) -> float | None:
+    """Read a Retry-After header, accepting either seconds or an HTTP date."""
+    if response is None:
+        return None
+    raw = _header(response, "retry-after")
+    if not raw:
+        return None
+    raw = raw.strip()
+    try:
+        return max(0.0, float(int(raw)))
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    delta = (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+    return max(0.0, delta)
+
+
+def _retry_delay(response: Response | None, attempt: int) -> float:
+    """Prefer the server's Retry-After, bounded, else local backoff."""
+    supplied = _retry_after_seconds(response)
+    if supplied is None:
+        return _backoff_seconds(attempt)
+    return min(supplied, MAX_BACKOFF_SECONDS)
 
 
 def _resume_offset(response: Response, *, fallback: int) -> int:

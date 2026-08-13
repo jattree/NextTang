@@ -629,6 +629,67 @@ class ReplyTargetTests(CliTestCase):
         self.assertIn("could not be resolved", err)
         self.assertEqual(transport.mutating_requests, [])
 
+    def _reply_to_a_reply(self, owner: str = CHANNEL_ID) -> FakeTransport:
+        """The supplied ID is itself a reply, whose parent is the top-level comment."""
+        transport = FakeTransport()
+        transport.route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET",
+            "/comments",
+            payload={
+                "items": [
+                    {
+                        "id": "reply-comment",
+                        "snippet": {
+                            "videoId": "vid123",
+                            "channelId": owner,
+                            "parentId": "top-level-comment",
+                            "authorDisplayName": "A Viewer",
+                            "textOriginal": "a reply",
+                        },
+                    }
+                ]
+            },
+        )
+        transport.route(
+            "GET", "/videos", payload={"items": [{"id": "vid123", "snippet": {"channelId": owner}}]}
+        )
+        transport.route("POST", "/comments", payload={"id": "new-reply"})
+        return transport
+
+    def test_replying_to_a_reply_targets_the_top_level_comment(self) -> None:
+        transport = self._reply_to_a_reply()
+        code, _, _ = self.run_cli(
+            ["comments", "reply", "reply-comment", "--text-file", str(self.reply), "--apply"],
+            transport,
+        )
+        self.assertEqual(code, EXIT_OK)
+        posted = transport.mutating_requests[0].json_body()
+        self.assertEqual(
+            posted["snippet"]["parentId"],
+            "top-level-comment",
+            "a thread is one level deep, so the reply attaches to the top-level comment",
+        )
+
+    def test_the_dry_run_explains_the_retargeting(self) -> None:
+        transport = self._reply_to_a_reply()
+        code, out, _ = self.run_cli(
+            ["comments", "reply", "reply-comment", "--text-file", str(self.reply)], transport
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("top-level-comment", out)
+        self.assertIn("is itself a reply", out)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_a_top_level_id_is_used_unchanged(self) -> None:
+        transport = self._transport(owner=CHANNEL_ID)
+        code, _, _ = self.run_cli(
+            ["comments", "reply", "Ugx123", "--text-file", str(self.reply), "--apply"], transport
+        )
+        self.assertEqual(code, EXIT_OK)
+        posted = transport.mutating_requests[0].json_body()
+        self.assertEqual(posted["snippet"]["parentId"], "Ugx123")
+
     def test_a_missing_comment_is_reported_clearly(self) -> None:
         transport = FakeTransport()
         transport.route("GET", "mine=true", payload=channel_resource())

@@ -432,12 +432,20 @@ def command_comments_reply(context: Context) -> int:
     # Checked in the dry run too, so the operator sees the resolved target
     # before deciding, and a foreign target is refused without --apply.
     target = context.api.resolve_reply_target(context.args.comment_id, identity.channel_id)
-    plan.target = f"comment {target['comment_id']} on {target['basis']}"
+    parent_id = _canonical_reply_parent(target)
+    plan.payload["parent_id"] = parent_id
+    plan.target = f"comment {parent_id} on {target['basis']}"
     plan.notes.insert(
         0,
         f"target verified: owned by {target['owner_channel_id']}"
         + (f", video {target['video_id']}" if target["video_id"] else ""),
     )
+    if parent_id != target["comment_id"]:
+        plan.notes.insert(
+            1,
+            f"{target['comment_id']} is itself a reply, so the reply is attached to its "
+            f"top-level comment {parent_id}",
+        )
     if target["author"]:
         plan.notes.insert(1, f"replying to {target['author']}")
 
@@ -447,8 +455,10 @@ def command_comments_reply(context: Context) -> int:
 
     context.session.require_scope(oauth.SCOPE_YOUTUBE_FORCE_SSL, capability="comment-reply")
     verified = context.guarded_channel(force=True)
-    context.api.resolve_reply_target(context.args.comment_id, verified.channel_id)
-    result = context.api.insert_comment_reply(plan.payload["parent_id"], plan.payload["text"])
+    confirmed = context.api.resolve_reply_target(context.args.comment_id, verified.channel_id)
+    result = context.api.insert_comment_reply(
+        _canonical_reply_parent(confirmed), plan.payload["text"]
+    )
     _emit_plan(
         context,
         plan,
@@ -673,6 +683,16 @@ def _emit_plan(
         printer.line("No request was sent. Re-run with --apply to perform this change.")
     else:
         printer.line("The change was applied.")
+
+
+def _canonical_reply_parent(target: dict[str, Any]) -> str:
+    """Resolve the thread's top-level comment.
+
+    YouTube threads are one level deep. Passing a reply's own ID as parentId
+    does not attach the new comment where the operator meant, so when the given
+    comment is itself a reply the thread's top-level parent is used instead.
+    """
+    return target.get("parent_id") or target["comment_id"]
 
 
 def _describe_file(mode: str) -> str:

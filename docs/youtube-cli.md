@@ -230,12 +230,26 @@ resolved video and the author being replied to.
 Chunks are read from disk one at a time, so file size does not become memory use.
 Each chunk request carries its own `Authorization` and `Content-Type` headers.
 Transient failures (network errors and HTTP 408, 429, 500, 502, 503, 504) are
-retried with exponential backoff and jitter, capped at 5 attempts per chunk and
-64 seconds per wait, under an overall deadline of one hour. Before each retry the
-tool asks the server how many bytes it actually holds, using a
-`Content-Range: bytes */TOTAL` query, and resumes from there rather than assuming.
-A permanent failure such as an expired session (404) fails immediately instead of
-burning the deadline.
+retried, capped at 5 attempts per chunk under an overall deadline of one hour. A
+server-supplied `Retry-After` header is honoured, in either seconds or HTTP-date
+form, bounded at 64 seconds; otherwise the delay is exponential backoff with
+jitter. Before each retry the tool asks the server how many bytes it actually
+holds, using a `Content-Range: bytes */TOTAL` query, and resumes from there
+rather than assuming. A permanent failure such as an expired session (404) fails
+immediately instead of burning the deadline.
+
+That status query is also how a completed upload is recovered. If the response
+completing an upload is lost in transit, the query returns 200 or 201 with the
+video resource, and the tool returns it. Reporting a failure for an upload that
+actually succeeded would invite a duplicate, so the tool asks once more before
+declaring failure, and its failure message tells you to check `videos list`
+before uploading again.
+
+### Replying to a reply
+
+YouTube threads are one level deep. If the ID you supply is itself a reply, the
+tool attaches the new comment to that thread's top-level comment rather than
+passing the reply's own ID as `parentId`, and the dry run says so.
 
 ## Channel mismatch protection
 
