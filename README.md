@@ -169,6 +169,7 @@ in the [NextTang Telegram group](https://t.me/NextTang).
 - [MiSTer ZXNext core](https://github.com/MiSTer-devel/ZXNext_MISTer)
 - [Pinned upstream and per-file provenance audit](docs/provenance.md)
 - [Adjacent Tang project evidence and reuse boundaries](docs/adjacent-projects.md)
+- [YouTube channel CLI for project host tooling](docs/youtube-cli.md)
 - [Sipeed Tang Console documentation](https://wiki.sipeed.com/hardware/en/tang/tang-console/mega-console.html)
 - [Sipeed Tang Mega 138K examples](https://github.com/sipeed/TangMega-138K-example)
 - [ZXSpectrumNextTests](https://github.com/MrKWatkins/ZXSpectrumNextTests)

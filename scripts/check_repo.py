@@ -84,8 +84,9 @@ MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 HTML_LINK = re.compile(r"(?:href|src)\s*=\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
 REMOTE_SCHEMES = {"data", "http", "https", "mailto"}
 FORBIDDEN_SVG_ELEMENTS = {"animate", "animatemotion", "animatetransform", "foreignobject", "script", "set"}
-SENSITIVE_FILENAMES = {"flexlmrc", "license.dat"}
-SENSITIVE_SUFFIXES = {".lic", ".license"}
+SENSITIVE_FILENAMES = {"credentials.json", "flexlmrc", "license.dat", "token.json", "tokens.json"}
+SENSITIVE_SUFFIXES = {".lic", ".license", ".oauth.json"}
+SENSITIVE_PREFIXES = ("client_secret", "client_secrets")
 REQUIRED_IGNORED_PATHS = {
     ".env.production",
     ".tools/oss-cad-suite/bin/yosys",
@@ -94,7 +95,9 @@ REQUIRED_IGNORED_PATHS = {
     "boards/console138k/src/pll/gowin_pll_tmp.v",
     "build/vendor/console138k/release/nexttang.fs",
     "captures/session.sal",
+    "client_secret_123456789012-abc.apps.googleusercontent.com.json",
     "host/ui/node_modules/package/index.js",
+    "host/youtube/token.json",
     "local/roms/owned-next.rom",
     "nexttang.lic",
     "sim/work/transcript",
@@ -148,7 +151,13 @@ def gitignore_errors(root: Path = REPO_ROOT) -> list[str]:
 
 
 def generated_artifact_error(relative: Path) -> str | None:
-    if relative.name in SENSITIVE_FILENAMES or relative.suffix.lower() in SENSITIVE_SUFFIXES:
+    name = relative.name.lower()
+    if (
+        name in SENSITIVE_FILENAMES
+        or relative.suffix.lower() in SENSITIVE_SUFFIXES
+        or name.endswith(".oauth.json")
+        or name.startswith(SENSITIVE_PREFIXES)
+    ):
         return f"credential or vendor license file is not allowed: {relative}"
     if relative.name == ".env" or (
         relative.name.startswith(".env.") and relative.name != ".env.example"

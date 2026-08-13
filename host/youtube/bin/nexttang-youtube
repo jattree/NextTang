@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Entry point for the NextTang YouTube CLI.
+
+Symlink this into a directory on PATH. It adds the package directory to
+sys.path itself, so the CLI needs no installation step and no virtualenv.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from nexttang_youtube.cli import main  # noqa: E402  - path setup must precede the import
+
+if __name__ == "__main__":
+    sys.exit(main())

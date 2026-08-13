@@ -23,6 +23,19 @@ class CheckRepoTests(unittest.TestCase):
         self.assertIsNone(check_repo.generated_artifact_error(Path(".env.example")))
         self.assertIsNone(check_repo.generated_artifact_error(Path("rtl/core.sv")))
 
+    def test_oauth_credentials_are_rejected(self) -> None:
+        rejected = [
+            "client_secret_123-abc.apps.googleusercontent.com.json",
+            "host/youtube/token.json",
+            "credentials.json",
+            "nexttang.oauth.json",
+        ]
+        for path in rejected:
+            self.assertIsNotNone(
+                check_repo.generated_artifact_error(Path(path)), f"{path} must be rejected"
+            )
+        self.assertIsNone(check_repo.generated_artifact_error(Path("host/youtube/nexttang_youtube/oauth.py")))
+
     def test_local_markdown_links_are_resolved_from_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

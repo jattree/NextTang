@@ -10,6 +10,16 @@
 license.dat
 flexlmrc
 
+# OAuth client credentials and stored tokens for host tooling. These belong in
+# ~/.config/<tool>/ at 0600 and must never reach the repository.
+client_secret*.json
+client_secrets*.json
+credentials.json
+token.json
+tokens.json
+*.oauth.json
+.credentials/
+
 # Editors and operating systems
 .DS_Store
 Thumbs.db
