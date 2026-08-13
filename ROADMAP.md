@@ -13,8 +13,17 @@ provide specification and compatibility references. The debugger targets the
 [DeZog Remote Protocol](https://github.com/maziac/DeZog/blob/main/design/DeZogProtocol.md)
 so that existing Z80 tooling works against NextTang hardware.
 
+RetroSilicon's
+[NextNano v0.2 work-in-progress source](https://github.com/RetroSilicon/NextNano/tree/ba1d834fb672c75a9482233557ae776602b1b243)
+is a secondary design reference, not a replacement baseline. Its Gowin clock-enable,
+memory CDC, diagnostics, and timing-constraint patterns will be evaluated individually.
+Its Nano 20K SDR SDRAM controller, platform-specific core changes, and file-level licence
+boundaries do not transfer automatically to the Console 138K DDR3 target.
+
 The numbered milestones are gated on Tang Console hardware. The
-[host tooling track](#host-tooling-track) is not, and can proceed now.
+[host tooling track](#host-tooling-track) and
+[source-assimilation track](#source-assimilation-track) are not, and can proceed now.
+Core bring-up does not depend on the optional PCIe experiment.
 
 ## Host tooling track
 
@@ -44,6 +53,33 @@ hardware NextTang controls.
 **Exit evidence:** the conformance suite produces a recorded per-command result table for a
 remote this project did not write, which gives Milestone 6 an acceptance test before it has
 an implementation.
+
+## Source-assimilation track
+
+This track converts public-source findings into bounded inputs for the numbered milestones.
+It can proceed before the Tang Console arrives, but it cannot produce build or hardware
+support claims.
+
+- [x] Pin and source-review NextNano's first public source snapshot at commit
+  `ba1d834fb672c75a9482233557ae776602b1b243` against the selected MiSTer baseline.
+- [ ] Maintain a disposition ledger for each NextNano pattern or proposed import, recording
+  provenance, licence, behavioral effect, target dependence, and whether NextTang will
+  study, reimplement, port, or reject it.
+- [ ] Complete the [DDR3 adapter simulation contract](https://github.com/jattree/NextTang/issues/4):
+  model bounded CPU waits and an unstalled video port, keep accepted request metadata stable
+  through acknowledgement, handle a second request explicitly, inject DDR3 refresh stalls,
+  and expose underflow or stale-pixel failures.
+- [ ] Prototype the buffered Layer 2 service in simulation, including the 256x192 row-major
+  layout and the 320x256/640x256 column-major layouts, before fixing final hardware sizes.
+- [ ] Turn compatibility-affecting differences observed in NextNano, including clock enables,
+  software CPU-speed writes, UART, and expansion-bus behaviour, into tests or explicit exclusions
+  before considering a corresponding core patch.
+- [ ] Keep platform logic outside the shared core wherever the selected MiSTer interface
+  permits it; every necessary core change gets a minimal patch and regression test.
+
+**Exit evidence:** a provenance/disposition ledger exists and a named simulation satisfies
+issue 4's acceptance criteria across every Layer 2 layout under declared refresh and latency
+injection. This evidence remains simulated, not synthesized or hardware-verified.
 
 ## Milestone 0: Project baseline
 
@@ -250,12 +286,13 @@ legally obtained external software.
 | --- | --- |
 | 138K hardware | Reproduce examples, pin constraints/IP, capture reports |
 | 60K hardware | Inventory revisions, reproduce equivalent peripherals, prepare constraints |
-| Core integration | Pin upstream, audit provenance, isolate platform dependencies |
-| Simulation | Reset, memory, clock-domain, and bus-handshake fixtures |
+| Core integration | Keep MiSTer pinned; disposition NextNano findings; isolate platform dependencies |
+| Simulation | Reset, two-port memory, refresh-stall, scanline-buffer, clock-domain, and bus-handshake fixtures |
 | Verification | Select small cross-platform Next tests and evidence formats |
 | Debugger | DZRP command subset, halt semantics, and host client integration |
 | Host tooling | The [host tooling track](#host-tooling-track): DZRP client and conformance suite, no Tang board required |
 | USB transport | Identify the onboard USB controller, document its firmware path, and prototype a bounded debug transport |
+| PCIe experiment | Track Gowin GT EQ support and test independently; never gate core bring-up |
 
 Coordination happens through the
 [NextTang issue tracker](https://github.com/jattree/NextTang/issues). Each task
