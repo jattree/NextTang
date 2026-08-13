@@ -79,9 +79,11 @@
         <circle cx="24" cy="76" r="7"/><circle cx="24" cy="184" r="7"/>
         <circle cx="236" cy="76" r="7"/><circle cx="236" cy="184" r="7"/>
       </g>
-      <path d="M64 180V77C64 69 69 64 77 64H89L143 153V77C143 69 148 64 156 64H165V180H139L86 93V180Z"
-            fill="#f97316"/>
-      <path d="M138 64H212V89H187V180H162V89H138Z" fill="#22d3ee"/>
+      <g transform="translate(-8 8)">
+        <path d="M64 180V77C64 69 69 64 77 64H89L143 153V77C143 69 148 64 156 64H165V180H139L86 93V180Z"
+              fill="#f97316"/>
+        <path d="M138 64H212V89H187V180H162V89H138Z" fill="#22d3ee"/>
+      </g>
       <path d="M71 210H189" stroke="#263141" stroke-width="6" stroke-linecap="round"/>
       <path d="M91 210H169" stroke="#22d3ee" stroke-width="6" stroke-linecap="round"/>
       <circle cx="84" cy="210" r="6" fill="#f97316"/>
@@ -90,13 +92,12 @@
 
     <g transform="translate(355 48)">
       <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-         font-size="25" font-weight="700" letter-spacing="4">
-        <rect x="-12" y="-3" width="1180" height="50" rx="12"
+         font-size="24" font-weight="700" letter-spacing="2.5">
+        <rect x="-12" y="-3" width="1160" height="50" rx="12"
               fill="#080a0f" fill-opacity="0.82"
               stroke="#263141" stroke-opacity="0.55"/>
-        <text x="2" y="35" fill="#cbd5e1">OPEN-SOURCE FPGA DEVELOPMENT</text>
-        <rect x="718" y="13" width="13" height="13" rx="3" fill="#f97316"/>
-        <rect x="741" y="13" width="13" height="13" rx="3" fill="#22d3ee"/>
+        <text x="568" y="32" text-anchor="middle"
+              fill="#cbd5e1">OPEN-SOURCE FPGA DEVELOPMENT</text>
       </g>
 
       <text x="0" y="178" fill="#f8fafc" font-size="118" font-weight="800"
@@ -112,7 +113,8 @@
       <rect x="-12" y="286" width="1180" height="48" rx="12"
             fill="#080a0f" fill-opacity="0.82"
             stroke="#263141" stroke-opacity="0.55"/>
-      <text x="2" y="322" fill="#cbd5e1" font-size="23" font-weight="700"
+      <text x="578" y="319" text-anchor="middle"
+            fill="#cbd5e1" font-size="23" font-weight="700"
             font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
             letter-spacing="2.2">BRING-UP  /  PORTING  /  HARDWARE DEBUGGING</text>
     </g>
