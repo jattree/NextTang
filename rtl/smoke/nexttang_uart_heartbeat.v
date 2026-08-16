@@ -12,14 +12,13 @@ module nexttang_uart_heartbeat #(
     input  wire reset,
     output reg  transmit
 );
-    localparam integer BIT_CLOCKS = CLOCK_HZ / BAUD_RATE;
     localparam integer MESSAGE_LENGTH = 21;
 
     reg [7:0] message_character;
     reg [9:0] frame;
     reg [7:0] message_index;
     reg [3:0] bit_index;
-    reg [31:0] bit_clock_count;
+    reg [31:0] baud_accumulator;
     reg [31:0] gap_count;
     reg busy;
 
@@ -55,11 +54,12 @@ module nexttang_uart_heartbeat #(
             frame <= 10'h3ff;
             message_index <= 0;
             bit_index <= 0;
-            bit_clock_count <= 0;
+            baud_accumulator <= 0;
             gap_count <= 0;
             busy <= 1'b0;
         end else if (busy) begin
-            if (bit_clock_count == 0) begin
+            if (baud_accumulator >= CLOCK_HZ - BAUD_RATE) begin
+                baud_accumulator <= baud_accumulator + BAUD_RATE - CLOCK_HZ;
                 if (bit_index == 9) begin
                     transmit <= 1'b1;
                     busy <= 1'b0;
@@ -72,10 +72,9 @@ module nexttang_uart_heartbeat #(
                 end else begin
                     bit_index <= bit_index + 1'b1;
                     transmit <= frame[bit_index + 1'b1];
-                    bit_clock_count <= BIT_CLOCKS - 1;
                 end
             end else begin
-                bit_clock_count <= bit_clock_count - 1'b1;
+                baud_accumulator <= baud_accumulator + BAUD_RATE;
             end
         end else if (gap_count != 0) begin
             gap_count <= gap_count - 1'b1;
@@ -83,7 +82,7 @@ module nexttang_uart_heartbeat #(
             frame <= {1'b1, message_character, 1'b0};
             transmit <= 1'b0;
             bit_index <= 0;
-            bit_clock_count <= BIT_CLOCKS - 1;
+            baud_accumulator <= 0;
             busy <= 1'b1;
         end
     end

@@ -165,6 +165,48 @@ endmodule
         )
         self.assertIn("UART_PASS", output)
 
+    def test_uart_fractional_divider_holds_requested_baud(self) -> None:
+        output = self.run_iverilog(
+            r"""
+`timescale 1ns/1ps
+module testbench;
+    reg clock = 0;
+    reg reset = 1;
+    wire transmit;
+    integer frame_clocks;
+
+    always #5 clock = ~clock;
+
+    nexttang_uart_heartbeat #(
+        .CLOCK_HZ(27),
+        .BAUD_RATE(2),
+        .GAP_CLOCKS(2)
+    ) dut (.clock(clock), .reset(reset), .transmit(transmit));
+
+    initial begin
+        repeat (3) @(posedge clock);
+        reset <= 0;
+
+        @(negedge transmit);
+        frame_clocks = 0;
+        while (dut.message_index == 0) begin
+            @(posedge clock);
+            frame_clocks = frame_clocks + 1;
+            #1;
+        end
+
+        if (frame_clocks != 135)
+            $fatal(1, "UART frame used %0d clocks, expected 135", frame_clocks);
+
+        $display("UART_FRACTIONAL_PASS");
+        $finish;
+    end
+endmodule
+""",
+            "nexttang_uart_heartbeat.v",
+        )
+        self.assertIn("UART_FRACTIONAL_PASS", output)
+
     def test_logo_moves_once_per_frame(self) -> None:
         output = self.run_iverilog(
             r"""
