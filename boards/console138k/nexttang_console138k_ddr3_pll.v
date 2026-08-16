@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 NextTang contributors
-//
-// 27 MHz to 371.25 MHz, followed by CLKDIV / 5 in the board top level.
-// The numeric settings are independently expressed from the TangCore NESTang
-// Console 138K configuration recorded in llmwiki/raw/.
 
 `default_nettype none
 
-module nexttang_console138k_pll (
+// Generate 399.9375 MHz from the board's 27 MHz oscillator. The DDR3 block is
+// configured for nominal 400 MHz; the resulting error is -156.25 ppm.
+module nexttang_console138k_ddr3_pll (
     input  wire clock_in,
-    output wire serial_clock,
+    input  wire clock_enable,
+    output wire memory_clock,
+    output wire reference_clock,
     output wire locked
 );
     wire ground = 1'b0;
     wire power = 1'b1;
-    wire unused_clock_one;
     wire unused_clock_two;
     wire unused_clock_three;
     wire unused_clock_four;
@@ -24,8 +23,8 @@ module nexttang_console138k_pll (
 
     PLL pll (
         .LOCK(locked),
-        .CLKOUT0(serial_clock),
-        .CLKOUT1(unused_clock_one),
+        .CLKOUT0(memory_clock),
+        .CLKOUT1(reference_clock),
         .CLKOUT2(unused_clock_two),
         .CLKOUT3(unused_clock_three),
         .CLKOUT4(unused_clock_four),
@@ -60,7 +59,7 @@ module nexttang_console138k_pll (
         .PSSEL(3'b0),
         .PSDIR(ground),
         .PSPULSE(ground),
-        .ENCLK0(power),
+        .ENCLK0(clock_enable),
         .ENCLK1(power),
         .ENCLK2(power),
         .ENCLK3(power),
@@ -83,11 +82,11 @@ module nexttang_console138k_pll (
     defparam pll.ODIV4_SEL = 8;
     defparam pll.ODIV5_SEL = 8;
     defparam pll.ODIV6_SEL = 8;
-    defparam pll.MDIV_SEL = 27;
-    defparam pll.MDIV_FRAC_SEL = 4;
+    defparam pll.MDIV_SEL = 29;
+    defparam pll.MDIV_FRAC_SEL = 5;
     defparam pll.ODIV0_FRAC_SEL = 0;
     defparam pll.CLKOUT0_EN = "TRUE";
-    defparam pll.CLKOUT1_EN = "FALSE";
+    defparam pll.CLKOUT1_EN = "TRUE";
     defparam pll.CLKOUT2_EN = "FALSE";
     defparam pll.CLKOUT3_EN = "FALSE";
     defparam pll.CLKOUT4_EN = "FALSE";

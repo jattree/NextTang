@@ -1,0 +1,8 @@
+create_clock -name sys_clk -period 37.037 [get_ports {sys_clk}]
+create_clock -name memory_clock -period 2.50039 [get_nets {memory_clock}]
+create_clock -name memory_reference_clock -period 10.00156 [get_nets {memory_reference_clock}]
+create_clock -name controller_clock -period 10.00156 [get_pins {ddr3/gw3_top/u_ddr_phy_top/fclkdiv/CLKOUT}]
+create_clock -name video_serial_clock -period 2.6936 [get_nets {video_serial_clock}]
+create_generated_clock -name pixel_clock -source [get_nets {video_serial_clock}] -master_clock video_serial_clock -divide_by 5 [get_pins {pixel_clock_divider/CLKOUT}]
+set_clock_groups -asynchronous -group [get_clocks {memory_clock}] -group [get_clocks {memory_reference_clock}] -group [get_clocks {controller_clock}] -group [get_clocks {video_serial_clock pixel_clock}] -group [get_clocks {sys_clk}]
+set_false_path -from [get_clocks {controller_clock}] -to [get_pins {status_metastability_?*/D}]
