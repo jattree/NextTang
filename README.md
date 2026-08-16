@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL v3" src="https://img.shields.io/github/license/jattree/NextTang?style=flat-square&amp;color=0ea5e9"></a>
   <a href="https://github.com/jattree/NextTang/actions/workflows/quality.yml"><img alt="Quality checks" src="https://img.shields.io/github/actions/workflow/status/jattree/NextTang/quality.yml?branch=main&amp;style=flat-square&amp;label=quality"></a>
-  <a href="ROADMAP.md"><img alt="Status: planning" src="https://img.shields.io/badge/status-planning-f97316?style=flat-square"></a>
+  <a href="#current-status"><img alt="Status: first hardware image" src="https://img.shields.io/badge/status-first_hardware_image-f97316?style=flat-square"></a>
   <a href="#hardware-targets"><img alt="Targets: Tang Nano 20K, Console 60K, and Console 138K" src="https://img.shields.io/badge/targets-Nano_20K_%7C_Console_60K_%7C_138K-334155?style=flat-square"></a>
   <a href="https://t.me/NextTang"><img alt="Telegram: NextTang" src="https://img.shields.io/badge/Telegram-NextTang-26A5E4?style=flat-square&amp;logo=telegram&amp;logoColor=white"></a>
   <a href="https://www.youtube.com/@NextTangFPGA"><img alt="YouTube: NextTang" src="https://img.shields.io/badge/YouTube-NextTang-FF0000?style=flat-square&amp;logo=youtube&amp;logoColor=white"></a>
@@ -26,13 +26,35 @@
 ## Current status
 
 > [!IMPORTANT]
-> NextTang is currently in planning and feasibility work. There is no working
-> NextTang bitstream yet, and no compatibility claim has been established.
+> The first NextTang-owned Console 138K smoke image is hardware-verified. It is
+> a board and video test, not the ZX Spectrum Next machine core, and establishes
+> no software-compatibility claim.
 
-The immediate gate is reproducible Tang Console 138K board bring-up: clocks,
-UART, HDMI, DDR3, SD, audio, and USB HID. The
-[starter roadmap](ROADMAP.md) defines the evidence required before importing
-and adapting the ZXNext core.
+The image loads into volatile FPGA SRAM through the onboard debugger and
+generates DVI-compatible 1280 x 720/60 HDMI colour bars with a moving NextTang
+logo. The exact C-device build reports zero setup and hold violations. Source,
+constraints and behavioural tests are under [`boards/console138k/`](boards/console138k/),
+[`rtl/smoke/`](rtl/smoke/) and
+[`tests/test_console138k_smoke.py`](tests/test_console138k_smoke.py). Generated
+bitstreams remain outside Git.
+
+Bring-up status is deliberately split between NextTang-owned behaviour and the
+factory TangCore baseline:
+
+| Area | Current evidence |
+| --- | --- |
+| JTAG and programming | Hardware-verified 6 MHz scan and volatile SRAM loading; Gowin `GW5AST-138`, IDCODE `0x1081b` |
+| Clocks | Video-clock path hardware-verified indirectly through stable 720p60 output; clocks have not been independently measured and machine clocks do not exist yet |
+| UART | Behaviourally tested and included in the smoke image, but the attempted hardware read did not decode correctly |
+| HDMI | Hardware-verified for 720p60 video, colour, logo rendering and frame-driven motion; no HDMI audio |
+| DDR3 | Not brought up |
+| SD | Factory TangCore reads the supplied card and loads packaged cores; no NextTang SD implementation |
+| Audio | Not brought up |
+| USB HID | The supplied controller navigates factory TangCore; no NextTang USB HID implementation |
+
+The next engineering gates are the machine clock plan, external DDR3, open boot
+environment, storage, input and audio before any ZX Spectrum Next compatibility
+claim. The [starter roadmap](ROADMAP.md) defines the required evidence.
 
 The one part of the project not waiting on that board is the
 [host tooling track](ROADMAP.md#host-tooling-track), which builds the DZRP client and
@@ -80,7 +102,7 @@ cooperation or code sharing is welcome where technically and legally possible.
 
 | Target | Intended role | Status |
 | --- | --- | --- |
-| Tang Console 138K | Initial port, full development instrumentation, deep trace | Purchased hardware in transit; exact product and revision pending arrival and inspection |
+| Tang Console 138K | Initial port, full development instrumentation, deep trace | Hardware received; `GW5AST-LV138PG484AC1/I0` visually identified, `GW5AST-138` JTAG identity verified, and first owned 720p60 smoke image hardware-verified |
 | Tang Console 60K | Portable release core and lighter debugging | Planned; contributor wanted |
 | Tang Nano 20K | Later compact release target; not a development platform | In scope; not currently scheduled |
 
@@ -120,18 +142,21 @@ explicit completion evidence.
 ## Developer setup
 
 The repository has deterministic quality checks and fail-closed synthesis entry
-points. It does not yet have a board build driver or working bitstream.
+points. The Console 138K has a vendor `release` driver for the verified smoke
+image. This driver does not build the planned machine core.
 
 ```bash
 cp .env.example .env.local
 make doctor
 make check
 make show-config
+make TOOLCHAIN=vendor TARGET=console138k PROFILE=release synth
 ```
 
 See the [toolchain guide](docs/toolchain.md) for the provisional Gowin and
-open-source tool versions, supported target/profile combinations, and real build
-command. Board integrations must implement the documented
+open-source tool versions and supported target/profile combinations. Other
+target, profile and toolchain combinations remain unimplemented and fail closed.
+Board integrations must implement the documented
 [build-driver contract](boards/README.md).
 
 Public technical decisions and verification evidence belong in the relevant
