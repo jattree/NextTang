@@ -47,7 +47,7 @@ factory TangCore baseline:
 | Clocks | Video-clock path hardware-verified indirectly through stable 720p60 output; standalone 28, 14, 7 and 3.5 MHz machine-clock logic is simulation- and exact-device build-verified, but not connected to the core or hardware-verified |
 | UART | Behaviourally tested and included in the smoke image, but the attempted hardware read did not decode correctly |
 | HDMI | Hardware-verified for 720p60 video, colour, logo rendering and frame-driven motion; no HDMI audio |
-| DDR3 | Exact-pin diagnostic build and volatile load verified; calibration times out under MCU-only USB power before any read or write, with a proper 5 V/2 A power retest next |
+| DDR3 | Exact-pin diagnostic build and volatile load verified; calibration times out before any read or write under both MCU-only and regulated 5 V/2 A power |
 | SD | Factory TangCore reads the supplied card and loads packaged cores; no NextTang SD implementation |
 | Audio | Not brought up |
 | USB HID | The supplied controller navigates factory TangCore; no NextTang USB HID implementation |
