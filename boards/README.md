@@ -8,8 +8,10 @@ boards/<target>/build.sh --toolchain vendor|oss --profile <profile> --output <di
 
 The top-level `make synth` command validates the target/profile matrix, checks the
 selected toolchain, creates an isolated output directory, and calls that driver.
-There are deliberately no board drivers yet: the first driver will be added only
-with a reproducible bring-up project.
+The `console138k` driver implements the first reproducible bring-up project. It
+builds the release smoke-test image with the vendor toolchain for the
+GW5AST-LV138PG484AC1/I0, device version C. Other targets, profiles, and the
+open-source flow remain unimplemented and fail closed.
 
 A driver must:
 
