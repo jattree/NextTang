@@ -15,6 +15,20 @@ SPEC.loader.exec_module(check_repo)
 
 
 class CheckRepoTests(unittest.TestCase):
+    def test_repository_files_excludes_untracked_nested_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
+            nested = root / "nested-project"
+            nested.mkdir()
+            subprocess.run(["git", "init", "--quiet"], cwd=nested, check=True)
+            (nested / "README.md").write_text("# Nested\n", encoding="utf-8")
+
+            files = check_repo.repository_files(root)
+
+            self.assertNotIn(nested, files)
+            self.assertTrue(all(path.is_file() for path in files))
+
     def test_generated_artifacts_are_rejected(self) -> None:
         self.assertIsNotNone(check_repo.generated_artifact_error(Path("build/core.fs")))
         self.assertIsNotNone(check_repo.generated_artifact_error(Path("release.bit")))

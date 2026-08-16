@@ -122,7 +122,8 @@ def repository_files(root: Path = REPO_ROOT) -> list[Path]:
         check=True,
         stdout=subprocess.PIPE,
     )
-    return [root / item.decode("utf-8") for item in result.stdout.split(b"\0") if item]
+    paths = [root / item.decode("utf-8") for item in result.stdout.split(b"\0") if item]
+    return [path for path in paths if not path.is_dir()]
 
 
 def path_is_ignored(relative: str, root: Path = REPO_ROOT) -> bool:
