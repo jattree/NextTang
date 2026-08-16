@@ -13,7 +13,7 @@ PROFILE ?= $(or $(NEXTTANG_PROFILE),release)
 export NEXTTANG_GOWIN_HOME
 export NEXTTANG_OSS_CAD_SUITE
 
-.PHONY: help show-config doctor doctor-strict repo-check shell-lint test check ci synth clean
+.PHONY: help show-config doctor doctor-strict repo-check shell-lint test check ci synth diagnostic-bootrom clean
 
 help: ## Show the supported development commands.
 	@awk 'BEGIN {FS = ":.*## "; printf "NextTang development commands:\n\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -51,6 +51,11 @@ ci: check ## Run the deterministic CI gate.
 synth: ## Dispatch a real board build; fails closed until that board driver exists.
 	@$(REPO_ROOT)/scripts/synth.sh \
 		--toolchain '$(TOOLCHAIN)' --target '$(TARGET)' --profile '$(PROFILE)'
+
+diagnostic-bootrom: ## Rebuild the original open diagnostic boot ROM.
+	@python3 $(REPO_ROOT)/scripts/build_diagnostic_boot.py \
+		--source $(REPO_ROOT)/firmware/diagnostic/boot.asm \
+		--output $(REPO_ROOT)/rtl/core/nexttang_diagnostic_bootrom.vhd
 
 clean: ## Remove only the repository build directory.
 	@$(REPO_ROOT)/scripts/clean.sh
