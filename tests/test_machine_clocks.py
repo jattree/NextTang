@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CONTENTION_RTL = REPO_ROOT / "rtl" / "clock" / "nexttang_cpu_clock_contention.v"
 ENABLES_RTL = REPO_ROOT / "rtl" / "clock" / "nexttang_machine_clock_enables.v"
 MUX_RTL = REPO_ROOT / "boards" / "console138k" / "nexttang_console138k_cpu_clock_mux.v"
+PLL_RTL = REPO_ROOT / "boards" / "console138k" / "nexttang_console138k_machine_pll.v"
 
 
 def run_testbench(testbench: str, *sources: Path) -> str:
@@ -222,6 +223,110 @@ endmodule
 """
         output = run_testbench(testbench, MUX_RTL)
         self.assertIn("CONSOLE138K_CPU_CLOCK_MUX_PASS", output)
+
+    def test_console_pll_parameters_and_output_mapping(self) -> None:
+        testbench = r"""
+`timescale 1ns/1ps
+
+module PLL #(
+    parameter FCLKIN = "100",
+    parameter IDIV_SEL = 1,
+    parameter FBDIV_SEL = 1,
+    parameter ODIV0_SEL = 8,
+    parameter ODIV1_SEL = 8,
+    parameter ODIV2_SEL = 8,
+    parameter ODIV3_SEL = 8,
+    parameter ODIV4_SEL = 8,
+    parameter ODIV5_SEL = 8,
+    parameter ODIV6_SEL = 8,
+    parameter MDIV_SEL = 8,
+    parameter MDIV_FRAC_SEL = 0,
+    parameter ODIV0_FRAC_SEL = 0,
+    parameter CLKOUT0_EN = "TRUE",
+    parameter CLKOUT1_EN = "FALSE",
+    parameter CLKOUT2_EN = "FALSE",
+    parameter CLKOUT3_EN = "FALSE",
+    parameter CLKOUT4_EN = "FALSE",
+    parameter CLKOUT5_EN = "FALSE",
+    parameter CLKOUT6_EN = "FALSE",
+    parameter CLKFB_SEL = "INTERNAL",
+    parameter DYN_DPA_EN = "FALSE",
+    parameter CLKOUT0_PE_COARSE = 0,
+    parameter CLKOUT0_PE_FINE = 0,
+    parameter CLKOUT1_PE_COARSE = 0,
+    parameter CLKOUT1_PE_FINE = 0,
+    parameter CLKOUT2_PE_COARSE = 0,
+    parameter CLKOUT2_PE_FINE = 0
+) (
+    output wire CLKOUT0, CLKOUT1, CLKOUT2, CLKOUT3, CLKOUT4, CLKOUT5, CLKOUT6,
+    output wire CLKFBOUT, LOCK,
+    input wire CLKIN, CLKFB, RESET, PLLPWD, RESET_I, RESET_O,
+    input wire [5:0] FBDSEL, IDSEL, ICPSEL,
+    input wire [6:0] MDSEL, ODSEL0, ODSEL1, ODSEL2, ODSEL3, ODSEL4, ODSEL5,
+    input wire [6:0] ODSEL6, SSCMDSEL,
+    input wire [2:0] MDSEL_FRAC, ODSEL0_FRAC, LPFRES, PSSEL, SSCMDSEL_FRAC,
+    input wire [3:0] DT0, DT1, DT2, DT3,
+    input wire [1:0] LPFCAP,
+    input wire PSDIR, PSPULSE, ENCLK0, ENCLK1, ENCLK2, ENCLK3,
+    input wire ENCLK4, ENCLK5, ENCLK6, SSCPOL, SSCON
+);
+    assign CLKOUT0 = CLKIN;
+    assign CLKOUT1 = CLKIN;
+    assign CLKOUT2 = CLKIN;
+    assign CLKOUT3 = 0;
+    assign CLKOUT4 = 0;
+    assign CLKOUT5 = 0;
+    assign CLKOUT6 = 0;
+    assign CLKFBOUT = 0;
+    assign LOCK = !RESET && !PLLPWD;
+
+    initial begin
+        if (FCLKIN != "27" || IDIV_SEL != 1 || FBDIV_SEL != 1)
+            $fatal(1, "unexpected PLL input or feedback parameters");
+        if (MDIV_SEL != 28 || MDIV_FRAC_SEL != 0)
+            $fatal(1, "unexpected 756 MHz VCO parameters");
+        if (ODIV0_SEL != 27 || ODIV1_SEL != 54 || ODIV2_SEL != 108)
+            $fatal(1, "unexpected machine-clock output dividers");
+        if (CLKOUT0_EN != "TRUE" || CLKOUT1_EN != "TRUE" || CLKOUT2_EN != "TRUE")
+            $fatal(1, "a machine-clock output was disabled");
+        if (CLKOUT0_PE_COARSE != 0 || CLKOUT0_PE_FINE != 0 ||
+            CLKOUT1_PE_COARSE != 0 || CLKOUT1_PE_FINE != 0 ||
+            CLKOUT2_PE_COARSE != 0 || CLKOUT2_PE_FINE != 0)
+            $fatal(1, "machine-clock phase was not zero");
+    end
+endmodule
+
+module testbench;
+    reg clock_in = 0;
+    wire clock_28;
+    wire clock_14;
+    wire clock_7;
+    wire locked;
+
+    nexttang_console138k_machine_pll dut (
+        .clock_in(clock_in), .clock_28(clock_28), .clock_14(clock_14),
+        .clock_7(clock_7), .locked(locked)
+    );
+
+    initial begin
+        #1;
+        if (!locked)
+            $fatal(1, "PLL lock output was not mapped");
+        clock_in = 1;
+        #1;
+        if ({clock_28, clock_14, clock_7} !== 3'b111)
+            $fatal(1, "machine clocks were mapped to the wrong PLL outputs");
+        clock_in = 0;
+        #1;
+        if ({clock_28, clock_14, clock_7} !== 3'b000)
+            $fatal(1, "machine clock output did not follow its mapped channel");
+        $display("CONSOLE138K_MACHINE_PLL_PASS");
+        $finish;
+    end
+endmodule
+"""
+        output = run_testbench(testbench, PLL_RTL)
+        self.assertIn("CONSOLE138K_MACHINE_PLL_PASS", output)
 
 
 if __name__ == "__main__":
