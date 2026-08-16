@@ -3,9 +3,9 @@
 
 `default_nettype none
 
-// Adapt explicit 16-byte lines to the Gowin DDR3 controller user interface
-// used by the pinned Tang Console reference. The controller address is in
-// 16-bit-word units, so each 16-byte line advances it by eight.
+// Adapt explicit 16-byte lines to the 32-byte controller beats used by the
+// exact C-silicon Tang Console 138K DDR3 configuration. Two machine lines
+// share each controller beat; byte masks protect the untouched half.
 module nexttang_gowin_ddr3_ui_adapter (
     input  wire         clock,
     input  wire         reset,
@@ -22,13 +22,13 @@ module nexttang_gowin_ddr3_ui_adapter (
     input  wire         controller_command_ready,
     output reg  [2:0]   controller_command,
     output reg          controller_command_enable,
-    output reg  [27:0]  controller_address,
+    output reg  [28:0]  controller_address,
     input  wire         controller_write_data_ready,
-    output reg  [127:0] controller_write_data,
+    output reg  [255:0] controller_write_data,
     output reg          controller_write_data_enable,
     output wire         controller_write_data_end,
-    output reg  [15:0]  controller_write_data_mask,
-    input  wire [127:0] controller_read_data,
+    output reg  [31:0]  controller_write_data_mask,
+    input  wire [255:0] controller_read_data,
     input  wire         controller_read_data_valid,
     output wire         controller_burst
 );
@@ -40,6 +40,7 @@ module nexttang_gowin_ddr3_ui_adapter (
     reg [1:0] state;
     reg write_command_pending;
     reg write_data_pending;
+    reg read_upper_half;
 
     wire write_command_accepted =
         write_command_pending && controller_command_ready;
@@ -48,13 +49,14 @@ module nexttang_gowin_ddr3_ui_adapter (
 
     assign line_ready = state == STATE_IDLE;
     assign controller_write_data_end = 1'b1;
-    assign controller_burst = 1'b1;
+    assign controller_burst = 1'b0;
 
     always @(posedge clock or posedge reset) begin
         if (reset) begin
             state <= STATE_IDLE;
             write_command_pending <= 1'b0;
             write_data_pending <= 1'b0;
+            read_upper_half <= 1'b0;
             line_response_valid <= 1'b0;
             line_read_data <= 0;
             controller_command <= 0;
@@ -62,7 +64,7 @@ module nexttang_gowin_ddr3_ui_adapter (
             controller_address <= 0;
             controller_write_data <= 0;
             controller_write_data_enable <= 1'b0;
-            controller_write_data_mask <= {16{1'b1}};
+            controller_write_data_mask <= {32{1'b1}};
         end else begin
             line_response_valid <= 1'b0;
 
@@ -74,13 +76,19 @@ module nexttang_gowin_ddr3_ui_adapter (
                     write_data_pending <= 1'b0;
 
                     if (line_request) begin
-                        controller_address <= {8'b0, line_address, 3'b0};
+                        controller_address <= {
+                            10'b0, line_address[16:1], 3'b0
+                        };
+                        read_upper_half <= line_address[0];
                         if (line_write) begin
                             controller_command <= 3'b000;
                             controller_command_enable <= 1'b1;
-                            controller_write_data <= line_write_data;
-                            controller_write_data_mask <=
-                                ~line_write_enable;
+                            controller_write_data <= line_address[0]
+                                ? {line_write_data, 128'b0}
+                                : {128'b0, line_write_data};
+                            controller_write_data_mask <= line_address[0]
+                                ? {~line_write_enable, 16'hffff}
+                                : {16'hffff, ~line_write_enable};
                             controller_write_data_enable <= 1'b1;
                             write_command_pending <= 1'b1;
                             write_data_pending <= 1'b1;
@@ -113,7 +121,9 @@ module nexttang_gowin_ddr3_ui_adapter (
                     if (controller_command_ready) begin
                         controller_command_enable <= 1'b0;
                         if (controller_read_data_valid) begin
-                            line_read_data <= controller_read_data;
+                            line_read_data <= read_upper_half
+                                ? controller_read_data[255:128]
+                                : controller_read_data[127:0];
                             line_response_valid <= 1'b1;
                             state <= STATE_IDLE;
                         end else begin
@@ -124,7 +134,9 @@ module nexttang_gowin_ddr3_ui_adapter (
 
                 STATE_READ_RESPONSE: begin
                     if (controller_read_data_valid) begin
-                        line_read_data <= controller_read_data;
+                        line_read_data <= read_upper_half
+                            ? controller_read_data[255:128]
+                            : controller_read_data[127:0];
                         line_response_valid <= 1'b1;
                         state <= STATE_IDLE;
                     end

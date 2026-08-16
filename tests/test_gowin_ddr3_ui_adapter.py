@@ -30,13 +30,13 @@ module testbench;
     reg controller_command_ready = 0;
     wire [2:0] controller_command;
     wire controller_command_enable;
-    wire [27:0] controller_address;
+    wire [28:0] controller_address;
     reg controller_write_data_ready = 0;
-    wire [127:0] controller_write_data;
+    wire [255:0] controller_write_data;
     wire controller_write_data_enable;
     wire controller_write_data_end;
-    wire [15:0] controller_write_data_mask;
-    reg [127:0] controller_read_data = 0;
+    wire [31:0] controller_write_data_mask;
+    reg [255:0] controller_read_data = 0;
     reg controller_read_data_valid = 0;
     wire controller_burst;
 
@@ -87,15 +87,15 @@ module testbench;
         issue_line(1, 17'h12345);
         #1;
         if (controller_command != 3'b000 ||
-            controller_address != {8'b0, 17'h12345, 3'b0})
+            controller_address != {10'b0, 16'h91a2, 3'b0})
             $fatal(1, "write command address mapping was wrong");
         if (!controller_command_enable || !controller_write_data_enable ||
-            controller_write_data != line_write_data)
+            controller_write_data != {line_write_data, 128'b0})
             $fatal(1, "write channels were not issued together");
-        if (controller_write_data_mask != 16'hffdf)
-            $fatal(1, "active-high byte enable was not inverted to mask");
-        if (!controller_write_data_end || !controller_burst)
-            $fatal(1, "single-burst control signals were not asserted");
+        if (controller_write_data_mask != 32'hffdf_ffff)
+            $fatal(1, "upper-half byte mask mapping was wrong");
+        if (!controller_write_data_end || controller_burst)
+            $fatal(1, "single-beat controller signals were wrong");
 
         line_address = 0;
         line_write_data = 0;
@@ -107,8 +107,8 @@ module testbench;
         controller_command_ready = 0;
         if (controller_command_enable || !controller_write_data_enable)
             $fatal(1, "independent command acceptance was not retained");
-        if (controller_address != {8'b0, 17'h12345, 3'b0} ||
-            controller_write_data_mask != 16'hffdf)
+        if (controller_address != {10'b0, 16'h91a2, 3'b0} ||
+            controller_write_data_mask != 32'hffdf_ffff)
             $fatal(1, "write metadata changed under data backpressure");
 
         repeat (2) @(posedge clock);
@@ -122,7 +122,12 @@ module testbench;
 
         line_write_data = 128'h00112233445566778899aabbccddeeff;
         line_write_enable = 16'h8000;
-        issue_line(1, 17'h00003);
+        issue_line(1, 17'h00002);
+        #1;
+        if (controller_address != 29'h000000008 ||
+            controller_write_data != {128'b0, line_write_data} ||
+            controller_write_data_mask != 32'hffff_7fff)
+            $fatal(1, "lower-half write mapping was wrong");
         @(negedge clock);
         controller_write_data_ready = 1;
         @(posedge clock);
@@ -141,7 +146,7 @@ module testbench;
         issue_line(0, 17'h00002);
         #1;
         if (controller_command != 3'b001 ||
-            controller_address != 28'h0000010 ||
+            controller_address != 29'h000000008 ||
             !controller_command_enable || controller_write_data_enable)
             $fatal(1, "read command mapping was wrong");
         @(negedge clock);
@@ -154,7 +159,10 @@ module testbench;
 
         repeat (3) @(posedge clock);
         @(negedge clock);
-        controller_read_data = 128'h0123456789abcdef_fedcba9876543210;
+        controller_read_data = {
+            128'hdeadbeefdeadbeef_deadbeefdeadbeef,
+            128'h0123456789abcdef_fedcba9876543210
+        };
         controller_read_data_valid = 1;
         @(posedge clock);
         #1;
@@ -163,9 +171,12 @@ module testbench;
             line_read_data != 128'h0123456789abcdef_fedcba9876543210)
             $fatal(1, "read response data was not returned");
 
-        issue_line(0, 17'h00004);
+        issue_line(0, 17'h00005);
         @(negedge clock);
-        controller_read_data = 128'hffeeddccbbaa9988_7766554433221100;
+        controller_read_data = {
+            128'hffeeddccbbaa9988_7766554433221100,
+            128'hbad0bad0bad0bad0_bad0bad0bad0bad0
+        };
         controller_command_ready = 1;
         controller_read_data_valid = 1;
         @(posedge clock);
