@@ -1,4 +1,4 @@
-"""Behavioural tests for the bounded destructive DDR3 diagnostic."""
+"""Behavioural tests for the destructive 1 GiB DDR3 address diagnostic."""
 
 from pathlib import Path
 import subprocess
@@ -30,9 +30,9 @@ module testbench;
     reg read_data_valid = 0;
     wire burst;
     wire [2:0] status;
-    reg [255:0] memory [0:7];
+    reg [255:0] memory [0:26];
     reg pending_read = 0;
-    reg [2:0] pending_index = 0;
+    reg [4:0] pending_index = 0;
     integer cycles = 0;
     integer writes = 0;
     integer reads = 0;
@@ -41,23 +41,24 @@ module testbench;
 
     always #5 clock = ~clock;
 
-    function [2:0] address_index;
+    function [4:0] address_index;
         input [28:0] value;
+        integer address_bit;
         begin
-            case (value)
-                29'h00000000: address_index = 0;
-                29'h00000008: address_index = 1;
-                29'h000003f8: address_index = 2;
-                29'h00000400: address_index = 3;
-                29'h001fffc00: address_index = 4;
-                29'h02000000: address_index = 5;
-                29'h0e000000: address_index = 6;
-                29'h00000800: address_index = 7;
-                default: begin
-                    $fatal(1, "unexpected diagnostic address %h", value);
-                    address_index = 0;
+            address_index = 5'h1f;
+            if (value == 29'h00000000)
+                address_index = 0;
+            else if (value == 29'h0ffffff8)
+                address_index = 26;
+            else begin
+                for (address_bit = 3; address_bit <= 27;
+                     address_bit = address_bit + 1) begin
+                    if (value == (29'h00000001 << address_bit))
+                        address_index = address_bit - 2;
                 end
-            endcase
+            end
+            if (address_index == 5'h1f)
+                $fatal(1, "unexpected diagnostic address %h", value);
         end
     endfunction
 
@@ -91,27 +92,32 @@ module testbench;
         if (delayed_write_countdown > 0) begin
             delayed_write_countdown = delayed_write_countdown - 1;
             if (delayed_write_countdown == 0)
-                memory[7] = delayed_write_data;
+                memory[26] = delayed_write_data;
         end
 
         if ({mode} == 0 || {mode} == 1 || {mode} == 4 ||
-            {mode} == 5 || {mode} == 6) begin
+            {mode} == 5 || {mode} == 6 || {mode} == 7) begin
             if (command_enable && command == 3'b000 && cycles[0]) begin
                 command_ready = 1;
                 writes = writes + 1;
             end
             if (write_data_enable && !cycles[0]) begin
                 write_data_ready = 1;
-                if ({mode} == 6 && address_index(address) == 7) begin
+                if ({mode} == 6 && address_index(address) == 26) begin
                     delayed_write_data = write_data;
                     delayed_write_countdown = 80;
+                end else if ({mode} == 7 &&
+                             address == 29'h08000000) begin
+                    memory[0] = write_data;
                 end else begin
                     memory[address_index(address)] = write_data;
                 end
             end
             if (command_enable && command == 3'b001) begin
                 command_ready = 1;
-                pending_index = address_index(address);
+                pending_index = ({mode} == 7 &&
+                                 address == 29'h08000000)
+                    ? 0 : address_index(address);
                 reads = reads + 1;
                 if ({mode} == 5) begin
                     read_data = memory[address_index(address)];
@@ -132,7 +138,7 @@ module testbench;
     end
 
     initial begin
-        memory[7] = 0;
+        memory[26] = 0;
         repeat (2) @(posedge clock);
         reset = 0;
         if ({mode} != 2) begin
@@ -147,7 +153,7 @@ module testbench;
                 if (!write_data_end || write_data_mask != 0 || burst)
                     $fatal(1, "fixed controller controls were wrong");
                 if ({mode} == 0 &&
-                    (status != 3 || writes != 8 || reads != 8))
+                    (status != 3 || writes != 27 || reads != 27))
                     $fatal(1, "pass path ended with status %0d, writes %0d, reads %0d", status, writes, reads);
                 if ({mode} == 1 && status != 4)
                     $fatal(1, "corruption did not produce data error");
@@ -158,11 +164,13 @@ module testbench;
                 if ({mode} == 4 && status != 7)
                     $fatal(1, "calibration loss was not reported");
                 if ({mode} == 5 &&
-                    (status != 3 || writes != 8 || reads != 8))
+                    (status != 3 || writes != 27 || reads != 27))
                     $fatal(1, "same-cycle read path did not pass");
                 if ({mode} == 6 &&
-                    (status != 3 || writes != 8 || reads != 8))
+                    (status != 3 || writes != 27 || reads != 27))
                     $fatal(1, "accepted write was read before it became visible");
+                if ({mode} == 7 && status != 4)
+                    $fatal(1, "simulated 512 MB alias was not detected");
                 $display("DDR3_DIAGNOSTIC_PASS mode={mode} status=%0d", status);
                 $finish;
             end
@@ -211,7 +219,7 @@ endmodule
 
 class Ddr3DiagnosticTest(unittest.TestCase):
     def test_bounded_pass_and_failure_paths(self) -> None:
-        for mode in range(7):
+        for mode in range(8):
             with self.subTest(mode=mode):
                 self.assertIn("DDR3_DIAGNOSTIC_PASS", run_testbench(mode))
 

@@ -4,7 +4,8 @@
 `default_nettype none
 
 // Bounded destructive read/write diagnostic for an otherwise unused DDR3.
-// It touches one aligned 32-byte beat at eight sparse address probes.
+// It writes distinct data at zero, every physical 1 GiB address-line probe and
+// the final aligned 32-byte beat before reading any location back.
 module nexttang_ddr3_diagnostic #(
     parameter integer CALIBRATION_TIMEOUT_CYCLES = 270000000,
     parameter integer TRANSACTION_TIMEOUT_CYCLES = 25000000,
@@ -42,9 +43,10 @@ module nexttang_ddr3_diagnostic #(
     localparam [2:0] STATE_READ_RESPONSE = 3'd3;
     localparam [2:0] STATE_DONE = 3'd4;
     localparam [2:0] STATE_WRITE_DRAIN = 3'd5;
+    localparam [4:0] LAST_TEST_INDEX = 5'd26;
 
     reg [2:0] state;
-    reg [2:0] test_index;
+    reg [4:0] test_index;
     reg write_command_pending;
     reg write_data_pending;
     reg [31:0] timeout_counter;
@@ -60,34 +62,35 @@ module nexttang_ddr3_diagnostic #(
         (!write_data_pending || write_data_accepted);
 
     function [28:0] test_address;
-        input [2:0] index;
+        input [4:0] index;
         begin
-            case (index)
-                3'd0: test_address = 29'h00000000;
-                3'd1: test_address = 29'h00000008;
-                3'd2: test_address = 29'h000003f8;
-                3'd3: test_address = 29'h00000400;
-                3'd4: test_address = 29'h001fffc00;
-                3'd5: test_address = 29'h02000000;
-                3'd6: test_address = 29'h0e000000;
-                default: test_address = 29'h00000800;
-            endcase
+            // The UI address is in 32-bit words and each 256-bit transfer is
+            // aligned to eight words. Bits 3 through 27 therefore select all
+            // 32-byte beats in the fitted 1 GiB memory.
+            if (index == 0)
+                test_address = 29'h00000000;
+            else if (index < LAST_TEST_INDEX)
+                test_address = 29'h00000008 << (index - 1'b1);
+            else
+                test_address = 29'h0ffffff8;
         end
     endfunction
 
     function [255:0] test_pattern;
-        input [2:0] index;
+        input [4:0] index;
+        reg [31:0] signature;
         begin
-            case (index)
-                3'd0: test_pattern = 256'h00000000000000000000000000000000_ffffffffffffffffffffffffffffffff;
-                3'd1: test_pattern = 256'h55555555555555555555555555555555_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;
-                3'd2: test_pattern = 256'h0123456789abcdeffedcba9876543210_89abcdef0123456776543210fedcba98;
-                3'd3: test_pattern = 256'h000102030405060708090a0b0c0d0e0f_101112131415161718191a1b1c1d1e1f;
-                3'd4: test_pattern = 256'h80402010080402018040201008040201_01020408102040800102040810204080;
-                3'd5: test_pattern = 256'hf00ff00ff00ff00ff00ff00ff00ff00f_0ff00ff00ff00ff00ff00ff00ff00ff0;
-                3'd6: test_pattern = 256'hdeadbeefcafef00d5aa5a55a96966996_13579bdf2468ace00eca8642fdb97531;
-                default: test_pattern = 256'h4e45585454414e472044445233204449_41474e4f5354494320504153533f3f3f;
-            endcase
+            signature = 32'h4e540000 | index;
+            test_pattern = {
+                signature,
+                ~signature,
+                signature ^ 32'h55555555,
+                signature ^ 32'haaaaaaaa,
+                signature ^ 32'h01234567,
+                signature ^ 32'h89abcdef,
+                signature ^ 32'hf00ff00f,
+                signature ^ 32'h0ff00ff0
+            };
         end
     endfunction
 
@@ -140,7 +143,7 @@ module nexttang_ddr3_diagnostic #(
                         status <= STATUS_CALIBRATION_LOST;
                     end else if (write_complete) begin
                         timeout_counter <= 0;
-                        if (test_index == 3'd7) begin
+                        if (test_index == LAST_TEST_INDEX) begin
                             state <= STATE_WRITE_DRAIN;
                             test_index <= 0;
                             current_address <= test_address(0);
@@ -191,7 +194,7 @@ module nexttang_ddr3_diagnostic #(
                             if (controller_read_data != current_pattern) begin
                                 state <= STATE_DONE;
                                 status <= STATUS_DATA_ERROR;
-                            end else if (test_index == 3'd7) begin
+                            end else if (test_index == LAST_TEST_INDEX) begin
                                 state <= STATE_DONE;
                                 status <= STATUS_PASS;
                             end else begin
@@ -224,7 +227,7 @@ module nexttang_ddr3_diagnostic #(
                         if (controller_read_data != current_pattern) begin
                             state <= STATE_DONE;
                             status <= STATUS_DATA_ERROR;
-                        end else if (test_index == 3'd7) begin
+                        end else if (test_index == LAST_TEST_INDEX) begin
                             state <= STATE_DONE;
                             status <= STATUS_PASS;
                         end else begin
