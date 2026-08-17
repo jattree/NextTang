@@ -277,6 +277,84 @@ endmodule
         )
         self.assertIn("LOGO_FRAMEBUFFER_PASS", output)
 
+    def test_framebuffer_keeps_beat_and_lane_aligned_while_scanning(self) -> None:
+        output = run_iverilog(
+            r"""
+`timescale 1ns/1ps
+module testbench;
+    reg write_clock = 0;
+    reg read_clock = 0;
+    reg write_enable = 0;
+    reg write_bank = 0;
+    reg [8:0] write_address = 0;
+    reg [255:0] write_data = 0;
+    reg read_bank = 0;
+    reg [13:0] read_address = 0;
+    wire [7:0] read_data;
+    reg [7:0] sampled_data;
+    integer lane;
+
+    always #3 write_clock = ~write_clock;
+    always #5 read_clock = ~read_clock;
+    always @(posedge read_clock)
+        sampled_data <= read_data;
+
+    nexttang_logo_framebuffer dut (
+        .write_clock(write_clock), .write_enable(write_enable),
+        .write_bank(write_bank), .write_address(write_address),
+        .write_data(write_data), .read_clock(read_clock),
+        .read_bank(read_bank), .read_address(read_address),
+        .read_data(read_data)
+    );
+
+    task write_beat;
+        input [8:0] address;
+        input [7:0] base;
+        begin
+            @(negedge write_clock);
+            write_address = address;
+            for (lane = 0; lane < 32; lane = lane + 1)
+                write_data[lane * 8 +: 8] = base + lane;
+            write_enable = 1;
+            @(negedge write_clock);
+            write_enable = 0;
+        end
+    endtask
+
+    initial begin
+        write_beat(0, 8'h00);
+        write_beat(1, 8'h80);
+
+        read_address = 14'd30;
+        @(posedge read_clock);
+        #1;
+        read_address = 14'd31;
+        @(posedge read_clock);
+        #1;
+        if (sampled_data !== 8'h1e)
+            $fatal(1, "address 30 returned %02x", sampled_data);
+
+        read_address = 14'd32;
+        @(posedge read_clock);
+        #1;
+        if (sampled_data !== 8'h1f)
+            $fatal(1, "address 31 returned %02x", sampled_data);
+
+        read_address = 14'd33;
+        @(posedge read_clock);
+        #1;
+        if (sampled_data !== 8'h80)
+            $fatal(1, "address 32 returned %02x", sampled_data);
+
+        $display("LOGO_FRAMEBUFFER_SCAN_ALIGNMENT_PASS");
+        $finish;
+    end
+endmodule
+""",
+            REPO_ROOT / "rtl" / "video" / "nexttang_logo_framebuffer.v",
+        )
+        self.assertIn("LOGO_FRAMEBUFFER_SCAN_ALIGNMENT_PASS", output)
+
     def test_motion_requires_a_fresh_ddr_completion(self) -> None:
         output = run_iverilog(
             r"""

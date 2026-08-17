@@ -16,6 +16,8 @@ module nexttang_logo_framebuffer (
 );
     wire [7:0] bank_zero_read_data [0:31];
     wire [7:0] bank_one_read_data [0:31];
+    reg [4:0] read_lane;
+    reg read_bank_delayed;
 
     genvar lane;
     generate
@@ -42,9 +44,14 @@ module nexttang_logo_framebuffer (
         end
     endgenerate
 
-    assign read_data = read_bank
-        ? bank_one_read_data[read_address[4:0]]
-        : bank_zero_read_data[read_address[4:0]];
+    always @(posedge read_clock) begin
+        read_lane <= read_address[4:0];
+        read_bank_delayed <= read_bank;
+    end
+
+    assign read_data = read_bank_delayed
+        ? bank_one_read_data[read_lane]
+        : bank_zero_read_data[read_lane];
 endmodule
 
 `default_nettype wire
