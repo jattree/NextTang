@@ -150,13 +150,16 @@ demonstrates every required physical interface independently.
 - [ ] Replace MiSTer HPS, Intel PLL, and memory wrappers with the NextTang
   platform interfaces.
 - [ ] Synthesize early and record resource use before optimizing anything.
-- [ ] Reach a deterministic configuration or boot screen at 3.5 MHz and 50 Hz.
-- [ ] Load user-supplied ROM/NextZXOS content without redistributing it.
+- [ ] Reach a deterministic open diagnostic or monitor at 3.5 MHz and 50 Hz,
+  without an original Spectrum ROM, NextZXOS or NextBASIC.
+- [ ] Load a self-contained `.NEX` test from SD through a project-owned or
+  independently licensed monitor, without NextZXOS or proprietary ROM services.
 - [ ] Bring up keyboard, SD loading, HDMI audio/video, and UART diagnostics.
 - [ ] Preserve a first-boot test artifact and exact reproduction instructions.
 
 **Exit evidence:** a fresh checkout builds a bitstream that boots repeatedly on
-the recorded 138K setup, with failures visible over UART.
+the recorded 138K setup using only redistributable components, with failures
+visible over UART.
 
 ## Milestone 4: Baseline compatibility and 60K target
 
@@ -166,6 +169,8 @@ the recorded 138K setup, with failures visible over UART.
 - [ ] Synthesize `release` for both targets on every core change.
 - [ ] Add a shared hardware smoke suite for CPU, NextREGs, MMU paging, video
   layers, sprites, tilemap, DMA, interrupts, SD, input, and audio.
+- [ ] Record compatibility per test program, including whether it is
+  self-contained or requires NextZXOS, esxDOS or proprietary ROM services.
 - [ ] Record differences between 60K and 138K rather than hiding them with
   board-specific core forks.
 
