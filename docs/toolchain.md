@@ -121,8 +121,14 @@ make doctor-strict TOOLCHAIN=oss
 make synth TOOLCHAIN=oss TARGET=console138k PROFILE=release
 ```
 
-The doctor requires `yosys`, `nextpnr-himbaechel`, `gowin_pack`, `ghdl`, and
-`openFPGALoader`. GHDL is included because the planned upstream core is VHDL-heavy,
+Separately from either synthesis path, the doctor's `repo` group requires
+`iverilog`, `ghdl` and `sjasmplus`, because the test suite drives all three
+directly: the Verilog testbenches, the VHDL testbenches, and the diagnostic boot
+ROM respectively. Reference versions are pinned in `toolchain/versions.env`.
+`make check` cannot pass without them on any toolchain.
+
+For the open flow the doctor requires `yosys`, `nextpnr-himbaechel`,
+`gowin_pack`, `ghdl`, and `openFPGALoader`. GHDL is included because the planned upstream core is VHDL-heavy,
 but the exact mixed-language synthesis boundary remains to be proven. Do not use
 the open flow for a release claim until synthesis, timing, programming, and hardware
 tests have all been reproduced.

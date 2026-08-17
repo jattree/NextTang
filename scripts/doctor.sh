@@ -77,6 +77,12 @@ if [[ "$mode" == all || "$mode" == repo ]]; then
     check_tool repo make required 'install GNU Make'
     check_tool repo python3 required "install Python $NEXTTANG_PYTHON_SERIES"
     check_tool repo shellcheck optional 'recommended for shell linting'
+    check_tool repo iverilog required \
+        "Verilog testbenches; reference $NEXTTANG_IVERILOG_REFERENCE_VERSION"
+    check_tool repo ghdl required \
+        "VHDL testbenches; reference $NEXTTANG_GHDL_REFERENCE_VERSION"
+    check_tool repo sjasmplus required \
+        "diagnostic boot ROM; reference $NEXTTANG_SJASMPLUS_VERSION"
 fi
 
 if [[ "$mode" == all || "$mode" == vendor ]]; then
@@ -97,7 +103,6 @@ if [[ "$mode" == all || "$mode" == oss ]]; then
     check_tool oss ghdl required 'required for the VHDL-heavy upstream core'
     check_tool oss openFPGALoader required 'required for hardware programming'
     check_tool oss verilator optional 'recommended SystemVerilog simulator'
-    check_tool oss iverilog optional 'recommended lightweight simulator'
 fi
 
 printf '\nrequired tools missing: %d\n' "$missing_required"
