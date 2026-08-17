@@ -275,6 +275,10 @@ class DryRunTests(CliTestCase):
         super().setUp()
         self.description = Path(self.temporary.name) / "description.txt"
         self.description.write_text("A new channel description for NextTang.\n", encoding="utf-8")
+        self.video_title = Path(self.temporary.name) / "video-title.txt"
+        self.video_title.write_text("A corrected video title\n", encoding="utf-8")
+        self.video_description = Path(self.temporary.name) / "video-description.txt"
+        self.video_description.write_text("A corrected video description.\n", encoding="utf-8")
         self.reply = Path(self.temporary.name) / "reply.txt"
         self.reply.write_text("Thanks. The 138K board is still in transit.\n", encoding="utf-8")
         self.video = Path(self.temporary.name) / "devlog-001.mp4"
@@ -406,6 +410,46 @@ class DryRunTests(CliTestCase):
         self.assertIn("video vid123", out)
         self.assertEqual(transport.mutating_requests, [])
 
+    def test_metadata_dry_run_verifies_ownership_and_sends_no_write(self) -> None:
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET",
+            "/videos",
+            payload={
+                "items": [
+                    {
+                        "id": "vid123",
+                        "snippet": {
+                            "channelId": CHANNEL_ID,
+                            "title": "Old title",
+                            "description": "Old description",
+                            "categoryId": "28",
+                            "tags": ["NextTang", "FPGA"],
+                        },
+                    }
+                ]
+            },
+        )
+        code, out, _ = self.run_cli(
+            [
+                "videos",
+                "update-metadata",
+                "vid123",
+                "--title-file",
+                str(self.video_title),
+                "--description-file",
+                str(self.video_description),
+            ],
+            transport,
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("DRY RUN", out)
+        self.assertIn("videos.update", out)
+        self.assertIn("-Old title", out)
+        self.assertIn("+A corrected video title", out)
+        self.assertIn("categoryId", out)
+        self.assertEqual(transport.mutating_requests, [])
+
     def test_upload_requires_an_explicit_privacy_value(self) -> None:
         transport = FakeTransport()
         with self.assertRaises(SystemExit) as raised:
@@ -442,6 +486,140 @@ class DryRunTests(CliTestCase):
 
 
 class ApplyTests(DryRunTests):
+    def test_metadata_apply_requires_its_own_capability(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["comments-read"],
+        )
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET",
+            "/videos",
+            payload={
+                "items": [
+                    {
+                        "id": "vid123",
+                        "snippet": {
+                            "channelId": CHANNEL_ID,
+                            "title": "Old title",
+                            "description": "Old description",
+                            "categoryId": "28",
+                        },
+                    }
+                ]
+            },
+        )
+        code, _, err = self.run_cli(
+            [
+                "videos",
+                "update-metadata",
+                "vid123",
+                "--title-file",
+                str(self.video_title),
+                "--description-file",
+                str(self.video_description),
+                "--apply",
+            ],
+            transport,
+        )
+        self.assertEqual(code, EXIT_AUTH_REQUIRED)
+        self.assertIn("auth login --enable video-metadata-write", err)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_metadata_refuses_a_video_owned_by_another_channel(self) -> None:
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET",
+            "/videos",
+            payload={
+                "items": [
+                    {
+                        "id": "vid123",
+                        "snippet": {
+                            "channelId": OTHER_CHANNEL_ID,
+                            "title": "Old title",
+                            "description": "Old description",
+                            "categoryId": "28",
+                        },
+                    }
+                ]
+            },
+        )
+        code, _, err = self.run_cli(
+            [
+                "videos",
+                "update-metadata",
+                "vid123",
+                "--title-file",
+                str(self.video_title),
+                "--description-file",
+                str(self.video_description),
+            ],
+            transport,
+        )
+        self.assertEqual(code, EXIT_CHANNEL_MISMATCH)
+        self.assertIn(OTHER_CHANNEL_ID, err)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_metadata_apply_updates_only_the_verified_video_snippet(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["video-metadata-write"],
+        )
+        current_snippet = {
+            "channelId": CHANNEL_ID,
+            "title": "Old title",
+            "description": "Old description",
+            "categoryId": "28",
+            "tags": ["NextTang", "FPGA"],
+            "defaultLanguage": "en-GB",
+            "publishedAt": "2026-08-17T00:00:00Z",
+        }
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET",
+            "/videos",
+            payload={"items": [{"id": "vid123", "snippet": current_snippet}]},
+        )
+        transport.route(
+            "PUT",
+            "/youtube/v3/videos",
+            payload={
+                "id": "vid123",
+                "snippet": {
+                    "title": "A corrected video title",
+                    "description": "A corrected video description.",
+                },
+            },
+        )
+        code, out, _ = self.run_cli(
+            [
+                "videos",
+                "update-metadata",
+                "vid123",
+                "--title-file",
+                str(self.video_title),
+                "--description-file",
+                str(self.video_description),
+                "--apply",
+            ],
+            transport,
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("APPLIED", out)
+        writes = transport.mutating_requests
+        self.assertEqual(len(writes), 1)
+        self.assertIn("part=snippet", writes[0].url)
+        body = writes[0].json_body()
+        self.assertEqual(body["id"], "vid123")
+        self.assertEqual(body["snippet"]["title"], "A corrected video title")
+        self.assertEqual(body["snippet"]["description"], "A corrected video description.")
+        self.assertEqual(body["snippet"]["categoryId"], "28")
+        self.assertEqual(body["snippet"]["tags"], ["NextTang", "FPGA"])
+        self.assertEqual(body["snippet"]["defaultLanguage"], "en-GB")
+        self.assertNotIn("channelId", body["snippet"])
+        self.assertNotIn("publishedAt", body["snippet"])
+
     def test_thumbnail_apply_requires_its_own_capability(self) -> None:
         self.write_credentials(
             scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],

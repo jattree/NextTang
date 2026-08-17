@@ -27,6 +27,16 @@ MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024
 BANNER_MINIMUM = (2048, 1152)
 WATERMARK_SIZE = (150, 150)
 THUMBNAIL_MINIMUM_WIDTH = 1280
+MAX_VIDEO_TITLE_CHARACTERS = 100
+MAX_VIDEO_DESCRIPTION_CHARACTERS = 5000
+MUTABLE_VIDEO_SNIPPET_FIELDS = (
+    "title",
+    "description",
+    "tags",
+    "categoryId",
+    "defaultLanguage",
+    "defaultAudioLanguage",
+)
 
 
 @dataclass(frozen=True)
@@ -322,6 +332,107 @@ def plan_video_thumbnail(channel_id: str, video_id: str, path: Path) -> Plan:
             "path": str(path),
             "size": image.size,
             "mime_type": image.mime_type,
+        },
+    )
+
+
+def merge_video_metadata(
+    snippet: Mapping[str, Any], title: str, description: str
+) -> dict[str, Any]:
+    """Keep mutable snippet fields while replacing only title and description."""
+    merged = {
+        key: copy.deepcopy(snippet[key])
+        for key in MUTABLE_VIDEO_SNIPPET_FIELDS
+        if key in snippet
+    }
+    merged["title"] = title
+    merged["description"] = description
+    return merged
+
+
+def plan_video_metadata(
+    channel_id: str,
+    video_id: str,
+    snippet: Mapping[str, Any],
+    title: str,
+    description: str,
+) -> Plan:
+    """Plan an ownership-checked title and description update."""
+    if not video_id.strip():
+        raise UsageError("a video ID is required")
+    if not title.strip():
+        raise UsageError("the title file is empty")
+    if len(title) > MAX_VIDEO_TITLE_CHARACTERS:
+        raise UsageError(
+            f"video title is {len(title)} characters, over YouTube's "
+            f"{MAX_VIDEO_TITLE_CHARACTERS} character limit"
+        )
+    if len(description) > MAX_VIDEO_DESCRIPTION_CHARACTERS:
+        raise UsageError(
+            f"video description is {len(description)} characters, over YouTube's "
+            f"{MAX_VIDEO_DESCRIPTION_CHARACTERS} character limit"
+        )
+    if not snippet.get("categoryId"):
+        raise UsageError(
+            "the API returned no categoryId for the video",
+            hint="videos.update requires categoryId. No metadata was changed.",
+        )
+
+    current_title = str(snippet.get("title") or "")
+    current_description = str(snippet.get("description") or "")
+    if title == current_title and description == current_description:
+        raise UsageError(
+            "the supplied title and description are identical to the current video metadata",
+            hint="Nothing would change. Edit the files or drop the command.",
+        )
+
+    merged = merge_video_metadata(snippet, title, description)
+    preserved = sorted(
+        key
+        for key in MUTABLE_VIDEO_SNIPPET_FIELDS
+        if key in snippet and key not in {"title", "description"}
+    )
+    diff = list(
+        difflib.unified_diff(
+            current_title.splitlines(),
+            title.splitlines(),
+            fromfile="current title",
+            tofile="proposed title",
+            lineterm="",
+        )
+    )
+    diff.extend(
+        difflib.unified_diff(
+            current_description.splitlines(),
+            description.splitlines(),
+            fromfile="current description",
+            tofile="proposed description",
+            lineterm="",
+        )
+    )
+
+    return Plan(
+        operation="videos.update-metadata",
+        target=f"video {video_id} on channel {channel_id}",
+        summary="replace the video title and description from the supplied files",
+        diff=diff,
+        notes=[
+            "videos.update replaces the snippet fields it accepts, so the request is built "
+            "from the current video resource rather than from a partial hand-written object.",
+            f"preserved mutable snippet fields: {', '.join(preserved) if preserved else 'none'}",
+            "The video is resolved and its ownership is checked before both the dry run and "
+            "the write. Visibility and audience settings are not changed.",
+        ],
+        request={
+            "method": "PUT",
+            "endpoint": "youtube/v3/videos (videos.update)",
+            "part": "snippet",
+            "quota_units": 50,
+        },
+        payload={
+            "channel_id": channel_id,
+            "video_id": video_id,
+            "snippet": merged,
         },
     )
 

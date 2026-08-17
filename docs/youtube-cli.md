@@ -122,7 +122,7 @@ Every command accepts `--json` for machine-readable output.
 
 ### Write commands
 
-All six are dry runs unless `--apply` is given.
+All seven are dry runs unless `--apply` is given.
 
 | Command | What it does |
 | --- | --- |
@@ -131,6 +131,7 @@ All six are dry runs unless `--apply` is given.
 | `channel set-watermark --file FILE` | Sets a 150x150 channel-wide video watermark from the start of playback. |
 | `videos upload PATH --privacy private` | Uploads a video as private. `--privacy` is required and only `private` is accepted. |
 | `videos set-thumbnail VIDEO_ID --file FILE` | Sets a 16:9 custom thumbnail after proving the video belongs to the pinned channel. The image must be at least 1280 pixels wide and no larger than 2 MiB. |
+| `videos update-metadata VIDEO_ID --title-file FILE --description-file FILE` | Replaces a channel video's title and description after proving ownership. It preserves the current category, tags and language fields. |
 | `comments reply COMMENT_ID --text-file FILE` | Posts one reply to one comment on the channel's own content. |
 
 ## Scopes and capabilities
@@ -151,6 +152,7 @@ Anything beyond that must be named explicitly with `--enable`:
 | `banner-write` | `youtube.force-ssl` | `channel set-banner --apply` |
 | `watermark-write` | `youtube.force-ssl` | `channel set-watermark --apply` |
 | `thumbnail-write` | `youtube.force-ssl` | `videos set-thumbnail --apply` |
+| `video-metadata-write` | `youtube.force-ssl` | `videos update-metadata --apply` |
 | `upload` | `youtube.upload` | `videos upload --apply` |
 | `comment-reply` | `youtube.force-ssl` | `comments reply --apply` |
 
@@ -169,6 +171,11 @@ scope. Granting comment reading does not enable replying, banner changes,
 watermark changes or thumbnail changes. The scope is the real security boundary
 and Google enforces it; the capability list is a local interlock so one grant
 does not quietly imply another.
+
+Video metadata changes have their own `video-metadata-write` interlock even
+when the token already carries `youtube.force-ssl`. Re-authorise with every
+capability that should remain enabled; `auth login` records exactly the
+capabilities named on that invocation.
 
 ## Quota behaviour
 
@@ -246,9 +253,17 @@ immediately before the write. It refuses a missing video or one owned by any
 channel other than the pinned NextTang channel. The 2 MiB limit is the Data API
 upload limit, which is lower than the browser upload limit in YouTube Studio.
 
+`videos update-metadata` follows the same two ownership checks. YouTube's
+`videos.update` replaces the supplied snippet fields, so the command reads the
+current snippet and carries forward its mutable `categoryId`, `tags`,
+`defaultLanguage` and `defaultAudioLanguage` values. Output-only fields such as
+`channelId`, `publishedAt` and `thumbnails` are deliberately omitted. The
+command changes neither visibility nor audience settings.
+
 References: [channelBanners.insert](https://developers.google.com/youtube/v3/docs/channelBanners/insert),
 [watermarks.set](https://developers.google.com/youtube/v3/docs/watermarks/set),
 [thumbnails.set](https://developers.google.com/youtube/v3/docs/thumbnails/set),
+[videos.update](https://developers.google.com/youtube/v3/docs/videos/update),
 and [channels.update](https://developers.google.com/youtube/v3/docs/channels/update).
 
 ### Replies are restricted to the channel's own content

@@ -26,6 +26,18 @@ BRANDING = {
     "image": {"bannerExternalUrl": "https://example.invalid/banner"},
 }
 
+VIDEO_SNIPPET = {
+    "channelId": "UC123",
+    "title": "Old title",
+    "description": "Old description",
+    "categoryId": "28",
+    "tags": ["NextTang", "FPGA"],
+    "defaultLanguage": "en-GB",
+    "defaultAudioLanguage": "en-GB",
+    "publishedAt": "2026-08-17T00:00:00Z",
+    "thumbnails": {"default": {"url": "https://example.invalid/thumbnail.jpg"}},
+}
+
 
 def write_png(path: Path, width: int, height: int) -> None:
     """Write a tiny valid RGBA PNG without adding an image-library dependency."""
@@ -75,6 +87,61 @@ class ReadModifyWriteTests(unittest.TestCase):
         plan = operations.plan_channel_description("UC123", BRANDING, "New description")
         self.assertEqual(plan.payload["branding"]["channel"]["country"], "GB")
         self.assertEqual(plan.payload["channel_id"], "UC123")
+
+    def test_video_metadata_merge_preserves_mutable_snippet_fields_only(self) -> None:
+        merged = operations.merge_video_metadata(VIDEO_SNIPPET, "New title", "New description")
+        self.assertEqual(merged["title"], "New title")
+        self.assertEqual(merged["description"], "New description")
+        self.assertEqual(merged["categoryId"], "28")
+        self.assertEqual(merged["tags"], ["NextTang", "FPGA"])
+        self.assertEqual(merged["defaultLanguage"], "en-GB")
+        self.assertEqual(merged["defaultAudioLanguage"], "en-GB")
+        self.assertNotIn("channelId", merged)
+        self.assertNotIn("publishedAt", merged)
+        self.assertNotIn("thumbnails", merged)
+
+    def test_video_metadata_merge_does_not_mutate_the_source(self) -> None:
+        operations.merge_video_metadata(VIDEO_SNIPPET, "New title", "New description")
+        self.assertEqual(VIDEO_SNIPPET["title"], "Old title")
+        self.assertEqual(VIDEO_SNIPPET["description"], "Old description")
+
+    def test_video_metadata_plan_shows_both_diffs_and_preservation(self) -> None:
+        plan = operations.plan_video_metadata(
+            "UC123", "vid123", VIDEO_SNIPPET, "New title", "New description"
+        )
+        self.assertEqual(plan.operation, "videos.update-metadata")
+        self.assertIn("-Old title", plan.diff)
+        self.assertIn("+New title", plan.diff)
+        self.assertIn("-Old description", plan.diff)
+        self.assertIn("+New description", plan.diff)
+        self.assertTrue(any("categoryId" in note and "tags" in note for note in plan.notes))
+        self.assertEqual(plan.payload["snippet"]["categoryId"], "28")
+
+    def test_video_metadata_plan_refuses_no_change(self) -> None:
+        with self.assertRaises(UsageError) as raised:
+            operations.plan_video_metadata(
+                "UC123", "vid123", VIDEO_SNIPPET, "Old title", "Old description"
+            )
+        self.assertIn("identical", raised.exception.message)
+
+    def test_video_metadata_plan_requires_category(self) -> None:
+        snippet = dict(VIDEO_SNIPPET)
+        snippet.pop("categoryId")
+        with self.assertRaises(UsageError) as raised:
+            operations.plan_video_metadata(
+                "UC123", "vid123", snippet, "New title", "New description"
+            )
+        self.assertIn("categoryId", raised.exception.message)
+
+    def test_video_metadata_limits_are_enforced(self) -> None:
+        with self.assertRaises(UsageError):
+            operations.plan_video_metadata(
+                "UC123", "vid123", VIDEO_SNIPPET, "x" * 101, "New description"
+            )
+        with self.assertRaises(UsageError):
+            operations.plan_video_metadata(
+                "UC123", "vid123", VIDEO_SNIPPET, "New title", "x" * 5001
+            )
 
     def test_plan_shows_a_diff(self) -> None:
         plan = operations.plan_channel_description("UC123", BRANDING, "New description")

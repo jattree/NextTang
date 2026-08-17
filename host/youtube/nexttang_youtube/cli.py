@@ -432,6 +432,69 @@ def command_videos_set_thumbnail(context: Context) -> int:
     return EXIT_OK
 
 
+def command_videos_update_metadata(context: Context) -> int:
+    title = _read_text_file(Path(context.args.title_file), "title").strip()
+    description = _read_text_file(
+        Path(context.args.description_file), "description"
+    ).rstrip("\r\n")
+    identity = context.guarded_channel()
+    snippet = context.api.video_snippet(context.args.video_id)
+    owner = snippet.get("channelId")
+    if owner != identity.channel_id:
+        detail = owner or "an unresolved owner"
+        raise ForeignContentError(
+            f"video {context.args.video_id} belongs to {detail}, not the pinned channel "
+            f"{identity.channel_id}",
+            hint="Use 'videos list' to find the exact video ID. No metadata was changed.",
+        )
+    plan = operations.plan_video_metadata(
+        identity.channel_id,
+        context.args.video_id,
+        snippet,
+        title,
+        description,
+    )
+
+    if not context.args.apply:
+        _emit_plan(context, plan, applied=False)
+        return EXIT_OK
+
+    context.session.require_scope(
+        oauth.SCOPE_YOUTUBE_FORCE_SSL, capability="video-metadata-write"
+    )
+    verified = context.guarded_channel(force=True)
+    current = context.api.video_snippet(context.args.video_id)
+    verified_owner = current.get("channelId")
+    if verified_owner != verified.channel_id:
+        detail = verified_owner or "an unresolved owner"
+        raise ForeignContentError(
+            f"video {context.args.video_id} belongs to {detail}, not the pinned channel "
+            f"{verified.channel_id}",
+            hint="The target changed or can no longer be resolved. No metadata was changed.",
+        )
+    current_plan = operations.plan_video_metadata(
+        verified.channel_id,
+        context.args.video_id,
+        current,
+        title,
+        description,
+    )
+    result = context.api.update_video_snippet(
+        context.args.video_id, current_plan.payload["snippet"]
+    )
+    _emit_plan(
+        context,
+        current_plan,
+        applied=True,
+        extra={
+            "channel_id": verified.channel_id,
+            "video_id": context.args.video_id,
+            "api_result": result,
+        },
+    )
+    return EXIT_OK
+
+
 # ------------------------------------------------------------------ playlists
 
 
@@ -925,6 +988,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--file", required=True, help="1280px or wider 16:9 PNG/JPEG, at most 2 MiB"
     )
     videos_thumbnail.set_defaults(handler=command_videos_set_thumbnail)
+
+    videos_metadata = video_commands.add_parser(
+        "update-metadata",
+        parents=[common, apply_flag],
+        help="update a channel video's title and description (dry run by default)",
+    )
+    videos_metadata.add_argument("video_id", help="YouTube video ID owned by the pinned channel")
+    videos_metadata.add_argument("--title-file", required=True, help="UTF-8 file holding the title")
+    videos_metadata.add_argument(
+        "--description-file", required=True, help="UTF-8 file holding the description"
+    )
+    videos_metadata.set_defaults(handler=command_videos_update_metadata)
 
     playlists = groups.add_parser("playlists", help="playlist commands")
     playlist_commands = playlists.add_subparsers(dest="command", required=True)

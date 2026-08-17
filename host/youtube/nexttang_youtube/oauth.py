@@ -77,6 +77,10 @@ CAPABILITIES: dict[str, tuple[str, str]] = {
         SCOPE_YOUTUBE_FORCE_SSL,
         "upload and set a custom thumbnail on a channel video",
     ),
+    "video-metadata-write": (
+        SCOPE_YOUTUBE_FORCE_SSL,
+        "update the title and description of a video owned by the pinned channel",
+    ),
 }
 WRITE_CAPABILITIES = {
     name: value for name, value in CAPABILITIES.items() if name != "comments-read"

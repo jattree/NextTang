@@ -185,6 +185,19 @@ class YouTubeApi:
             return None
         return (items[0].get("snippet") or {}).get("channelId")
 
+    def video_snippet(self, video_id: str) -> dict[str, Any]:
+        """Read one video's snippet for an ownership-checked update."""
+        payload = self._get(
+            f"{DATA_API_ROOT}/videos", {"part": "snippet", "id": video_id}
+        )
+        items = payload.get("items") or []
+        if not items:
+            raise ApiError(
+                f"no video found with ID {video_id}",
+                hint="Check the ID with 'videos list'. No metadata was changed.",
+            )
+        return dict(items[0].get("snippet") or {})
+
     def resolve_reply_target(self, comment_id: str, expected_channel_id: str) -> dict[str, Any]:
         """Prove a comment sits on the pinned channel's content before replying.
 
@@ -264,6 +277,18 @@ class YouTubeApi:
             "PUT",
             f"{DATA_API_ROOT}/channels",
             parameters={"part": "brandingSettings"},
+            json_body=body,
+        )
+
+    def update_video_snippet(
+        self, video_id: str, snippet: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Replace the mutable snippet fields for one video."""
+        body = {"id": video_id, "snippet": dict(snippet)}
+        return self._request(
+            "PUT",
+            f"{DATA_API_ROOT}/videos",
+            parameters={"part": "snippet"},
             json_body=body,
         )
 
