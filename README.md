@@ -52,6 +52,12 @@ factory TangCore baseline:
 | Audio | Not brought up |
 | USB HID | The supplied controller navigates factory TangCore; no NextTang USB HID implementation |
 
+The first DDR-to-video integration is also hardware-verified. An exact-C demo
+stores the 16 KiB RGB332 logo in onboard DDR3, repeatedly refills alternating
+on-chip display buffers from DDR3, and advances the logo only after a complete
+refill. This proves a bounded live DDR consumer, not the machine CPU/video
+memory service or a full-screen DDR framebuffer.
+
 The next engineering gates are connecting the machine clock and CPU memory
 service to the working DDR3 controller, then open boot, storage, input and audio
 before any ZX Spectrum Next compatibility claim. The
