@@ -122,7 +122,7 @@ Every command accepts `--json` for machine-readable output.
 
 ### Write commands
 
-All five are dry runs unless `--apply` is given.
+All six are dry runs unless `--apply` is given.
 
 | Command | What it does |
 | --- | --- |
@@ -130,6 +130,7 @@ All five are dry runs unless `--apply` is given.
 | `channel set-banner --file FILE` | Uploads 16:9 channel art (minimum 2048x1152) and sets it with a safe branding read-modify-write. |
 | `channel set-watermark --file FILE` | Sets a 150x150 channel-wide video watermark from the start of playback. |
 | `videos upload PATH --privacy private` | Uploads a video as private. `--privacy` is required and only `private` is accepted. |
+| `videos set-thumbnail VIDEO_ID --file FILE` | Sets a 16:9 custom thumbnail after proving the video belongs to the pinned channel. The image must be at least 1280 pixels wide and no larger than 2 MiB. |
 | `comments reply COMMENT_ID --text-file FILE` | Posts one reply to one comment on the channel's own content. |
 
 ## Scopes and capabilities
@@ -149,6 +150,7 @@ Anything beyond that must be named explicitly with `--enable`:
 | `channel-write` | `youtube` | `channel set-description --apply` |
 | `banner-write` | `youtube.force-ssl` | `channel set-banner --apply` |
 | `watermark-write` | `youtube.force-ssl` | `channel set-watermark --apply` |
+| `thumbnail-write` | `youtube.force-ssl` | `videos set-thumbnail --apply` |
 | `upload` | `youtube.upload` | `videos upload --apply` |
 | `comment-reply` | `youtube.force-ssl` | `comments reply --apply` |
 
@@ -163,10 +165,10 @@ is a named opt-in rather than part of the default set.
 
 Because several capabilities share `youtube.force-ssl`, the tool records
 which capabilities were requested at login and checks that list as well as the
-scope. Granting comment reading does not enable replying, banner changes or
-watermark changes. The scope is the real security boundary and Google enforces
-it; the capability list is a local interlock so one grant does not quietly imply
-another.
+scope. Granting comment reading does not enable replying, banner changes,
+watermark changes or thumbnail changes. The scope is the real security boundary
+and Google enforces it; the capability list is a local interlock so one grant
+does not quietly imply another.
 
 ## Quota behaviour
 
@@ -182,6 +184,7 @@ Costs relevant here:
 | `channels.update` | 50 units |
 | `channelBanners.insert` | 50 units |
 | `watermarks.set` | 50 units |
+| `thumbnails.set` | 50 units |
 | `comments.insert` | 50 units |
 | `videos.insert` | 1 call from the 100-per-day upload bucket |
 
@@ -238,8 +241,14 @@ the channel before retrying.
 A successful command therefore proves API acceptance only. Visually verify it
 on a channel video once one exists.
 
+`videos set-thumbnail` resolves the target video before the dry run and again
+immediately before the write. It refuses a missing video or one owned by any
+channel other than the pinned NextTang channel. The 2 MiB limit is the Data API
+upload limit, which is lower than the browser upload limit in YouTube Studio.
+
 References: [channelBanners.insert](https://developers.google.com/youtube/v3/docs/channelBanners/insert),
 [watermarks.set](https://developers.google.com/youtube/v3/docs/watermarks/set),
+[thumbnails.set](https://developers.google.com/youtube/v3/docs/thumbnails/set),
 and [channels.update](https://developers.google.com/youtube/v3/docs/channels/update).
 
 ### Replies are restricted to the channel's own content

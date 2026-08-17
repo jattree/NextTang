@@ -23,8 +23,10 @@ MAX_COMMENT_CHARACTERS = 10000
 MAX_CHANNEL_DESCRIPTION_CHARACTERS = 1000
 MAX_BANNER_BYTES = 6 * 1024 * 1024
 MAX_WATERMARK_BYTES = 10 * 1024 * 1024
+MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024
 BANNER_MINIMUM = (2048, 1152)
 WATERMARK_SIZE = (150, 150)
+THUMBNAIL_MINIMUM_WIDTH = 1280
 
 
 @dataclass(frozen=True)
@@ -275,6 +277,52 @@ def plan_video_upload(path: Path, privacy: str, *, title: str | None = None,
             "quota_units": "1 call from the 100-per-day video upload bucket",
         },
         payload={"path": str(path), "size": size, "metadata": metadata},
+    )
+
+
+def plan_video_thumbnail(channel_id: str, video_id: str, path: Path) -> Plan:
+    """Plan one custom thumbnail upload for a video on the pinned channel."""
+    if not video_id.strip():
+        raise UsageError("a video ID is required")
+    image = inspect_image(path, max_bytes=MAX_THUMBNAIL_BYTES, label="thumbnail")
+    if image.width < THUMBNAIL_MINIMUM_WIDTH:
+        raise UsageError(
+            f"thumbnail is {image.width}x{image.height}; this CLI requires at least "
+            f"{THUMBNAIL_MINIMUM_WIDTH} pixels of width"
+        )
+    if image.width * 9 != image.height * 16:
+        raise UsageError(
+            f"thumbnail is {image.width}x{image.height}; this CLI requires a 16:9 image"
+        )
+
+    return Plan(
+        operation="videos.set-thumbnail",
+        target=f"video {video_id} on channel {channel_id}",
+        summary=(
+            f"upload {path.name} ({image.width}x{image.height}, {image.size} bytes) "
+            f"as the custom thumbnail"
+        ),
+        notes=[
+            f"validated {image.mime_type} artwork at {image.width}x{image.height}",
+            f"sha256: {sha256_of(path)}",
+            "The video is resolved through videos.list before both the dry run and the write; "
+            "a video owned by any other channel is refused.",
+            "A successful thumbnails.set response means Google accepted the image; the CLI "
+            "does not change the video's visibility.",
+        ],
+        request={
+            "method": "POST",
+            "endpoint": "upload/youtube/v3/thumbnails/set (thumbnails.set)",
+            "upload_type": "multipart",
+            "quota_units": 50,
+        },
+        payload={
+            "channel_id": channel_id,
+            "video_id": video_id,
+            "path": str(path),
+            "size": image.size,
+            "mime_type": image.mime_type,
+        },
     )
 
 

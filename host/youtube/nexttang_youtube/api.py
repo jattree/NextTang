@@ -43,6 +43,7 @@ RETRYABLE_STATUSES = {408, 429, 500, 502, 503, 504}
 MAX_BACKOFF_SECONDS = 64.0
 MAX_BANNER_UPLOAD_BYTES = 6 * 1024 * 1024
 MAX_WATERMARK_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_THUMBNAIL_UPLOAD_BYTES = 2 * 1024 * 1024
 
 QUOTA_REASONS = {
     "quotaExceeded",
@@ -312,6 +313,36 @@ class YouTubeApi:
             mime_type=mime_type,
             max_bytes=MAX_WATERMARK_UPLOAD_BYTES,
         )
+
+    def set_video_thumbnail(self, video_id: str, path: Path, mime_type: str) -> dict[str, Any]:
+        """Upload and set one custom thumbnail, returning Google's video resource."""
+        response = self._multipart_upload(
+            f"{UPLOAD_API_ROOT}/thumbnails/set",
+            parameters={"uploadType": "multipart", "videoId": video_id},
+            metadata={},
+            path=path,
+            mime_type=mime_type,
+            max_bytes=MAX_THUMBNAIL_UPLOAD_BYTES,
+        )
+        try:
+            payload = response.json()
+        except ApiError as error:
+            raise ApiError(
+                "thumbnails.set returned an unreadable completion response",
+                hint=(
+                    "The thumbnail may have changed. Do not retry blindly; inspect the video "
+                    "in YouTube Studio first."
+                ),
+            ) from error
+        if not isinstance(payload, dict):
+            raise ApiError(
+                "thumbnails.set returned an unexpected completion response",
+                hint=(
+                    "The thumbnail may have changed. Do not retry blindly; inspect the video "
+                    "in YouTube Studio first."
+                ),
+            )
+        return payload
 
     def insert_comment_reply(self, parent_id: str, text: str) -> dict[str, Any]:
         body = {"snippet": {"parentId": parent_id, "textOriginal": text}}

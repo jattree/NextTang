@@ -23,7 +23,7 @@ and planned disposition.
 | Upstream project files | 10 | Reference only; not part of the portable core import |
 | Prebuilt releases | 11 | Do not import or redistribute |
 | `rtl/audio/dac.vhd` | 1 | Do not import unless its licence provenance is established; otherwise reimplement |
-| `rtl/rom/bootrom.vhd` | 1 | Do not import or redistribute; require a legally obtained, user-supplied ROM |
+| `rtl/rom/bootrom.vhd` | 1 | Do not import or redistribute; replace it with project-owned or independently licensed boot firmware |
 
 The 52 candidate files are the portable ZXNext logic identified by this audit.
 Their inclusion remains subject to review at the actual import commit.

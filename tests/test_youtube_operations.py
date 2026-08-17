@@ -111,6 +111,8 @@ class ChannelArtworkPlanTests(unittest.TestCase):
         write_png(self.banner, 2048, 1152)
         self.watermark = root / "watermark.png"
         write_png(self.watermark, 150, 150)
+        self.thumbnail = root / "thumbnail.png"
+        write_png(self.thumbnail, 1280, 720)
 
     def test_banner_plan_accepts_the_documented_minimum(self) -> None:
         plan = operations.plan_channel_banner("UC123", BRANDING, self.banner)
@@ -167,6 +169,26 @@ class ChannelArtworkPlanTests(unittest.TestCase):
         with self.assertRaises(UsageError) as raised:
             operations.plan_channel_watermark("UC123", self.watermark)
         self.assertIn("150x150", raised.exception.message)
+
+    def test_thumbnail_plan_accepts_a_high_resolution_16_by_9_image(self) -> None:
+        plan = operations.plan_video_thumbnail("UC123", "vid123", self.thumbnail)
+        self.assertEqual(plan.operation, "videos.set-thumbnail")
+        self.assertEqual(plan.payload["mime_type"], "image/png")
+        self.assertEqual(plan.payload["video_id"], "vid123")
+        self.assertEqual(plan.request["quota_units"], 50)
+
+    def test_thumbnail_rejects_wrong_aspect_ratio(self) -> None:
+        write_png(self.thumbnail, 1280, 800)
+        with self.assertRaises(UsageError) as raised:
+            operations.plan_video_thumbnail("UC123", "vid123", self.thumbnail)
+        self.assertIn("16:9", raised.exception.message)
+
+    def test_thumbnail_rejects_the_api_size_limit(self) -> None:
+        with self.thumbnail.open("r+b") as handle:
+            handle.truncate(2 * 1024 * 1024 + 1)
+        with self.assertRaises(UsageError) as raised:
+            operations.plan_video_thumbnail("UC123", "vid123", self.thumbnail)
+        self.assertIn("2 MiB", raised.exception.message)
 
 
 class UploadPolicyTests(unittest.TestCase):

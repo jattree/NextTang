@@ -23,6 +23,7 @@ from .errors import (
     EXIT_NO_CREDENTIALS,
     EXIT_OK,
     CliError,
+    ForeignContentError,
     UsageError,
 )
 from .oauth import AuthSession, ClientCredentials
@@ -380,6 +381,52 @@ def command_videos_upload(context: Context) -> int:
             "channel_id": verified.channel_id,
             "video_id": result.get("id"),
             "privacy_status": (result.get("status") or {}).get("privacyStatus"),
+        },
+    )
+    return EXIT_OK
+
+
+def command_videos_set_thumbnail(context: Context) -> int:
+    path = Path(context.args.file)
+    identity = context.guarded_channel()
+    plan = operations.plan_video_thumbnail(identity.channel_id, context.args.video_id, path)
+
+    owner = context.api.video_owner(context.args.video_id)
+    if owner != identity.channel_id:
+        detail = owner or "an unresolved owner"
+        raise ForeignContentError(
+            f"video {context.args.video_id} belongs to {detail}, not the pinned channel "
+            f"{identity.channel_id}",
+            hint="Use 'videos list' to find the exact video ID. Not setting a thumbnail.",
+        )
+
+    if not context.args.apply:
+        _emit_plan(context, plan, applied=False)
+        return EXIT_OK
+
+    context.session.require_scope(oauth.SCOPE_YOUTUBE_FORCE_SSL, capability="thumbnail-write")
+    verified = context.guarded_channel(force=True)
+    verified_owner = context.api.video_owner(context.args.video_id)
+    if verified_owner != verified.channel_id:
+        detail = verified_owner or "an unresolved owner"
+        raise ForeignContentError(
+            f"video {context.args.video_id} belongs to {detail}, not the pinned channel "
+            f"{verified.channel_id}",
+            hint="The target changed or can no longer be resolved. No thumbnail was uploaded.",
+        )
+    result = context.api.set_video_thumbnail(
+        context.args.video_id,
+        path,
+        plan.payload["mime_type"],
+    )
+    _emit_plan(
+        context,
+        plan,
+        applied=True,
+        extra={
+            "channel_id": verified.channel_id,
+            "video_id": context.args.video_id,
+            "api_result": result,
         },
     )
     return EXIT_OK
@@ -867,6 +914,17 @@ def build_parser() -> argparse.ArgumentParser:
     videos_upload.add_argument("--title", help="video title (defaults to the file stem)")
     videos_upload.add_argument("--description-file", help="UTF-8 file holding the video description")
     videos_upload.set_defaults(handler=command_videos_upload)
+
+    videos_thumbnail = video_commands.add_parser(
+        "set-thumbnail",
+        parents=[common, apply_flag],
+        help="upload and set a custom thumbnail for a channel video (dry run by default)",
+    )
+    videos_thumbnail.add_argument("video_id", help="YouTube video ID owned by the pinned channel")
+    videos_thumbnail.add_argument(
+        "--file", required=True, help="1280px or wider 16:9 PNG/JPEG, at most 2 MiB"
+    )
+    videos_thumbnail.set_defaults(handler=command_videos_set_thumbnail)
 
     playlists = groups.add_parser("playlists", help="playlist commands")
     playlist_commands = playlists.add_subparsers(dest="command", required=True)

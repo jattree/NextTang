@@ -73,6 +73,10 @@ CAPABILITIES: dict[str, tuple[str, str]] = {
         SCOPE_YOUTUBE_FORCE_SSL,
         "upload and set the channel-wide video watermark",
     ),
+    "thumbnail-write": (
+        SCOPE_YOUTUBE_FORCE_SSL,
+        "upload and set a custom thumbnail on a channel video",
+    ),
 }
 WRITE_CAPABILITIES = {
     name: value for name, value in CAPABILITIES.items() if name != "comments-read"

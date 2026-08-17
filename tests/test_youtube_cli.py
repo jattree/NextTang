@@ -283,6 +283,8 @@ class DryRunTests(CliTestCase):
         self._write_png(self.banner, 2048, 1152)
         self.watermark = Path(self.temporary.name) / "youtube-watermark.png"
         self._write_png(self.watermark, 150, 150)
+        self.thumbnail = Path(self.temporary.name) / "youtube-thumbnail.png"
+        self._write_png(self.thumbnail, 1280, 720)
 
     @staticmethod
     def _write_png(path: Path, width: int, height: int) -> None:
@@ -390,6 +392,20 @@ class DryRunTests(CliTestCase):
         self.assertIn("watermarks.set", out)
         self.assertEqual(transport.mutating_requests, [])
 
+    def test_thumbnail_dry_run_verifies_video_ownership_and_sends_no_write(self) -> None:
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET", "/videos", payload={"items": [{"id": "vid123", "snippet": {"channelId": CHANNEL_ID}}]}
+        )
+        code, out, _ = self.run_cli(
+            ["videos", "set-thumbnail", "vid123", "--file", str(self.thumbnail)], transport
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("DRY RUN", out)
+        self.assertIn("thumbnails.set", out)
+        self.assertIn("video vid123", out)
+        self.assertEqual(transport.mutating_requests, [])
+
     def test_upload_requires_an_explicit_privacy_value(self) -> None:
         transport = FakeTransport()
         with self.assertRaises(SystemExit) as raised:
@@ -426,6 +442,63 @@ class DryRunTests(CliTestCase):
 
 
 class ApplyTests(DryRunTests):
+    def test_thumbnail_apply_requires_its_own_capability(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["comments-read"],
+        )
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET", "/videos", payload={"items": [{"id": "vid123", "snippet": {"channelId": CHANNEL_ID}}]}
+        )
+        code, _, err = self.run_cli(
+            ["videos", "set-thumbnail", "vid123", "--file", str(self.thumbnail), "--apply"],
+            transport,
+        )
+        self.assertEqual(code, EXIT_AUTH_REQUIRED)
+        self.assertIn("auth login --enable thumbnail-write", err)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_thumbnail_refuses_a_video_owned_by_another_channel(self) -> None:
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET",
+            "/videos",
+            payload={"items": [{"id": "vid123", "snippet": {"channelId": OTHER_CHANNEL_ID}}]},
+        )
+        code, _, err = self.run_cli(
+            ["videos", "set-thumbnail", "vid123", "--file", str(self.thumbnail)], transport
+        )
+        self.assertEqual(code, EXIT_CHANNEL_MISMATCH)
+        self.assertIn(OTHER_CHANNEL_ID, err)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_thumbnail_apply_uploads_for_the_verified_channel_video(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["thumbnail-write"],
+        )
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET", "/videos", payload={"items": [{"id": "vid123", "snippet": {"channelId": CHANNEL_ID}}]}
+        )
+        transport.route(
+            "POST",
+            "/upload/youtube/v3/thumbnails/set",
+            payload={"kind": "youtube#thumbnailSetResponse", "items": []},
+        )
+        code, out, _ = self.run_cli(
+            ["videos", "set-thumbnail", "vid123", "--file", str(self.thumbnail), "--apply"],
+            transport,
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("APPLIED", out)
+        writes = transport.mutating_requests
+        self.assertEqual(len(writes), 1)
+        self.assertIn("videoId=vid123", writes[0].url)
+        self.assertIn("uploadType=multipart", writes[0].url)
+        self.assertIn("multipart/related", writes[0].headers["Content-Type"])
+
     def test_banner_apply_requires_its_own_capability(self) -> None:
         self.write_credentials(
             scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],

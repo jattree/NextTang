@@ -73,7 +73,7 @@ rtl/pll.qip	ee13e21821e5ba23c8e7dfd824df5d2f2ea5c5a4	no-explicit-notice-observed
 rtl/pll.v	fbed763a5d7a555de2abf86289191959a66acfa2	Intel-Altera-device-restricted	exclude-intel-pll
 rtl/pll/pll_0002.qip	aec45eb73ea83ceab9b5ad1b7d71b5869c92036f	no-explicit-notice-observed	exclude-intel-pll
 rtl/pll/pll_0002.v	25d8a485c2b5c3d77755f92b69d6853e3ead39c2	no-explicit-notice-observed	exclude-intel-pll
-rtl/rom/bootrom.vhd	46c39fe8b4e4732d5a96c546f6ffc90c6773df4e	no-copyright-or-license-notice	exclude-user-supplied-rom
+rtl/rom/bootrom.vhd	46c39fe8b4e4732d5a96c546f6ffc90c6773df4e	no-copyright-or-license-notice	exclude-replace-open-firmware
 rtl/serial/fifop.vhd	7f3e5cced9689baf76ca58d583c9036bec25768c	GPL-3.0-or-later	candidate-import-retain-notice
 rtl/serial/spi_master.vhd	6fa52609e7a688bb46eb49bcc5278c017b930381	BSD-3-Clause-synthesized-form	candidate-import-retain-notice
 rtl/serial/uart.vhd	115fbec82889491cd443496eea23adb267345b7d	GPL-3.0-or-later	candidate-import-retain-notice
