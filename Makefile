@@ -33,9 +33,11 @@ repo-check: ## Validate tracked files, local links, and generated-artifact polic
 	@python3 $(REPO_ROOT)/scripts/check_repo.py
 
 shell-lint: ## Parse shell scripts and run ShellCheck when it is installed.
-	@bash -n $(REPO_ROOT)/scripts/*.sh $(REPO_ROOT)/tests/*.sh
+	@bash -n $(REPO_ROOT)/scripts/*.sh $(REPO_ROOT)/tests/*.sh \
+		$(REPO_ROOT)/boards/*/*.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -x -P SCRIPTDIR $(REPO_ROOT)/scripts/*.sh $(REPO_ROOT)/tests/*.sh; \
+		shellcheck -x -P SCRIPTDIR $(REPO_ROOT)/scripts/*.sh \
+			$(REPO_ROOT)/tests/*.sh $(REPO_ROOT)/boards/*/*.sh; \
 	else \
 		printf '%s\n' 'shellcheck: SKIP (not installed)'; \
 	fi

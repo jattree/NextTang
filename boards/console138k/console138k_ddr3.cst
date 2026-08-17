@@ -163,6 +163,6 @@ IO_PORT "ddr_dqs[1]" IO_TYPE=SSTL15D PULL_MODE=NONE DRIVE=8 BANK_VCCIO=1.5;
 IO_LOC "ddr_dqs[0]" Y3,AA3;
 IO_PORT "ddr_dqs[0]" IO_TYPE=SSTL15D PULL_MODE=NONE DRIVE=8 BANK_VCCIO=1.5;
 
-INS_LOC "memory_pll/pll" PLL_L[0];
+INS_LOC "memory_pll/reference_pll/u_pll/PLL_inst" PLL_L[0];
 INS_LOC "ddr3/gw3_top/u_ddr_phy_top/u_dll" DDRDLLM_BL;
 INS_LOC "ddr3/gw3_top/u_ddr_phy_top/fclkdiv" LEFTSIDE[4];

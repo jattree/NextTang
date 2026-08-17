@@ -1,9 +1,9 @@
 # Toolchain setup
 
-The repository now has stable front-door commands and version references, but it
-does not yet contain synthesis drivers or a working NextTang bitstream. Tool
-versions in [`toolchain/versions.env`](../toolchain/versions.env) remain
-`provisional-unvalidated` until an exact build and hardware result are logged.
+The repository has stable front-door commands, a Console 138K smoke-image
+driver and a separate destructive DDR3 diagnostic driver. The smoke image and
+DDR3 diagnostic are hardware-verified for the exact C device; this does not
+verify the planned machine core or every advertised toolchain combination.
 
 ## Common setup
 
@@ -50,8 +50,8 @@ make doctor-strict TOOLCHAIN=vendor
 make synth TOOLCHAIN=vendor TARGET=console138k PROFILE=release
 ```
 
-The synthesis command currently stops before invoking Gowin because the 138K board
-driver has not been implemented. That failure is intentional.
+The release command builds the hardware-verified Console 138K smoke image. It
+does not include the planned machine core or DDR3 controller.
 
 ### Local smoke-build evidence
 
@@ -66,6 +66,43 @@ exercise NextTang sources, mixed-language synthesis, DDR3 or hardware.
 
 Primary reference: [Sipeed Tang Mega 138K examples](https://github.com/sipeed/TangMega-138K-example),
 including its [DDR memory notes](https://github.com/sipeed/TangMega-138K-example/blob/main/ddr_memory/README.md).
+
+### Console 138K DDR3 diagnostic
+
+The destructive diagnostic uses the exact C device and the Console's 50 MHz
+input. Its working clock path retains Sipeed's Gowin-generated `Gowin_PLL`
+wrapper, `PLL_INIT` sequencer and DDR3 controller. Those generated files do not
+carry a redistribution grant, so they remain outside this repository.
+
+Provide a local directory with this shape:
+
+```text
+ddr3_memory_interface/ddr3_memory_interface.v
+gowin_pll/gowin_pll.v
+gowin_pll/gowin_pll_mod.v
+pll_init.v
+```
+
+Then run:
+
+```bash
+mkdir -p /tmp/nexttang-ddr3-build
+boards/console138k/build_ddr3.sh \
+  --toolchain vendor \
+  --profile diagnostic \
+  --vendor-source /absolute/path/to/ddr_memory_test_uart/src \
+  --output /tmp/nexttang-ddr3-build
+```
+
+The output directory must exist and be empty. The driver rejects tool error
+records, requires fresh synthesis, placement, timing and bitstream artifacts,
+requires zero setup and hold violations, and writes source hashes and a build
+manifest. The generated bitstream is destructive to the tested addresses and
+must not be committed.
+
+Gowin EDA V1.9.12.03 produced the hardware-verified build. The current
+diagnostic proves calibration and bounded transactions at sparse addresses; it
+does not yet prove the complete 1 GB address map or absence of aliasing.
 
 ## Experimental open-source flow
 

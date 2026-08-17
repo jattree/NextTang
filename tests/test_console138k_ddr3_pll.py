@@ -13,70 +13,60 @@ PLL_RTL = (
     / "console138k"
     / "nexttang_console138k_ddr3_pll.v"
 )
+DDR3_SDC = REPO_ROOT / "boards" / "console138k" / "console138k_ddr3.sdc"
+DDR3_TOP = (
+    REPO_ROOT
+    / "boards"
+    / "console138k"
+    / "nexttang_console138k_ddr3_diagnostic.v"
+)
 
 
 class Console138kDdr3PllTest(unittest.TestCase):
-    def test_parameters_output_and_clock_gate(self) -> None:
+    def test_controller_uses_the_physical_50mhz_input(self) -> None:
+        top = DDR3_TOP.read_text(encoding="utf-8")
+        controller = top.split("DDR3_Memory_Interface_Top ddr3 (", 1)[1]
+        controller = controller.split(");", 1)[0]
+        self.assertIn(".clk(sys_clk)", controller)
+
+    def test_constraints_describe_the_physical_50mhz_input(self) -> None:
+        constraints = DDR3_SDC.read_text(encoding="utf-8")
+        self.assertIn(
+            "create_clock -name sys_clk -period 20.000 [get_ports {sys_clk}]",
+            constraints,
+        )
+        self.assertIn(
+            "create_clock -name memory_clock -period 2.500 [get_nets {memory_clock}]",
+            constraints,
+        )
+
+    def test_generated_wrapper_output_and_clock_gate(self) -> None:
         testbench = r"""
 `timescale 1ns/1ps
 
-module PLL #(
-    parameter FCLKIN = "100",
-    parameter IDIV_SEL = 1,
-    parameter FBDIV_SEL = 1,
-    parameter ODIV0_SEL = 8,
-    parameter ODIV1_SEL = 8,
-    parameter ODIV2_SEL = 8,
-    parameter ODIV3_SEL = 8,
-    parameter ODIV4_SEL = 8,
-    parameter ODIV5_SEL = 8,
-    parameter ODIV6_SEL = 8,
-    parameter MDIV_SEL = 8,
-    parameter MDIV_FRAC_SEL = 0,
-    parameter ODIV0_FRAC_SEL = 0,
-    parameter CLKOUT0_EN = "TRUE",
-    parameter CLKOUT1_EN = "FALSE",
-    parameter CLKOUT2_EN = "FALSE",
-    parameter CLKOUT3_EN = "FALSE",
-    parameter CLKOUT4_EN = "FALSE",
-    parameter CLKOUT5_EN = "FALSE",
-    parameter CLKOUT6_EN = "FALSE",
-    parameter CLKFB_SEL = "INTERNAL"
-) (
-    output wire CLKOUT0, CLKOUT1, CLKOUT2, CLKOUT3,
-    output wire CLKOUT4, CLKOUT5, CLKOUT6, CLKFBOUT, LOCK,
-    input wire CLKIN, CLKFB, RESET, PLLPWD, RESET_I, RESET_O,
-    input wire [5:0] FBDSEL, IDSEL, ICPSEL,
-    input wire [6:0] MDSEL, ODSEL0, ODSEL1, ODSEL2, ODSEL3,
-    input wire [6:0] ODSEL4, ODSEL5, ODSEL6, SSCMDSEL,
-    input wire [2:0] MDSEL_FRAC, ODSEL0_FRAC, LPFRES,
-    input wire [2:0] PSSEL, SSCMDSEL_FRAC,
-    input wire [3:0] DT0, DT1, DT2, DT3,
-    input wire [1:0] LPFCAP,
-    input wire PSDIR, PSPULSE, ENCLK0, ENCLK1, ENCLK2,
-    input wire ENCLK3, ENCLK4, ENCLK5, ENCLK6, SSCPOL, SSCON
+module Gowin_PLL (
+    input  wire clkin,
+    input  wire init_clk,
+    input  wire enclk0,
+    input  wire enclk1,
+    input  wire enclk2,
+    output wire clkout0,
+    output wire clkout1,
+    output wire clkout2,
+    output wire lock,
+    input  wire reset
 );
-    assign CLKOUT0 = testbench.source_clock & ENCLK0;
-    assign CLKOUT1 = testbench.source_reference_clock;
-    assign CLKOUT2 = 0;
-    assign CLKOUT3 = 0;
-    assign CLKOUT4 = 0;
-    assign CLKOUT5 = 0;
-    assign CLKOUT6 = 0;
-    assign CLKFBOUT = 0;
-    assign LOCK = testbench.source_lock;
+    assign clkout0 = 1'b0;
+    assign clkout1 = testbench.source_reference_clock & enclk1;
+    assign clkout2 = testbench.source_clock & enclk2;
+    assign lock = testbench.source_lock;
 
     initial begin
-        if (FCLKIN != "27" || IDIV_SEL != 1 || FBDIV_SEL != 1)
-            $fatal(1, "unexpected DDR3 PLL input parameters");
-        if (MDIV_SEL != 29 || MDIV_FRAC_SEL != 5 ||
-            ODIV0_SEL != 2 || ODIV0_FRAC_SEL != 0 || ODIV1_SEL != 8)
-            $fatal(1, "unexpected DDR3 PLL frequency parameters");
-        if (CLKOUT0_EN != "TRUE" || CLKOUT1_EN != "TRUE" ||
-            CLKOUT2_EN != "FALSE" || CLKOUT3_EN != "FALSE" ||
-            CLKOUT4_EN != "FALSE" || CLKOUT5_EN != "FALSE" ||
-            CLKOUT6_EN != "FALSE")
-            $fatal(1, "unexpected DDR3 PLL output enable");
+        #1;
+        if (clkin !== testbench.clock_in ||
+            init_clk !== testbench.clock_in ||
+            !enclk0 || !enclk1 || reset)
+            $fatal(1, "generated DDR3 PLL wrapper contract was wrong");
     end
 endmodule
 

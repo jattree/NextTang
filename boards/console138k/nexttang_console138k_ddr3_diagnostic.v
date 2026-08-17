@@ -107,7 +107,7 @@ module nexttang_console138k_ddr3_diagnostic (
         .locked(memory_pll_locked)
     );
 
-    always @(posedge memory_reference_clock or negedge memory_pll_locked) begin
+    always @(posedge sys_clk or negedge memory_pll_locked) begin
         if (!memory_pll_locked)
             controller_reset_shift <= 0;
         else
@@ -139,7 +139,7 @@ module nexttang_console138k_ddr3_diagnostic (
     );
 
     DDR3_Memory_Interface_Top ddr3 (
-        .clk(memory_reference_clock),
+        .clk(sys_clk),
         .pll_stop(controller_clock_enable),
         .memory_clk(memory_clock),
         .pll_lock(memory_pll_locked),

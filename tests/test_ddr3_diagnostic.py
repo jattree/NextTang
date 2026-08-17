@@ -36,6 +36,8 @@ module testbench;
     integer cycles = 0;
     integer writes = 0;
     integer reads = 0;
+    integer delayed_write_countdown = 0;
+    reg [255:0] delayed_write_data = 0;
 
     always #5 clock = ~clock;
 
@@ -50,7 +52,7 @@ module testbench;
                 29'h001fffc00: address_index = 4;
                 29'h02000000: address_index = 5;
                 29'h0e000000: address_index = 6;
-                29'h0ffffff8: address_index = 7;
+                29'h00000800: address_index = 7;
                 default: begin
                     $fatal(1, "unexpected diagnostic address %h", value);
                     address_index = 0;
@@ -61,7 +63,8 @@ module testbench;
 
     nexttang_ddr3_diagnostic #(
         .CALIBRATION_TIMEOUT_CYCLES(8),
-        .TRANSACTION_TIMEOUT_CYCLES(12)
+        .TRANSACTION_TIMEOUT_CYCLES(12),
+        .WRITE_DRAIN_CYCLES(96)
     ) dut (
         .clock(clock), .reset(reset),
         .calibration_complete(calibration_complete),
@@ -85,14 +88,26 @@ module testbench;
         write_data_ready = 0;
         read_data_valid = 0;
 
-        if ({mode} == 0 || {mode} == 1 || {mode} == 4 || {mode} == 5) begin
+        if (delayed_write_countdown > 0) begin
+            delayed_write_countdown = delayed_write_countdown - 1;
+            if (delayed_write_countdown == 0)
+                memory[7] = delayed_write_data;
+        end
+
+        if ({mode} == 0 || {mode} == 1 || {mode} == 4 ||
+            {mode} == 5 || {mode} == 6) begin
             if (command_enable && command == 3'b000 && cycles[0]) begin
                 command_ready = 1;
                 writes = writes + 1;
             end
             if (write_data_enable && !cycles[0]) begin
                 write_data_ready = 1;
-                memory[address_index(address)] = write_data;
+                if ({mode} == 6 && address_index(address) == 7) begin
+                    delayed_write_data = write_data;
+                    delayed_write_countdown = 80;
+                end else begin
+                    memory[address_index(address)] = write_data;
+                end
             end
             if (command_enable && command == 3'b001) begin
                 command_ready = 1;
@@ -117,6 +132,7 @@ module testbench;
     end
 
     initial begin
+        memory[7] = 0;
         repeat (2) @(posedge clock);
         reset = 0;
         if ({mode} != 2) begin
@@ -144,6 +160,9 @@ module testbench;
                 if ({mode} == 5 &&
                     (status != 3 || writes != 8 || reads != 8))
                     $fatal(1, "same-cycle read path did not pass");
+                if ({mode} == 6 &&
+                    (status != 3 || writes != 8 || reads != 8))
+                    $fatal(1, "accepted write was read before it became visible");
                 $display("DDR3_DIAGNOSTIC_PASS mode={mode} status=%0d", status);
                 $finish;
             end
@@ -192,7 +211,7 @@ endmodule
 
 class Ddr3DiagnosticTest(unittest.TestCase):
     def test_bounded_pass_and_failure_paths(self) -> None:
-        for mode in range(6):
+        for mode in range(7):
             with self.subTest(mode=mode):
                 self.assertIn("DDR3_DIAGNOSTIC_PASS", run_testbench(mode))
 

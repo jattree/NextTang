@@ -3,8 +3,9 @@
 
 `default_nettype none
 
-// Generate 399.9375 MHz from the board's 27 MHz oscillator. The DDR3 block is
-// configured for nominal 400 MHz; the resulting error is -156.25 ppm.
+// Portable adapter around the Gowin-generated DDR3 PLL wrapper. Gowin_PLL,
+// its PLL_INIT sequencer and the primitive configuration are generated locally
+// with the vendor tool and deliberately remain outside Git.
 module nexttang_console138k_ddr3_pll (
     input  wire clock_in,
     input  wire clock_enable,
@@ -12,87 +13,20 @@ module nexttang_console138k_ddr3_pll (
     output wire reference_clock,
     output wire locked
 );
-    wire ground = 1'b0;
-    wire power = 1'b1;
-    wire unused_clock_two;
-    wire unused_clock_three;
-    wire unused_clock_four;
-    wire unused_clock_five;
-    wire unused_clock_six;
-    wire unused_feedback;
+    wire unused_clock;
 
-    PLL pll (
-        .LOCK(locked),
-        .CLKOUT0(memory_clock),
-        .CLKOUT1(reference_clock),
-        .CLKOUT2(unused_clock_two),
-        .CLKOUT3(unused_clock_three),
-        .CLKOUT4(unused_clock_four),
-        .CLKOUT5(unused_clock_five),
-        .CLKOUT6(unused_clock_six),
-        .CLKFBOUT(unused_feedback),
-        .CLKIN(clock_in),
-        .CLKFB(ground),
-        .RESET(ground),
-        .PLLPWD(ground),
-        .RESET_I(ground),
-        .RESET_O(ground),
-        .FBDSEL(6'b0),
-        .IDSEL(6'b0),
-        .MDSEL(7'b0),
-        .MDSEL_FRAC(3'b0),
-        .ODSEL0(7'b0),
-        .ODSEL0_FRAC(3'b0),
-        .ODSEL1(7'b0),
-        .ODSEL2(7'b0),
-        .ODSEL3(7'b0),
-        .ODSEL4(7'b0),
-        .ODSEL5(7'b0),
-        .ODSEL6(7'b0),
-        .DT0(4'b0),
-        .DT1(4'b0),
-        .DT2(4'b0),
-        .DT3(4'b0),
-        .ICPSEL(6'b0),
-        .LPFRES(3'b0),
-        .LPFCAP(2'b0),
-        .PSSEL(3'b0),
-        .PSDIR(ground),
-        .PSPULSE(ground),
-        .ENCLK0(clock_enable),
-        .ENCLK1(power),
-        .ENCLK2(power),
-        .ENCLK3(power),
-        .ENCLK4(power),
-        .ENCLK5(power),
-        .ENCLK6(power),
-        .SSCPOL(ground),
-        .SSCON(ground),
-        .SSCMDSEL(7'b0),
-        .SSCMDSEL_FRAC(3'b0)
+    Gowin_PLL reference_pll (
+        .clkin(clock_in),
+        .init_clk(clock_in),
+        .enclk0(1'b1),
+        .enclk1(1'b1),
+        .enclk2(clock_enable),
+        .clkout0(unused_clock),
+        .clkout1(reference_clock),
+        .clkout2(memory_clock),
+        .lock(locked),
+        .reset(1'b0)
     );
-
-    defparam pll.FCLKIN = "27";
-    defparam pll.IDIV_SEL = 1;
-    defparam pll.FBDIV_SEL = 1;
-    defparam pll.ODIV0_SEL = 2;
-    defparam pll.ODIV1_SEL = 8;
-    defparam pll.ODIV2_SEL = 8;
-    defparam pll.ODIV3_SEL = 8;
-    defparam pll.ODIV4_SEL = 8;
-    defparam pll.ODIV5_SEL = 8;
-    defparam pll.ODIV6_SEL = 8;
-    defparam pll.MDIV_SEL = 29;
-    defparam pll.MDIV_FRAC_SEL = 5;
-    defparam pll.ODIV0_FRAC_SEL = 0;
-    defparam pll.CLKOUT0_EN = "TRUE";
-    defparam pll.CLKOUT1_EN = "TRUE";
-    defparam pll.CLKOUT2_EN = "FALSE";
-    defparam pll.CLKOUT3_EN = "FALSE";
-    defparam pll.CLKOUT4_EN = "FALSE";
-    defparam pll.CLKOUT5_EN = "FALSE";
-    defparam pll.CLKOUT6_EN = "FALSE";
-    defparam pll.CLKFB_SEL = "INTERNAL";
 endmodule
 
 `default_nettype wire

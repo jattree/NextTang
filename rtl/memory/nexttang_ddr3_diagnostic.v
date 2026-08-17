@@ -4,10 +4,11 @@
 `default_nettype none
 
 // Bounded destructive read/write diagnostic for an otherwise unused DDR3.
-// It touches one aligned 32-byte beat at eight address-boundary probes.
+// It touches one aligned 32-byte beat at eight sparse address probes.
 module nexttang_ddr3_diagnostic #(
     parameter integer CALIBRATION_TIMEOUT_CYCLES = 270000000,
-    parameter integer TRANSACTION_TIMEOUT_CYCLES = 25000000
+    parameter integer TRANSACTION_TIMEOUT_CYCLES = 25000000,
+    parameter integer WRITE_DRAIN_CYCLES = 1024
 ) (
     input  wire         clock,
     input  wire         reset,
@@ -40,6 +41,7 @@ module nexttang_ddr3_diagnostic #(
     localparam [2:0] STATE_READ_COMMAND = 3'd2;
     localparam [2:0] STATE_READ_RESPONSE = 3'd3;
     localparam [2:0] STATE_DONE = 3'd4;
+    localparam [2:0] STATE_WRITE_DRAIN = 3'd5;
 
     reg [2:0] state;
     reg [2:0] test_index;
@@ -68,7 +70,7 @@ module nexttang_ddr3_diagnostic #(
                 3'd4: test_address = 29'h001fffc00;
                 3'd5: test_address = 29'h02000000;
                 3'd6: test_address = 29'h0e000000;
-                default: test_address = 29'h0ffffff8;
+                default: test_address = 29'h00000800;
             endcase
         end
     endfunction
@@ -139,13 +141,12 @@ module nexttang_ddr3_diagnostic #(
                     end else if (write_complete) begin
                         timeout_counter <= 0;
                         if (test_index == 3'd7) begin
-                            state <= STATE_READ_COMMAND;
+                            state <= STATE_WRITE_DRAIN;
                             test_index <= 0;
                             current_address <= test_address(0);
                             current_pattern <= test_pattern(0);
                             write_command_pending <= 1'b0;
                             write_data_pending <= 1'b0;
-                            status <= STATUS_READING;
                         end else begin
                             test_index <= test_index + 1'b1;
                             current_address <= test_address(test_index + 1'b1);
@@ -163,6 +164,20 @@ module nexttang_ddr3_diagnostic #(
                             write_command_pending <= 1'b0;
                         if (write_data_accepted)
                             write_data_pending <= 1'b0;
+                    end
+                end
+
+                STATE_WRITE_DRAIN: begin
+                    if (!calibration_complete) begin
+                        state <= STATE_DONE;
+                        status <= STATUS_CALIBRATION_LOST;
+                    end else if (timeout_counter >=
+                                 WRITE_DRAIN_CYCLES - 1) begin
+                        state <= STATE_READ_COMMAND;
+                        timeout_counter <= 0;
+                        status <= STATUS_READING;
+                    end else begin
+                        timeout_counter <= timeout_counter + 1'b1;
                     end
                 end
 
