@@ -31,7 +31,7 @@ jobs:
       - name: Build sjasmplus
         run: |
           version=$(grep -oP '(?<=^NEXTTANG_SJASMPLUS_VERSION=).*' toolchain/versions.env)
-          git clone --branch "v$version" --depth 1 \
+          git clone --branch "v$version" --depth 1 --recurse-submodules \
             https://github.com/z00m128/sjasmplus.git /tmp/sjasmplus
           make -C /tmp/sjasmplus -j"$(nproc)"
           sudo install -m 0755 /tmp/sjasmplus/sjasmplus /usr/local/bin/sjasmplus
