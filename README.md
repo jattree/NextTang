@@ -32,7 +32,12 @@
 
 The image loads into volatile FPGA SRAM through the onboard debugger and
 generates DVI-compatible 1280 x 720/60 HDMI colour bars with a moving NextTang
-logo. The exact C-device build reports zero setup and hold violations. Source,
+logo, above three diagnostic bands reporting the Dock's 27 MHz reference, the
+50 MHz board clock and the generated refresh rate. The pixel clock is
+74.375 MHz, 0.168 per cent above the standard 74.25 MHz, because exact 74.25 MHz
+is unreachable from this board's 50 MHz input; the monitor reports the mode as
+1280x720 60Hz. The exact C-device build reports zero setup and hold
+violations. Source,
 constraints and behavioural tests are under [`boards/console138k/`](boards/console138k/),
 [`rtl/smoke/`](rtl/smoke/) and
 [`tests/test_console138k_smoke.py`](tests/test_console138k_smoke.py). Generated
@@ -44,7 +49,7 @@ factory TangCore baseline:
 | Area | Current evidence |
 | --- | --- |
 | JTAG and programming | Hardware-verified 6 MHz scan and volatile SRAM loading; Gowin `GW5AST-138`, IDCODE `0x1081b` |
-| Clocks | Video-clock path hardware-verified indirectly through stable 720p60 output; standalone 28, 14, 7 and 3.5 MHz machine-clock logic is simulation- and exact-device build-verified, but not connected to the core or hardware-verified |
+| Clocks | Video-clock path hardware-verified: 74.375 MHz pixel clock from the 50 MHz board clock, refresh measured in-design over eight consecutive loads and reported by the monitor as 1280x720 60Hz. The Dock's 27 MHz reference on V10 is present but unusable as a video clock, since that pin has no clock-capable routing. Standalone 28, 14, 7 and 3.5 MHz machine-clock logic is simulation- and exact-device build-verified, but not connected to the core or hardware-verified |
 | UART | Behaviourally tested and included in the smoke image, but the attempted hardware read did not decode correctly |
 | HDMI | Hardware-verified for 720p60 video, colour, logo rendering and frame-driven motion; no HDMI audio |
 | DDR3 | Hardware-verified on the 30354 1 GB Hynix SOM: calibration, paired writes, read-back, every usable address-line position, the 512 MB boundary and the final aligned 32-byte beat pass with distinct retained patterns. The Console input is 50 MHz and the working path retains Gowin's generated dynamic PLL and `PLL_INIT`. Exhaustive every-cell and sustained-load testing remain open ([resolved issue #5](https://github.com/jattree/NextTang/issues/5)) |
@@ -151,6 +156,19 @@ explicit completion evidence.
 The repository has deterministic quality checks and fail-closed synthesis entry
 points. The Console 138K has a vendor `release` driver for the verified smoke
 image. This driver does not build the planned machine core.
+
+`make check` drives three external tools directly and fails without them, on
+either toolchain: `iverilog` for the Verilog testbenches, `ghdl` for the VHDL
+testbenches and `sjasmplus` for the diagnostic boot ROM. `make doctor` names any
+that are missing. On Debian or Ubuntu:
+
+```bash
+sudo apt-get install iverilog ghdl
+```
+
+`sjasmplus` is not packaged; build it from the tag pinned in
+[`toolchain/versions.env`](toolchain/versions.env), as
+[`.github/workflows/quality.yml`](.github/workflows/quality.yml) does.
 
 ```bash
 cp .env.example .env.local
