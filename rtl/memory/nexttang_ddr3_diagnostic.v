@@ -26,7 +26,9 @@ module nexttang_ddr3_diagnostic #(
     input  wire [255:0] controller_read_data,
     input  wire         controller_read_data_valid,
     output wire         controller_burst,
-    output reg  [2:0]   status
+    output reg  [2:0]   status,
+    output reg  [4:0]   failure_expected_index,
+    output reg  [4:0]   failure_observed_index
 );
     localparam [2:0] STATUS_CALIBRATING = 3'd0;
     localparam [2:0] STATUS_WRITING = 3'd1;
@@ -116,6 +118,8 @@ module nexttang_ddr3_diagnostic #(
             current_address <= 0;
             current_pattern <= 0;
             status <= STATUS_CALIBRATING;
+            failure_expected_index <= 0;
+            failure_observed_index <= 0;
         end else begin
             case (state)
                 STATE_WAIT_CALIBRATION: begin
@@ -194,6 +198,9 @@ module nexttang_ddr3_diagnostic #(
                             if (controller_read_data != current_pattern) begin
                                 state <= STATE_DONE;
                                 status <= STATUS_DATA_ERROR;
+                                failure_expected_index <= test_index;
+                                failure_observed_index <=
+                                    controller_read_data[228:224];
                             end else if (test_index == LAST_TEST_INDEX) begin
                                 state <= STATE_DONE;
                                 status <= STATUS_PASS;
@@ -227,6 +234,9 @@ module nexttang_ddr3_diagnostic #(
                         if (controller_read_data != current_pattern) begin
                             state <= STATE_DONE;
                             status <= STATUS_DATA_ERROR;
+                            failure_expected_index <= test_index;
+                            failure_observed_index <=
+                                controller_read_data[228:224];
                         end else if (test_index == LAST_TEST_INDEX) begin
                             state <= STATE_DONE;
                             status <= STATUS_PASS;

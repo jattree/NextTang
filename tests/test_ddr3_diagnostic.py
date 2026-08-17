@@ -30,6 +30,8 @@ module testbench;
     reg read_data_valid = 0;
     wire burst;
     wire [2:0] status;
+    wire [4:0] failure_expected_index;
+    wire [4:0] failure_observed_index;
     reg [255:0] memory [0:26];
     reg pending_read = 0;
     reg [4:0] pending_index = 0;
@@ -80,7 +82,9 @@ module testbench;
         .controller_write_data_mask(write_data_mask),
         .controller_read_data(read_data),
         .controller_read_data_valid(read_data_valid),
-        .controller_burst(burst), .status(status)
+        .controller_burst(burst), .status(status),
+        .failure_expected_index(failure_expected_index),
+        .failure_observed_index(failure_observed_index)
     );
 
     always @(negedge clock) begin
@@ -171,6 +175,11 @@ module testbench;
                     $fatal(1, "accepted write was read before it became visible");
                 if ({mode} == 7 && status != 4)
                     $fatal(1, "simulated 512 MB alias was not detected");
+                if ({mode} == 7 &&
+                    (failure_expected_index != 0 ||
+                     failure_observed_index != 25))
+                    $fatal(1, "alias detail was expected 0, observed %0d/%0d",
+                           failure_expected_index, failure_observed_index);
                 $display("DDR3_DIAGNOSTIC_PASS mode={mode} status=%0d", status);
                 $finish;
             end

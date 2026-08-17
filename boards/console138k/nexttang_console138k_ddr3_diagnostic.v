@@ -59,6 +59,8 @@ module nexttang_console138k_ddr3_diagnostic (
     wire refresh_acknowledge;
     wire ddr_reset;
     wire [2:0] diagnostic_status;
+    wire [4:0] failure_expected_index;
+    wire [4:0] failure_observed_index;
 
     wire hsync;
     wire vsync;
@@ -67,13 +69,33 @@ module nexttang_console138k_ddr3_diagnostic (
     wire [9:0] vertical_position;
     reg [2:0] status_metastability = 0;
     reg [2:0] status_pixel = 0;
+    reg [4:0] failure_expected_metastability = 0;
+    reg [4:0] failure_expected_pixel = 0;
+    reg [4:0] failure_observed_metastability = 0;
+    reg [4:0] failure_observed_pixel = 0;
     wire [23:0] status_colour;
     wire status_border = horizontal_position < 32 ||
                          horizontal_position >= 1248 ||
                          vertical_position < 32 ||
                          vertical_position >= 688;
-    wire [23:0] video_colour = status_border
-        ? 24'hffffff : status_colour;
+    wire failure_detail_area = status_pixel == 3'd4 &&
+                               horizontal_position >= 320 &&
+                               horizontal_position < 960 &&
+                               ((vertical_position >= 176 &&
+                                 vertical_position < 304) ||
+                                (vertical_position >= 416 &&
+                                 vertical_position < 544));
+    wire [2:0] failure_detail_bit =
+        (horizontal_position - 320) >> 7;
+    wire failure_detail_value = vertical_position < 360
+        ? failure_expected_pixel[failure_detail_bit]
+        : failure_observed_pixel[failure_detail_bit];
+    wire [23:0] failure_detail_colour = failure_detail_value
+        ? (vertical_position < 360 ? 24'hffff00 : 24'h00ffff)
+        : 24'h000000;
+    wire [23:0] video_colour = status_border ? 24'hffffff
+        : failure_detail_area ? failure_detail_colour
+        : status_colour;
     wire [9:0] red_symbol;
     wire [9:0] green_symbol;
     wire [9:0] blue_symbol;
@@ -135,7 +157,9 @@ module nexttang_console138k_ddr3_diagnostic (
         .controller_read_data(controller_read_data),
         .controller_read_data_valid(controller_read_data_valid),
         .controller_burst(controller_burst),
-        .status(diagnostic_status)
+        .status(diagnostic_status),
+        .failure_expected_index(failure_expected_index),
+        .failure_observed_index(failure_observed_index)
     );
 
     DDR3_Memory_Interface_Top ddr3 (
@@ -195,10 +219,18 @@ module nexttang_console138k_ddr3_diagnostic (
         if (pixel_reset) begin
             status_metastability <= 0;
             status_pixel <= 0;
+            failure_expected_metastability <= 0;
+            failure_expected_pixel <= 0;
+            failure_observed_metastability <= 0;
+            failure_observed_pixel <= 0;
         end else begin
             status_metastability <= controller_reset_n
                 ? diagnostic_status : 3'd0;
             status_pixel <= status_metastability;
+            failure_expected_metastability <= failure_expected_index;
+            failure_expected_pixel <= failure_expected_metastability;
+            failure_observed_metastability <= failure_observed_index;
+            failure_observed_pixel <= failure_observed_metastability;
         end
     end
 
