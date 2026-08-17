@@ -24,10 +24,11 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: Install Icarus Verilog
+      - name: Install the simulators the tests invoke
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends iverilog
+          sudo apt-get install -y --no-install-recommends iverilog ghdl
           iverilog -V | head -1
+          ghdl --version | head -1
       - name: Run deterministic quality gate
         run: make ci
