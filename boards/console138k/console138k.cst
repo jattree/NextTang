@@ -2,6 +2,11 @@
 IO_LOC "sys_clk" V22;
 IO_PORT "sys_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=OFF;
 
+// USR_CLK_IN, the MS5351 CKO2 output on the Dock baseboard.  Sipeed derive
+// 720p60 from this rather than from the SOM's 50 MHz oscillator.
+IO_LOC "usr_clk" V10;
+IO_PORT "usr_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=OFF;
+
 IO_LOC "UART_TXD" U15;
 IO_PORT "UART_TXD" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
 

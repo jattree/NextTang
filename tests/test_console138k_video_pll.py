@@ -63,17 +63,43 @@ module PLL #(
     assign CLKFBOUT = 0;
     assign LOCK = testbench.source_lock;
 
+    // Assert the requirement, not the numbers: whatever dividers are chosen,
+    // the PFD and VCO must be legal for this device and the pixel clock that
+    // comes out after CLKDIV / 5 must be close enough to 74.25 MHz for 720p60.
+    real input_mhz, pfd_mhz, vco_mhz, serial_mhz, pixel_mhz, error_percent;
+
     initial begin
-        if (FCLKIN != "27" || IDIV_SEL != 1 || FBDIV_SEL != 1)
-            $fatal(1, "unexpected video PLL input parameters");
-        if (MDIV_SEL != 27 || MDIV_FRAC_SEL != 4 ||
-            ODIV0_SEL != 2 || ODIV0_FRAC_SEL != 0)
-            $fatal(1, "unexpected video PLL frequency parameters");
+        if (FCLKIN == "50") input_mhz = 50.0;
+        else if (FCLKIN == "27") input_mhz = 27.0;
+        else $fatal(1, "video PLL input %s is not a clock this board has", FCLKIN);
+
+        if (FBDIV_SEL != 1)
+            $fatal(1, "feedback divider must stay at 1 for internal feedback");
+
+        pfd_mhz = input_mhz / IDIV_SEL;
+        vco_mhz = pfd_mhz * (MDIV_SEL + MDIV_FRAC_SEL / 8.0);
+        serial_mhz = vco_mhz / (ODIV0_SEL + ODIV0_FRAC_SEL / 8.0);
+        pixel_mhz = serial_mhz / 5.0;
+
+        if (pfd_mhz < 19.0 || pfd_mhz > 81.25)
+            $fatal(1, "PFD %f MHz is outside the 19 to 81.25 MHz range", pfd_mhz);
+        if (vco_mhz < 650.0 || vco_mhz > 1300.0)
+            $fatal(1, "VCO %f MHz is outside the 650 to 1300 MHz range", vco_mhz);
+
+        error_percent = ((pixel_mhz - 74.25) / 74.25) * 100.0;
+        if (error_percent < 0.0) error_percent = -error_percent;
+        if (error_percent > 1.0)
+            $fatal(1, "pixel clock %f MHz is %f%% from 74.25 MHz, too far for 720p60",
+                   pixel_mhz, error_percent);
+
         if (CLKOUT0_EN != "TRUE" || CLKOUT1_EN != "FALSE" ||
             CLKOUT2_EN != "FALSE" || CLKOUT3_EN != "FALSE" ||
             CLKOUT4_EN != "FALSE" || CLKOUT5_EN != "FALSE" ||
             CLKOUT6_EN != "FALSE")
             $fatal(1, "unexpected video PLL output enable");
+
+        $display("VIDEO_PLL pfd=%0.3f vco=%0.3f serial=%0.3f pixel=%0.4f err=%0.3f%%",
+                 pfd_mhz, vco_mhz, serial_mhz, pixel_mhz, error_percent);
     end
 endmodule
 

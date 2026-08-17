@@ -67,6 +67,7 @@ source_files=(
     "$repo_root/rtl/smoke/nexttang_logo_rom.v"
     "$repo_root/rtl/smoke/nexttang_video_pattern.v"
     "$repo_root/rtl/smoke/nexttang_uart_heartbeat.v"
+    "$repo_root/rtl/smoke/nexttang_clock_probe.v"
     "$repo_root/rtl/video/nexttang_tmds_encoder.v"
     "$repo_root/boards/console138k/nexttang_console138k_pll.v"
     "$repo_root/boards/console138k/nexttang_console138k_smoke.v"
@@ -83,6 +84,7 @@ set_option -output_base_name nexttang_console138k_smoke
 add_file {$repo_root/rtl/smoke/nexttang_logo_rom.v}
 add_file {$repo_root/rtl/smoke/nexttang_video_pattern.v}
 add_file {$repo_root/rtl/smoke/nexttang_uart_heartbeat.v}
+add_file {$repo_root/rtl/smoke/nexttang_clock_probe.v}
 add_file {$repo_root/rtl/video/nexttang_tmds_encoder.v}
 add_file {$repo_root/boards/console138k/nexttang_console138k_pll.v}
 add_file {$repo_root/boards/console138k/nexttang_console138k_smoke.v}

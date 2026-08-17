@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 NextTang contributors
 //
-// 27 MHz to 371.25 MHz, followed by CLKDIV / 5 in the board top level.
-// The numeric settings are independently expressed from the TangCore NESTang
-// Console 138K configuration recorded in llmwiki/raw/.
+// 50 MHz to 371.875 MHz, followed by CLKDIV / 5 in the board top level, giving
+// a 74.375 MHz pixel clock and 60.10 Hz at the 1650x750 720p raster.
+//
+// Exact 74.25 MHz is unreachable from this board's 50 MHz input: MDIV moves in
+// eighths, so the VCO can only land on multiples of 6.25 MHz, and 742.5 MHz is
+// not one of them.  The MS5351's 27 MHz on V10 would divide exactly, but that
+// pin has no clock-capable routing on this device and a PLL driven from it
+// produces no usable display.  0.17 per cent high is the closest this input
+// reaches, and is well inside what the board's own HDMI examples rely on.
 
 `default_nettype none
 
@@ -73,7 +79,7 @@ module nexttang_console138k_pll (
         .SSCMDSEL_FRAC(3'b0)
     );
 
-    defparam pll.FCLKIN = "27";
+    defparam pll.FCLKIN = "50";
     defparam pll.IDIV_SEL = 1;
     defparam pll.FBDIV_SEL = 1;
     defparam pll.ODIV0_SEL = 2;
@@ -83,8 +89,8 @@ module nexttang_console138k_pll (
     defparam pll.ODIV4_SEL = 8;
     defparam pll.ODIV5_SEL = 8;
     defparam pll.ODIV6_SEL = 8;
-    defparam pll.MDIV_SEL = 27;
-    defparam pll.MDIV_FRAC_SEL = 4;
+    defparam pll.MDIV_SEL = 14;
+    defparam pll.MDIV_FRAC_SEL = 7;
     defparam pll.ODIV0_FRAC_SEL = 0;
     defparam pll.CLKOUT0_EN = "TRUE";
     defparam pll.CLKOUT1_EN = "FALSE";
