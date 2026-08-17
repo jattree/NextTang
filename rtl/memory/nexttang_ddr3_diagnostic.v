@@ -55,13 +55,9 @@ module nexttang_ddr3_diagnostic #(
     reg [28:0] current_address;
     reg [255:0] current_pattern;
 
-    wire write_command_accepted =
-        write_command_pending && controller_command_ready;
-    wire write_data_accepted =
-        write_data_pending && controller_write_data_ready;
-    wire write_complete =
-        (!write_command_pending || write_command_accepted) &&
-        (!write_data_pending || write_data_accepted);
+    wire write_complete = write_command_pending && write_data_pending &&
+                          controller_command_ready &&
+                          controller_write_data_ready;
 
     function [28:0] test_address;
         input [4:0] index;
@@ -98,12 +94,12 @@ module nexttang_ddr3_diagnostic #(
 
     assign controller_command = state == STATE_WRITE ? 3'b000 : 3'b001;
     assign controller_command_enable =
-        (state == STATE_WRITE && write_command_pending) ||
+        (state == STATE_WRITE && write_complete) ||
         state == STATE_READ_COMMAND;
     assign controller_address = current_address;
     assign controller_write_data = current_pattern;
     assign controller_write_data_enable =
-        state == STATE_WRITE && write_data_pending;
+        state == STATE_WRITE && write_complete;
     assign controller_write_data_end = 1'b1;
     assign controller_write_data_mask = 32'b0;
     assign controller_burst = 1'b0;
@@ -167,10 +163,6 @@ module nexttang_ddr3_diagnostic #(
                         status <= STATUS_TRANSACTION_TIMEOUT;
                     end else begin
                         timeout_counter <= timeout_counter + 1'b1;
-                        if (write_command_accepted)
-                            write_command_pending <= 1'b0;
-                        if (write_data_accepted)
-                            write_data_pending <= 1'b0;
                     end
                 end
 

@@ -100,13 +100,24 @@ module testbench;
         end
 
         if ({mode} == 0 || {mode} == 1 || {mode} == 4 ||
-            {mode} == 5 || {mode} == 6 || {mode} == 7) begin
-            if (command_enable && command == 3'b000 && cycles[0]) begin
-                command_ready = 1;
-                writes = writes + 1;
+            {mode} == 5 || {mode} == 6 || {mode} == 7 ||
+            {mode} == 8) begin
+            if ({mode} == 8 && cycles < 8) begin
+                command_ready = cycles[0];
+                write_data_ready = !cycles[0];
+            end else begin
+                command_ready = cycles[0];
+                write_data_ready = cycles[0];
             end
-            if (write_data_enable && !cycles[0]) begin
-                write_data_ready = 1;
+            #1;
+            if ({mode} == 8 && cycles < 8 &&
+                (command_enable || write_data_enable))
+                $fatal(1, "write command and data were not issued as a pair");
+            if (command_enable && command == 3'b000) begin
+                if (!command_ready || !write_data_ready ||
+                    !write_data_enable)
+                    $fatal(1, "incomplete write pair was accepted");
+                writes = writes + 1;
                 if ({mode} == 6 && address_index(address) == 26) begin
                     delayed_write_data = write_data;
                     delayed_write_countdown = 80;
@@ -117,8 +128,10 @@ module testbench;
                     memory[address_index(address)] = write_data;
                 end
             end
-            if (command_enable && command == 3'b001) begin
-                command_ready = 1;
+            if (write_data_enable &&
+                !(command_enable && command == 3'b000))
+                $fatal(1, "write data was issued without its command");
+            if (command_enable && command == 3'b001 && command_ready) begin
                 pending_index = ({mode} == 7 &&
                                  address == 29'h08000000)
                     ? 0 : address_index(address);
@@ -180,6 +193,9 @@ module testbench;
                      failure_observed_index != 25))
                     $fatal(1, "alias detail was expected 0, observed %0d/%0d",
                            failure_expected_index, failure_observed_index);
+                if ({mode} == 8 &&
+                    (status != 3 || writes != 27 || reads != 27))
+                    $fatal(1, "paired write path did not pass");
                 $display("DDR3_DIAGNOSTIC_PASS mode={mode} status=%0d", status);
                 $finish;
             end
@@ -228,7 +244,7 @@ endmodule
 
 class Ddr3DiagnosticTest(unittest.TestCase):
     def test_bounded_pass_and_failure_paths(self) -> None:
-        for mode in range(8):
+        for mode in range(9):
             with self.subTest(mode=mode):
                 self.assertIn("DDR3_DIAGNOSTIC_PASS", run_testbench(mode))
 
