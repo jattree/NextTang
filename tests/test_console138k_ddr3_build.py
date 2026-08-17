@@ -1,4 +1,4 @@
-"""Contract tests for the Console 138K DDR3 diagnostic build driver."""
+"""Contract tests for the Console 138K DDR3 build driver."""
 
 from pathlib import Path
 import subprocess
@@ -24,7 +24,7 @@ class Console138kDdr3BuildDriverTests(unittest.TestCase):
         result = self.run_driver("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--vendor-source ABSOLUTE_DIRECTORY", result.stdout)
-        self.assertIn("--profile diagnostic", result.stdout)
+        self.assertIn("--profile diagnostic|logo", result.stdout)
 
     def test_rejects_relative_directories_before_running_vendor_tools(self) -> None:
         result = self.run_driver(
@@ -72,6 +72,30 @@ class Console138kDdr3BuildDriverTests(unittest.TestCase):
         self.assertIn("vendor-source-sha256.txt", source)
         self.assertIn("build-manifest.txt", source)
         self.assertIn("Numbers of {analysis} Violated Endpoints", source)
+        self.assertIn("nexttang_console138k_ddr3_logo", source)
+        self.assertIn("nexttang_ddr3_logo_engine.v", source)
+
+    def test_logo_profile_reaches_vendor_source_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            vendor_source = root / "vendor"
+            output = root / "output"
+            vendor_source.mkdir()
+            output.mkdir()
+
+            result = self.run_driver(
+                "--toolchain",
+                "vendor",
+                "--profile",
+                "logo",
+                "--vendor-source",
+                str(vendor_source),
+                "--output",
+                str(output),
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("required vendor source missing", result.stderr)
 
 
 if __name__ == "__main__":

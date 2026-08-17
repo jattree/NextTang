@@ -11,7 +11,7 @@ output_dir=
 
 usage() {
     printf '%s\n' \
-        'usage: boards/console138k/build_ddr3.sh --toolchain vendor --profile diagnostic --vendor-source ABSOLUTE_DIRECTORY --output ABSOLUTE_DIRECTORY'
+        'usage: boards/console138k/build_ddr3.sh --toolchain vendor --profile diagnostic|logo --vendor-source ABSOLUTE_DIRECTORY --output ABSOLUTE_DIRECTORY'
 }
 
 while (($#)); do
@@ -43,11 +43,14 @@ if [[ "$toolchain" != vendor ]]; then
         "$toolchain" >&2
     exit 2
 fi
-if [[ "$profile" != diagnostic ]]; then
-    printf 'console138k DDR3 build: profile not implemented: %s\n' \
-        "$profile" >&2
-    exit 2
-fi
+case "$profile" in
+    diagnostic|logo) ;;
+    *)
+        printf 'console138k DDR3 build: profile not implemented: %s\n' \
+            "$profile" >&2
+        exit 2
+        ;;
+esac
 for directory_option in vendor_source output_dir; do
     directory_value=${!directory_option}
     if [[ "$directory_value" != /* ]]; then
@@ -81,43 +84,69 @@ for vendor_file in "${vendor_files[@]}"; do
     fi
 done
 
-project_tcl="$output_dir/nexttang_console138k_ddr3_diagnostic.tcl"
 build_log="$output_dir/vendor-build.log"
-base_name=nexttang_console138k_ddr3_diagnostic
+common_source_files=(
+    "$repo_root/rtl/smoke/nexttang_status_colour.v"
+    "$repo_root/rtl/video/nexttang_tmds_encoder.v"
+    "$repo_root/boards/console138k/nexttang_console138k_pll.v"
+    "$repo_root/boards/console138k/nexttang_console138k_ddr3_pll.v"
+    "$repo_root/boards/console138k/console138k_ddr3.cst"
+    "$repo_root/boards/console138k/console138k_ddr3.sdc"
+)
+extra_hash_files=()
+case "$profile" in
+    diagnostic)
+        base_name=nexttang_console138k_ddr3_diagnostic
+        top_module=$base_name
+        target_name=console138k-ddr3-diagnostic
+        profile_source_files=(
+            "$repo_root/rtl/video/nexttang_video_timing.v"
+            "$repo_root/rtl/memory/nexttang_ddr3_diagnostic.v"
+            "$repo_root/boards/console138k/nexttang_console138k_ddr3_diagnostic.v"
+        )
+        ;;
+    logo)
+        base_name=nexttang_console138k_ddr3_logo
+        top_module=$base_name
+        target_name=console138k-ddr3-logo
+        profile_source_files=(
+            "$repo_root/rtl/memory/nexttang_ddr3_logo_engine.v"
+            "$repo_root/rtl/video/nexttang_logo_framebuffer.v"
+            "$repo_root/rtl/video/nexttang_ddr_logo_video.v"
+            "$repo_root/boards/console138k/nexttang_console138k_ddr3_logo.v"
+        )
+        extra_hash_files=(
+            "$repo_root/rtl/smoke/nexttang_logo_128x128_rgb332.mem"
+        )
+        cp -- "$repo_root/rtl/smoke/nexttang_logo_128x128_rgb332.mem" \
+            "$output_dir/"
+        ;;
+esac
+project_tcl="$output_dir/$base_name.tcl"
 bitstream="$output_dir/impl/pnr/$base_name.fs"
 timing_report="$output_dir/impl/pnr/${base_name}_tr_content.html"
 
 repo_source_files=(
-    "$repo_root/rtl/smoke/nexttang_status_colour.v"
-    "$repo_root/rtl/video/nexttang_tmds_encoder.v"
-    "$repo_root/rtl/video/nexttang_video_timing.v"
-    "$repo_root/rtl/memory/nexttang_ddr3_diagnostic.v"
-    "$repo_root/boards/console138k/nexttang_console138k_pll.v"
-    "$repo_root/boards/console138k/nexttang_console138k_ddr3_pll.v"
-    "$repo_root/boards/console138k/nexttang_console138k_ddr3_diagnostic.v"
-    "$repo_root/boards/console138k/console138k_ddr3.cst"
-    "$repo_root/boards/console138k/console138k_ddr3.sdc"
+    "${common_source_files[@]}"
+    "${profile_source_files[@]}"
+    "${extra_hash_files[@]}"
 )
 
-cat >"$project_tcl" <<EOF
-set_device -device_version C GW5AST-LV138PG484AC1/I0
-set_option -top_module nexttang_console138k_ddr3_diagnostic
-set_option -output_base_name $base_name
-add_file {$vendor_source/ddr3_memory_interface/ddr3_memory_interface.v}
-add_file {$vendor_source/gowin_pll/gowin_pll.v}
-add_file {$vendor_source/gowin_pll/gowin_pll_mod.v}
-add_file {$vendor_source/pll_init.v}
-add_file {$repo_root/rtl/smoke/nexttang_status_colour.v}
-add_file {$repo_root/rtl/video/nexttang_tmds_encoder.v}
-add_file {$repo_root/rtl/video/nexttang_video_timing.v}
-add_file {$repo_root/rtl/memory/nexttang_ddr3_diagnostic.v}
-add_file {$repo_root/boards/console138k/nexttang_console138k_pll.v}
-add_file {$repo_root/boards/console138k/nexttang_console138k_ddr3_pll.v}
-add_file {$repo_root/boards/console138k/nexttang_console138k_ddr3_diagnostic.v}
-add_file {$repo_root/boards/console138k/console138k_ddr3.cst}
-add_file {$repo_root/boards/console138k/console138k_ddr3.sdc}
-run all
-EOF
+{
+    printf '%s\n' \
+        'set_device -device_version C GW5AST-LV138PG484AC1/I0' \
+        "set_option -top_module $top_module" \
+        "set_option -output_base_name $base_name" \
+        "add_file {$vendor_source/ddr3_memory_interface/ddr3_memory_interface.v}" \
+        "add_file {$vendor_source/gowin_pll/gowin_pll.v}" \
+        "add_file {$vendor_source/gowin_pll/gowin_pll_mod.v}" \
+        "add_file {$vendor_source/pll_init.v}"
+    for source_file in "${common_source_files[@]}" \
+                       "${profile_source_files[@]}"; do
+        printf 'add_file {%s}\n' "$source_file"
+    done
+    printf '%s\n' 'run all'
+} >"$project_tcl"
 
 (
     cd -- "$output_dir"
@@ -195,7 +224,7 @@ if [[ -n $(git -C "$repo_root" status --porcelain -- \
 fi
 
 {
-    printf 'target=console138k-ddr3-diagnostic\n'
+    printf 'target=%s\n' "$target_name"
     printf 'device=GW5AST-LV138PG484AC1/I0\n'
     printf 'device_version=C\n'
     printf 'profile=%s\n' "$profile"
