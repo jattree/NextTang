@@ -47,7 +47,7 @@ factory TangCore baseline:
 | Clocks | Video-clock path hardware-verified indirectly through stable 720p60 output; standalone 28, 14, 7 and 3.5 MHz machine-clock logic is simulation- and exact-device build-verified, but not connected to the core or hardware-verified |
 | UART | Behaviourally tested and included in the smoke image, but the attempted hardware read did not decode correctly |
 | HDMI | Hardware-verified for 720p60 video, colour, logo rendering and frame-driven motion; no HDMI audio |
-| DDR3 | Hardware-verified on the 30354 1 GB Hynix SOM: the supplied B/C reference images, a local exact-C reference build and the NextTang diagnostic complete calibration and bounded writes/read-back. The Console input is 50 MHz and the working path retains Gowin's generated dynamic PLL and `PLL_INIT`; full-capacity and alias testing remain unverified ([resolved issue #5](https://github.com/jattree/NextTang/issues/5)) |
+| DDR3 | Hardware-verified on the 30354 1 GB Hynix SOM: calibration, paired writes, read-back, every usable address-line position, the 512 MB boundary and the final aligned 32-byte beat pass with distinct retained patterns. The Console input is 50 MHz and the working path retains Gowin's generated dynamic PLL and `PLL_INIT`. Exhaustive every-cell and sustained-load testing remain open ([resolved issue #5](https://github.com/jattree/NextTang/issues/5)) |
 | SD | Factory TangCore reads the supplied card and loads packaged cores; no NextTang SD implementation |
 | Audio | Not brought up |
 | USB HID | The supplied controller navigates factory TangCore; no NextTang USB HID implementation |

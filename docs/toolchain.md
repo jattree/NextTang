@@ -101,8 +101,10 @@ manifest. The generated bitstream is destructive to the tested addresses and
 must not be committed.
 
 Gowin EDA V1.9.12.03 produced the hardware-verified build. The current
-diagnostic proves calibration and bounded transactions at sparse addresses; it
-does not yet prove the complete 1 GB address map or absence of aliasing.
+diagnostic proves calibration and distinct retained transactions at every
+usable 1 GiB address-line position and the final aligned beat. This rejects
+aliasing among those probes, but is not an exhaustive every-cell or sustained
+traffic test.
 
 ## Experimental open-source flow
 
