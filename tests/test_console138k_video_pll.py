@@ -79,7 +79,12 @@ module PLL #(
         pfd_mhz = input_mhz / IDIV_SEL;
         vco_mhz = pfd_mhz * (MDIV_SEL + MDIV_FRAC_SEL / 8.0);
         serial_mhz = vco_mhz / (ODIV0_SEL + ODIV0_FRAC_SEL / 8.0);
-        pixel_mhz = serial_mhz / 5.0;
+        // The pixel clock is a PLL output, not a divide of the serial clock.
+        // Dividing by five in fabric cannot be even: a counter gives three
+        // cycles high and two low, and that clock leaves the chip as the HDMI
+        // clock lane, which the receiver recovers all its timing from. 60/40
+        // against a 40 to 60 per cent specification is not somewhere to sit.
+        pixel_mhz = vco_mhz / (ODIV1_SEL * 1.0);
 
         if (pfd_mhz < 19.0 || pfd_mhz > 81.25)
             $fatal(1, "PFD %f MHz is outside the 19 to 81.25 MHz range", pfd_mhz);
@@ -101,11 +106,19 @@ module PLL #(
             $fatal(1, "pixel clock %f MHz is %f%% from 74.25 MHz, too far for 720p60",
                    pixel_mhz, error_percent);
 
-        if (CLKOUT0_EN != "TRUE" || CLKOUT1_EN != "FALSE" ||
+        // OSER10 clocks ten bits out per pixel, so the serial clock has to be
+        // exactly five times the pixel clock. Taking them from two dividers of
+        // one VCO keeps that exact instead of approximately true.
+        if (serial_mhz < pixel_mhz * 5.0 - 0.001 ||
+            serial_mhz > pixel_mhz * 5.0 + 0.001)
+            $fatal(1, "serial %f MHz is not five times pixel %f MHz",
+                   serial_mhz, pixel_mhz);
+
+        if (CLKOUT0_EN != "TRUE" || CLKOUT1_EN != "TRUE" ||
             CLKOUT2_EN != "FALSE" || CLKOUT3_EN != "FALSE" ||
             CLKOUT4_EN != "FALSE" || CLKOUT5_EN != "FALSE" ||
             CLKOUT6_EN != "FALSE")
-            $fatal(1, "unexpected video PLL output enable");
+            $fatal(1, "video PLL should drive the serial clock on CLKOUT0 and the pixel clock on CLKOUT1, nothing else");
 
         $display("VIDEO_PLL pfd=%0.3f vco=%0.3f serial=%0.3f pixel=%0.4f err=%0.3f%%",
                  pfd_mhz, vco_mhz, serial_mhz, pixel_mhz, error_percent);

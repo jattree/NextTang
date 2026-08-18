@@ -3,7 +3,7 @@
 
 create_clock -name sys_clk -period 20.000 [get_ports {sys_clk}]
 create_clock -name serial_clock -period 2.6891 [get_nets {serial_clock}]
-create_generated_clock -name pixel_clock -source [get_nets {serial_clock}] -divide_by 5 [get_pins {pixel_clock_divider/CLKOUT}]
+create_clock -name pixel_clock -period 13.4454 [get_pins {video_pll/pll/CLKOUT1}]
 
 create_clock -name clock_28 -period 35.714 [get_nets {clock_28}]
 create_generated_clock -name cpu_clock -source [get_nets {clock_28}] -divide_by 8 [get_pins {cpu_clock_divider/CLKOUT}]

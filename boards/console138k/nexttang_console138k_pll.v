@@ -21,14 +21,20 @@
 
 `default_nettype none
 
+// The pixel clock comes from the PLL's own second output rather than a CLKDIV
+// of the serial clock. A divide by five cannot be even: a counter gives three
+// cycles high and two low, so the pixel clock, and with it the HDMI clock lane
+// that every receiver recovers timing from, sits at 60/40 against a 40 to 60
+// per cent specification. Taking it from the PLL divider gives 50/50 and puts
+// nothing in the path.
 module nexttang_console138k_pll (
     input  wire clock_in,
     output wire serial_clock,
+    output wire pixel_clock,
     output wire locked
 );
     wire ground = 1'b0;
     wire power = 1'b1;
-    wire unused_clock_one;
     wire unused_clock_two;
     wire unused_clock_three;
     wire unused_clock_four;
@@ -39,7 +45,7 @@ module nexttang_console138k_pll (
     PLL pll (
         .LOCK(locked),
         .CLKOUT0(serial_clock),
-        .CLKOUT1(unused_clock_one),
+        .CLKOUT1(pixel_clock),
         .CLKOUT2(unused_clock_two),
         .CLKOUT3(unused_clock_three),
         .CLKOUT4(unused_clock_four),
@@ -91,7 +97,7 @@ module nexttang_console138k_pll (
     defparam pll.IDIV_SEL = 1;
     defparam pll.FBDIV_SEL = 1;
     defparam pll.ODIV0_SEL = 8;
-    defparam pll.ODIV1_SEL = 8;
+    defparam pll.ODIV1_SEL = 40;    // 2975 / 40 = 74.375 MHz, the pixel clock
     defparam pll.ODIV2_SEL = 8;
     defparam pll.ODIV3_SEL = 8;
     defparam pll.ODIV4_SEL = 8;
@@ -101,7 +107,7 @@ module nexttang_console138k_pll (
     defparam pll.MDIV_FRAC_SEL = 4;
     defparam pll.ODIV0_FRAC_SEL = 0;
     defparam pll.CLKOUT0_EN = "TRUE";
-    defparam pll.CLKOUT1_EN = "FALSE";
+    defparam pll.CLKOUT1_EN = "TRUE";
     defparam pll.CLKOUT2_EN = "FALSE";
     defparam pll.CLKOUT3_EN = "FALSE";
     defparam pll.CLKOUT4_EN = "FALSE";

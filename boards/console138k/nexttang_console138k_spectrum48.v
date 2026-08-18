@@ -42,14 +42,8 @@ module nexttang_console138k_spectrum48 #(
     nexttang_console138k_pll video_pll (
         .clock_in(sys_clk),
         .serial_clock(serial_clock),
+        .pixel_clock(pixel_clock),
         .locked(video_pll_locked)
-    );
-
-    CLKDIV #(.DIV_MODE(5)) pixel_clock_divider (
-        .HCLKIN(serial_clock),
-        .RESETN(video_pll_locked),
-        .CALIB(1'b0),
-        .CLKOUT(pixel_clock)
     );
 
     wire clock_28;
