@@ -12,10 +12,34 @@ verified against the Git blob hashes recorded in
 in the sources, and `THIRD_PARTY_NOTICES.md` must accompany any synthesized
 artifact built from them.
 
-Nothing else has been imported. Selecting and auditing a baseline is not a
-build, simulation, synthesis, or hardware result, and importing source is not a
-claim that it works on this hardware: the T80 files have not yet been wired to
-anything, simulated, or synthesized in this project.
+Nothing else has been imported. Those files have since been simulated and
+synthesized for this device, which is not the same as having run on the board:
+no bitstream built from them has been loaded onto hardware yet.
+
+One line of `rtl/cpu/t80n.vhd` is modified from the pinned commit. Upstream
+writes `ioq := (ioq and x"7")`, masking a nine-bit variable with a four-bit
+literal, which Gowin rejects as a width mismatch. It is changed to
+`(ioq and "000000111")`, which preserves the behaviour every other toolchain
+gives that line. The modification is recorded here because the file is otherwise
+byte-identical and its blob hash therefore no longer matches the audit.
+
+## Reference projects
+
+These are read for their answers to device-specific questions. Nothing is
+imported from them without going through the same audit as any other upstream.
+
+[NextNano](https://github.com/RetroSilicon/NextNano) (GPL-3.0) is a ZX Spectrum
+Next for the Tang Nano 20K. Different device to ours, a GW2AR-18 rather than a
+GW5AST-138, and a different memory and video architecture, but the same vendor
+toolchain and the same core lineage, so its answers to Gowin questions carry.
+Consulted from 2026-08-18 at commit `ba1d834fb672c75a9482233557ae776602b1b243`.
+
+Two of its findings confirm conclusions this project had already reached
+independently: that Gowin's SDC parser requires every command on one physical
+line, and that the `ioq` line above has to be rewritten to synthesize. Its
+`t80n.vhd` carries the same replacement text.
+
+No NextNano code is in this repository.
 
 ## Audit result
 

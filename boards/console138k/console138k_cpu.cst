@@ -1,0 +1,20 @@
+// Tang Console 138K NEO, GW5AST-138C PG484. Machine CPU bring-up.
+IO_LOC "sys_clk" V22;
+IO_PORT "sys_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=OFF;
+
+// Status UART, mirrored on pin 8 of both PMOD sockets because they are
+// physically identical and a miswire would otherwise be silent.
+IO_LOC "debug_uart_tx" E18;
+IO_PORT "debug_uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+// Z80 bus activity on PMOD J6, slow enough for a 24 MHz analyser to read.
+IO_LOC "probe[0]" V18;
+IO_PORT "probe[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[1]" V19;
+IO_PORT "probe[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[2]" G21;
+IO_PORT "probe[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[3]" G22;
+IO_PORT "probe[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[4]" F18;
+IO_PORT "probe[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;

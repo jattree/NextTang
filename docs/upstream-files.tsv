@@ -31,7 +31,7 @@ rtl/audio/pwm.vhd	7fcc15e204a56b6473d00f4ae3a3a296be16b9eb	GPL-3.0-or-later	cand
 rtl/audio/soundrive.vhd	8f523a92242d10b6b4d9bf6529d9947b558d1435	GPL-3.0-or-later	candidate-import-retain-notice
 rtl/audio/turbosound.vhd	39471f90a9620e536d65ea2ed9e3ba2e9c66521e	GPL-3.0-or-later	candidate-import-retain-notice
 rtl/audio/ym2149.vhd	a83c568cb9448144370ce851f14a4e6326311431	BSD-3-Clause-synthesized-form	candidate-import-retain-notice
-rtl/cpu/t80n.vhd	0ccc8ddd5fc3f2bbea686e173af47e91b48a2331	BSD-3-Clause-synthesized-form	imported-notice-retained
+rtl/cpu/t80n.vhd	0ccc8ddd5fc3f2bbea686e173af47e91b48a2331	BSD-3-Clause-synthesized-form	imported-modified-notice-retained
 rtl/cpu/t80n_alu.vhd	082e503b0fe5e47f8b151639c0bafca8dade273b	BSD-3-Clause-synthesized-form	imported-notice-retained
 rtl/cpu/t80n_mcode.vhd	063e4bedb404277d316e156eda88543edb4c65e9	BSD-3-Clause-synthesized-form	imported-notice-retained
 rtl/cpu/t80n_pack.vhd	5ee292ec70d2ca9da20e578c8729bdf231684fd0	BSD-3-Clause-synthesized-form	imported-notice-retained
