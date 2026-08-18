@@ -97,9 +97,12 @@ source_files=(
 (
     cd -- "$output_dir"
     gw_sh "$project_tcl"
-) >"$build_log" 2>&1 || {
+# Shown as it happens as well as kept. A vendor build takes minutes and a
+# silent terminal gives no way to tell slow from stuck, which matters most on
+# exactly the runs that are going wrong. pipefail carries gw_sh's status
+# through the pipe.
+) 2>&1 | tee "$build_log" || {
     printf 'console138k spectrum build: FAIL (see %s)\n' "$build_log" >&2
-    tail -30 "$build_log" >&2
     exit 1
 }
 
