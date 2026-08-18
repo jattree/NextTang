@@ -195,6 +195,27 @@ module nexttang_console138k_ddr3_logo (
         .locked(video_pll_locked)
     );
 
+    // Phase test. CLKDIV divides the serial clock by five, and the phase it
+    // settles into after reset is not necessarily the same every time the FPGA
+    // is configured, because the reset release is asynchronous to the serial
+    // clock. If the serialiser's bit alignment depends on that phase, some
+    // configurations would produce a signal a strict receiver rejects, which
+    // would explain a fixed per-load failure probability that nothing on the
+    // receiver side changes.
+    //
+    // CALIB shifts the divider by one input clock. Pulsing it once a second
+    // walks through all five phases, so a bad phase should correct itself
+    // within a few seconds without reloading. If the screen never recovers,
+    // the phase theory is wrong.
+    reg [25:0] calibrate_counter = 0;
+    reg calibrate_pulse = 1'b0;
+
+    always @(posedge sys_clk) begin
+        calibrate_counter <= calibrate_counter + 1'b1;
+        calibrate_pulse <= (calibrate_counter[25:22] == 4'b0000) &&
+                           (calibrate_counter[21:0] == 22'd0);
+    end
+
     CLKDIV #(.DIV_MODE(5)) pixel_clock_divider (
         .HCLKIN(video_serial_clock),
         .RESETN(video_pll_locked),
