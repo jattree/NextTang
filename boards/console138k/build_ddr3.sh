@@ -87,6 +87,8 @@ done
 build_log="$output_dir/vendor-build.log"
 common_source_files=(
     "$repo_root/rtl/smoke/nexttang_status_colour.v"
+    "$repo_root/rtl/smoke/nexttang_debug_status_uart.v"
+    "$repo_root/rtl/smoke/nexttang_clock_probe.v"
     "$repo_root/rtl/video/nexttang_tmds_encoder.v"
     "$repo_root/boards/console138k/nexttang_console138k_pll.v"
     "$repo_root/boards/console138k/nexttang_console138k_ddr3_pll.v"

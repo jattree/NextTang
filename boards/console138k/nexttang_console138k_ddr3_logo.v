@@ -6,6 +6,9 @@
 module nexttang_console138k_ddr3_logo (
     input  wire        sys_clk,
     output wire        status_led,
+    output wire [4:0]  probe,
+    output wire        debug_uart_tx,
+    output wire        debug_uart_tx_alt,
     output wire        tmds_clk_p,
     output wire        tmds_clk_n,
     output wire [2:0]  tmds_d_p,
@@ -58,6 +61,85 @@ module nexttang_console138k_ddr3_logo (
     wire self_refresh_acknowledge;
     wire refresh_acknowledge;
     wire ddr_reset;
+
+    // Passive instrumentation. Nothing here changes the design's behaviour:
+    // the signals are observed and reported, never used to gate anything.
+    // Both routes exist because they fail differently. The analyser sees the
+    // exact timing but only while it is armed and triggered; the UART sees a
+    // much longer window and, crucially, keeps reporting after the video PLL
+    // drops lock and takes HDMI with it.
+    reg [7:0] system_clock_divider = 0;
+
+    always @(posedge sys_clk) begin
+        system_clock_divider <= system_clock_divider + 1'b1;
+    end
+
+    assign probe = {
+        system_clock_divider[7],    // ~195 kHz timing reference and trigger
+        calibration_complete,
+        controller_reset_n,
+        memory_pll_locked,
+        video_pll_locked
+    };
+
+    wire [31:0] pixel_clock_hz;
+    wire pixel_clock_measured;
+    wire [2:0] pixel_clock_colour;
+
+    nexttang_clock_probe #(
+        .CLOCK_HZ(50000000),
+        .EXPECT_A_HZ(74375000),
+        .EXPECT_B_HZ(50000000)
+    ) pixel_clock_probe (
+        .clock(sys_clk),
+        .reset(1'b0),
+        .measured_clock(pixel_clock),
+        .measured_hz(pixel_clock_hz),
+        .measured_valid(pixel_clock_measured),
+        .colour(pixel_clock_colour)
+    );
+
+    wire pixel_clock_alive = pixel_clock_measured && (pixel_clock_hz > 32'd1000000);
+
+    // vsync is the last thing before the serialisers. If it toggles at the
+    // frame rate then the timing generator is running and pixels are being
+    // produced, which puts any remaining fault in the serialisers, the
+    // differential outputs, or the sink.
+    wire [31:0] refresh_hz;
+    wire refresh_measured;
+    wire [2:0] refresh_colour;
+
+    nexttang_clock_probe #(
+        .CLOCK_HZ(50000000),
+        .EXPECT_A_HZ(60),
+        .EXPECT_B_HZ(50),
+        .TOLERANCE_DIV(10),
+        .MEASURE_BY_SAMPLING(1)
+    ) refresh_probe (
+        .clock(sys_clk),
+        .reset(1'b0),
+        .measured_clock(vsync),
+        .measured_hz(refresh_hz),
+        .measured_valid(refresh_measured),
+        .colour(refresh_colour)
+    );
+
+    wire vsync_alive = refresh_measured && (refresh_hz > 32'd10);
+
+    nexttang_debug_status_uart #(
+        .CLOCK_HZ(50000000)
+    ) status_uart (
+        .clock(sys_clk),
+        .reset(1'b0),
+        .flags({vsync_alive, pixel_clock_alive, calibration_complete,
+                controller_reset_n, memory_pll_locked, video_pll_locked}),
+        .value(refresh_hz),
+        .transmit(debug_uart_tx)
+    );
+
+    // The two PMOD sockets are physically identical, so the same line is
+    // driven on pin 8 of each. Either one works and a miswire is impossible.
+    assign debug_uart_tx_alt = debug_uart_tx;
 
     wire engine_completion_toggle;
     wire engine_completion_bank;

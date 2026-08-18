@@ -166,3 +166,20 @@ IO_PORT "ddr_dqs[0]" IO_TYPE=SSTL15D PULL_MODE=NONE DRIVE=8 BANK_VCCIO=1.5;
 INS_LOC "memory_pll/reference_pll/u_pll/PLL_inst" PLL_L[0];
 INS_LOC "ddr3/gw3_top/u_ddr_phy_top/u_dll" DDRDLLM_BL;
 INS_LOC "ddr3/gw3_top/u_ddr_phy_top/fclkdiv" LEFTSIDE[4];
+
+// Passive debug instrumentation on PMOD J6. Ground reference for the analyser
+// and the FT232RL is connector pins 3 and 4.
+IO_LOC "probe[0]" V18;
+IO_PORT "probe[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[1]" V19;
+IO_PORT "probe[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[2]" G21;
+IO_PORT "probe[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[3]" G22;
+IO_PORT "probe[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[4]" F18;
+IO_PORT "probe[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "debug_uart_tx" E18;
+IO_PORT "debug_uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "debug_uart_tx_alt" D22;
+IO_PORT "debug_uart_tx_alt" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
