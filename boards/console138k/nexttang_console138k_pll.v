@@ -4,12 +4,20 @@
 // 50 MHz to 371.875 MHz, followed by CLKDIV / 5 in the board top level, giving
 // a 74.375 MHz pixel clock and 60.10 Hz at the 1650x750 720p raster.
 //
+// The output divider is 8 and MDIV is 59.5 rather than the 2 and 14.875 that
+// give the same 371.875 MHz from a much lower VCO. That is not a style choice.
+// This device did not lock with the VCO at 743.75 MHz and does lock at
+// 2975 MHz, measured by building both and looking at the screen: the low-VCO
+// version produced no video at all while every other signal in the design was
+// correct. 743.75 sits inside the 650 to 1300 MHz range the datasheet figures
+// suggested, so that range does not describe this part. Raise MDIV and the
+// output divider together if this frequency ever needs changing, and keep the
+// VCO high.
+//
 // Exact 74.25 MHz is unreachable from this board's 50 MHz input: MDIV moves in
-// eighths, so the VCO can only land on multiples of 6.25 MHz, and 742.5 MHz is
-// not one of them.  The MS5351's 27 MHz on V10 would divide exactly, but that
-// pin has no clock-capable routing on this device and a PLL driven from it
-// produces no usable display.  0.17 per cent high is the closest this input
-// reaches, and is well inside what the board's own HDMI examples rely on.
+// eighths, so 0.17 per cent high is the closest this input reaches. 59.375
+// lands nearer at 59.98 Hz and is worth revisiting, but 59.5 is the ratio with
+// a confirmed picture.
 
 `default_nettype none
 
@@ -82,15 +90,15 @@ module nexttang_console138k_pll (
     defparam pll.FCLKIN = "50";
     defparam pll.IDIV_SEL = 1;
     defparam pll.FBDIV_SEL = 1;
-    defparam pll.ODIV0_SEL = 2;
+    defparam pll.ODIV0_SEL = 8;
     defparam pll.ODIV1_SEL = 8;
     defparam pll.ODIV2_SEL = 8;
     defparam pll.ODIV3_SEL = 8;
     defparam pll.ODIV4_SEL = 8;
     defparam pll.ODIV5_SEL = 8;
     defparam pll.ODIV6_SEL = 8;
-    defparam pll.MDIV_SEL = 14;
-    defparam pll.MDIV_FRAC_SEL = 7;
+    defparam pll.MDIV_SEL = 59;
+    defparam pll.MDIV_FRAC_SEL = 4;
     defparam pll.ODIV0_FRAC_SEL = 0;
     defparam pll.CLKOUT0_EN = "TRUE";
     defparam pll.CLKOUT1_EN = "FALSE";

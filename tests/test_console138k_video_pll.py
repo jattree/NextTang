@@ -83,8 +83,17 @@ module PLL #(
 
         if (pfd_mhz < 19.0 || pfd_mhz > 81.25)
             $fatal(1, "PFD %f MHz is outside the 19 to 81.25 MHz range", pfd_mhz);
-        if (vco_mhz < 650.0 || vco_mhz > 1300.0)
-            $fatal(1, "VCO %f MHz is outside the 650 to 1300 MHz range", vco_mhz);
+
+        // This bound comes from the board, not the datasheet. The 650 to 1300
+        // MHz figure this test used to assert is what put the design at a VCO
+        // of 743.75, which produced no video at all while every other signal
+        // was correct. Measured on hardware: no video at 743.75, 750 or
+        // 928.125, and a picture at 2750 and 2975. The true lower limit is
+        // somewhere between 928 and 2750 and is not known, so the bound is set
+        // conservatively inside that gap. Anything above 2975 is untested.
+        if (vco_mhz < 2000.0 || vco_mhz > 3000.0)
+            $fatal(1, "VCO %f MHz is outside the range this board locks at. Measured: no video at 743.75, 750 and 928.125, picture at 2750 and 2975",
+                   vco_mhz);
 
         error_percent = ((pixel_mhz - 74.25) / 74.25) * 100.0;
         if (error_percent < 0.0) error_percent = -error_percent;
