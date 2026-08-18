@@ -170,8 +170,25 @@ module nexttang_console138k_spectrum48 #(
     );
 
     // Port 0xFE is decoded on address bit 0 alone, as the original did. Reading
-    // it returns no keys pressed with the tape input low.
+    // it returns the keyboard in the low five bits, with the tape input low.
     wire port_fe = !iorq_n && !cpu_address[0];
+
+    wire [39:0] keys;
+    wire [4:0] key_columns;
+    wire typing_finished;
+
+    nexttang_key_sequencer #(.CLOCK_HZ(3500000)) typist (
+        .clock(cpu_clock),
+        .reset(cpu_reset),
+        .keys(keys),
+        .finished(typing_finished)
+    );
+
+    nexttang_keyboard_matrix keyboard (
+        .row_select(cpu_address[15:8]),
+        .keys(keys),
+        .columns(key_columns)
+    );
     reg [2:0] border_colour = 3'd0;
 
     always @(posedge cpu_clock) begin
@@ -183,7 +200,7 @@ module nexttang_console138k_spectrum48 #(
 
     always @(*) begin
         if (!iorq_n)
-            cpu_data_in = port_fe ? 8'hbf : 8'hff;
+            cpu_data_in = port_fe ? {1'b1, 1'b0, 1'b1, key_columns} : 8'hff;
         else if (in_rom)
             cpu_data_in = rom_data;
         else
@@ -348,7 +365,7 @@ module nexttang_console138k_spectrum48 #(
     ) status_uart (
         .clock(cpu_clock),
         .reset(cpu_reset),
-        .flags({halt_seen, border_write_seen, high_ram_write_seen,
+        .flags({typing_finished, border_write_seen, high_ram_write_seen,
                 screen_write_seen, opcode_seen, video_pll_locked}),
         .value(opcode_count),
         .transmit(debug_uart_tx)

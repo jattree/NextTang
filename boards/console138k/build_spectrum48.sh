@@ -69,6 +69,8 @@ source_files=(
     "$repo_root/rtl/cpu/t80na.vhd"
     "$repo_root/rtl/memory/nexttang_block_ram.v"
     "$repo_root/rtl/memory/nexttang_rom.v"
+    "$repo_root/rtl/input/nexttang_keyboard_matrix.v"
+    "$repo_root/rtl/input/nexttang_key_sequencer.v"
     "$repo_root/rtl/smoke/nexttang_debug_status_uart.v"
     "$repo_root/boards/console138k/nexttang_console138k_machine_pll.v"
     "$repo_root/boards/console138k/nexttang_console138k_pll.v"
