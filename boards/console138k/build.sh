@@ -7,6 +7,7 @@ repo_root=$(cd -- "$script_dir/../.." && pwd -P)
 toolchain=
 profile=
 output_dir=
+vendor_source=
 
 usage() {
     printf '%s\n' 'usage: boards/console138k/build.sh --toolchain vendor --profile release --output ABSOLUTE_DIRECTORY'
@@ -14,12 +15,13 @@ usage() {
 
 while (($#)); do
     case "$1" in
-        --toolchain|--profile|--output)
+        --toolchain|--profile|--output|--vendor-source)
             [[ $# -ge 2 ]] || { usage >&2; exit 2; }
             case "$1" in
                 --toolchain) toolchain=$2 ;;
                 --profile) profile=$2 ;;
                 --output) output_dir=$2 ;;
+                --vendor-source) vendor_source=$2 ;;
             esac
             shift 2
             ;;
@@ -75,6 +77,31 @@ source_files=(
     "$repo_root/boards/console138k/console138k.sdc"
 )
 
+# The generated Gowin PLL and its PLL_INIT lock search carry vendor copyright
+# and are not redistributable, so a build that needs them takes them from a
+# directory outside this repository.
+vendor_files=()
+if [[ -n "$vendor_source" ]]; then
+    if [[ "$vendor_source" != /* ]]; then
+        printf '%s\n' 'console138k build: --vendor-source must be an absolute path' >&2
+        exit 2
+    fi
+    vendor_files=(
+        "$vendor_source/gowin_pll/gowin_pll.v"
+        "$vendor_source/gowin_pll/gowin_pll_mod.v"
+        "$vendor_source/pll_init.v"
+    )
+    for vendor_file in "${vendor_files[@]}"; do
+        if [[ ! -f "$vendor_file" ]]; then
+            printf 'console138k build: required vendor source missing: %s\n' \
+                "$vendor_file" >&2
+            exit 2
+        fi
+    done
+    source_files+=("${vendor_files[@]}"
+        "$repo_root/boards/console138k/nexttang_console138k_ddr3_pll.v")
+fi
+
 cp -- "$repo_root/rtl/smoke/nexttang_logo_128x128_rgb332.mem" "$output_dir/"
 
 cat >"$project_tcl" <<EOF
@@ -87,6 +114,11 @@ add_file {$repo_root/rtl/smoke/nexttang_uart_heartbeat.v}
 add_file {$repo_root/rtl/smoke/nexttang_clock_probe.v}
 add_file {$repo_root/rtl/video/nexttang_tmds_encoder.v}
 add_file {$repo_root/boards/console138k/nexttang_console138k_pll.v}
+$(for vendor_file in ${vendor_files[@]+"${vendor_files[@]}"}; do
+    printf 'add_file {%s}\n' "$vendor_file"
+done)
+$([[ -n "$vendor_source" ]] && printf 'add_file {%s}\n' \
+    "$repo_root/boards/console138k/nexttang_console138k_ddr3_pll.v")
 add_file {$repo_root/boards/console138k/nexttang_console138k_smoke.v}
 add_file {$repo_root/boards/console138k/console138k.cst}
 add_file {$repo_root/boards/console138k/console138k.sdc}
