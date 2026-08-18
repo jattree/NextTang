@@ -121,6 +121,7 @@ module nexttang_console138k_cpu (
         .write_address(cpu_address[12:0]),
         .write_data(cpu_data_out),
         .read_data(screen_read),
+        .port_b_clock(cpu_clock),
         .port_b_address(13'b0),
         .port_b_data()
     );
@@ -131,6 +132,7 @@ module nexttang_console138k_cpu (
         .write_address(cpu_address[13:0]),
         .write_data(cpu_data_out),
         .read_data(work_read),
+        .port_b_clock(cpu_clock),
         .port_b_address(14'b0),
         .port_b_data()
     );
