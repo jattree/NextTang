@@ -286,14 +286,36 @@ module PLL #(
     assign CLKFBOUT = 0;
     assign LOCK = testbench.source_lock;
 
+    real input_mhz, pfd_mhz, vco_mhz;
+
     initial begin
-        if (FCLKIN != "27" || IDIV_SEL != 1 || FBDIV_SEL != 1)
-            $fatal(1, "unexpected PLL input or feedback parameters");
-        if (MDIV_SEL != 28 || MDIV_FRAC_SEL != 0)
-            $fatal(1, "unexpected 756 MHz VCO parameters");
-        if (ODIV0_SEL != 27 || ODIV1_SEL != 54 || ODIV2_SEL != 108 ||
-            ODIV3_SEL != 27)
-            $fatal(1, "unexpected machine-clock output dividers");
+        // Assert the requirement rather than a set of magic numbers: whatever
+        // dividers are chosen, the PFD and VCO must be legal for this device
+        // and the three machine clocks must come out exactly right.
+        if (FCLKIN == "50") input_mhz = 50.0;
+        else if (FCLKIN == "27") input_mhz = 27.0;
+        else $fatal(1, "machine PLL input %s is not a clock this board has", FCLKIN);
+
+        if (FBDIV_SEL != 1)
+            $fatal(1, "feedback divider must stay at 1 for internal feedback");
+        if (MDIV_FRAC_SEL != 0)
+            $fatal(1, "machine clocks must use an integer feedback divider");
+
+        pfd_mhz = input_mhz / IDIV_SEL;
+        vco_mhz = pfd_mhz * MDIV_SEL;
+        if (pfd_mhz < 19.0 || pfd_mhz > 81.25)
+            $fatal(1, "PFD %f MHz is outside the 19 to 81.25 MHz range", pfd_mhz);
+        if (vco_mhz < 650.0 || vco_mhz > 1300.0)
+            $fatal(1, "VCO %f MHz is outside the 650 to 1300 MHz range", vco_mhz);
+
+        if (vco_mhz / ODIV0_SEL != 28.0)
+            $fatal(1, "CLKOUT0 is %f MHz, not the required 28", vco_mhz / ODIV0_SEL);
+        if (vco_mhz / ODIV1_SEL != 14.0)
+            $fatal(1, "CLKOUT1 is %f MHz, not the required 14", vco_mhz / ODIV1_SEL);
+        if (vco_mhz / ODIV2_SEL != 7.0)
+            $fatal(1, "CLKOUT2 is %f MHz, not the required 7", vco_mhz / ODIV2_SEL);
+        if (ODIV3_SEL != ODIV0_SEL)
+            $fatal(1, "the shifted output must divide the same as CLKOUT0");
         if (CLKOUT0_EN != "TRUE" || CLKOUT1_EN != "TRUE" ||
             CLKOUT2_EN != "TRUE" || CLKOUT3_EN != "TRUE")
             $fatal(1, "a machine-clock output was disabled");

@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 NextTang contributors
 //
-// 27 MHz input, 27 MHz PFD and 756 MHz VCO.  Three phase-zero outputs
-// divide the common VCO by 27, 54 and 108 for exact 28, 14 and 7 MHz
-// machine clocks.  A fourth divide-by-27 output is shifted by 180 degrees.
+// 50 MHz input, 50 MHz PFD and 700 MHz VCO.  Three phase-zero outputs divide
+// the common VCO by 25, 50 and 100 for exact 28, 14 and 7 MHz machine clocks.
+// A fourth divide-by-25 output is shifted by 180 degrees.
+//
+// The 50 MHz board clock on V22 is used rather than the Dock's 27 MHz on V10,
+// which has no clock-capable routing on this device.  Integer dividers reach
+// the machine frequencies exactly from 50 MHz, so nothing is lost by it.
 
 `default_nettype none
 
@@ -73,17 +77,17 @@ module nexttang_console138k_machine_pll (
         .SSCMDSEL_FRAC(3'b0)
     );
 
-    defparam pll.FCLKIN = "27";
+    defparam pll.FCLKIN = "50";
     defparam pll.IDIV_SEL = 1;
     defparam pll.FBDIV_SEL = 1;
-    defparam pll.ODIV0_SEL = 27;
-    defparam pll.ODIV1_SEL = 54;
-    defparam pll.ODIV2_SEL = 108;
-    defparam pll.ODIV3_SEL = 27;
+    defparam pll.ODIV0_SEL = 25;
+    defparam pll.ODIV1_SEL = 50;
+    defparam pll.ODIV2_SEL = 100;
+    defparam pll.ODIV3_SEL = 25;
     defparam pll.ODIV4_SEL = 8;
     defparam pll.ODIV5_SEL = 8;
     defparam pll.ODIV6_SEL = 8;
-    defparam pll.MDIV_SEL = 28;
+    defparam pll.MDIV_SEL = 14;
     defparam pll.MDIV_FRAC_SEL = 0;
     defparam pll.ODIV0_FRAC_SEL = 0;
     defparam pll.CLKOUT0_EN = "TRUE";
