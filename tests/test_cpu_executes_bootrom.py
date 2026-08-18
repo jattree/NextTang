@@ -55,7 +55,19 @@ architecture sim of testbench is
     type ram_type is array (0 to 16#1B00# - 1) of std_logic_vector(7 downto 0);
     signal display_ram : ram_type := (others => (others => '0'));
 
+    -- The 16 KiB window at 0x8000 that the diagnostic write/read-back tests.
+    -- Without it the firmware always reports a memory fault, so the liveness
+    -- half of the diagnostic would never be reached.
+    type work_ram_type is array (0 to 16#4000# - 1) of std_logic_vector(7 downto 0);
+    signal work_ram : work_ram_type := (others => (others => '0'));
+
+    function in_work_ram(a : std_logic_vector(15 downto 0)) return boolean is
+    begin
+        return unsigned(a) >= 16#8000# and unsigned(a) < 16#C000#;
+    end function;
+
     signal writes_seen   : natural := 0;
+    signal attribute_writes : natural := 0;
     signal io_writes     : natural := 0;
     signal opcode_fetches : natural := 0;
     signal finished      : boolean := false;
@@ -66,7 +78,7 @@ architecture sim of testbench is
     end function;
 begin
     clock <= not clock after 142 ns when not finished else '0';   -- ~3.5 MHz
-    reset_n <= '0', '1' after 1 us;
+    RESET_DRIVE
 
     cpu : entity work.T80Na
         generic map (Mode => 0)
@@ -88,6 +100,8 @@ begin
     begin
         if in_display(address) then
             data_in <= display_ram(to_integer(unsigned(address)) - 16#4000#);
+        elsif in_work_ram(address) then
+            data_in <= work_ram(to_integer(unsigned(address)) - 16#8000#);
         elsif unsigned(address) < 16#2000# then
             data_in <= rom_data;
         else
@@ -101,6 +115,12 @@ begin
             if mreq_n = '0' and wr_n = '0' and in_display(address) then
                 display_ram(to_integer(unsigned(address)) - 16#4000#) <= data_out;
                 writes_seen <= writes_seen + 1;
+                if unsigned(address) >= 16#5800# then
+                    attribute_writes <= attribute_writes + 1;
+                end if;
+            end if;
+            if mreq_n = '0' and wr_n = '0' and in_work_ram(address) then
+                work_ram(to_integer(unsigned(address)) - 16#8000#) <= data_out;
             end if;
             if iorq_n = '0' and wr_n = '0' then
                 io_writes <= io_writes + 1;
@@ -113,12 +133,13 @@ begin
 
     stimulus : process
     begin
-        wait for 200 ms;
+        wait for DURATION;
         finished <= true;
 
         report "opcode_fetches=" & integer'image(opcode_fetches);
         report "display_writes=" & integer'image(writes_seen);
         report "io_writes=" & integer'image(io_writes);
+        report "attribute_writes=" & integer'image(attribute_writes);
 
         CHECKS
         wait;
@@ -128,8 +149,14 @@ end architecture;
 
 
 class CpuExecutesBootRomTest(unittest.TestCase):
-    def run_simulation(self, checks: str) -> str:
-        source = HARNESS.replace("CHECKS", checks)
+    def run_simulation(self, checks: str, duration: str = "900 ms",
+                       hold_reset: bool = False) -> str:
+        source = (HARNESS
+                  .replace("CHECKS", checks)
+                  .replace("DURATION", duration)
+                  .replace("RESET_DRIVE",
+                           "reset_n <= '0';" if hold_reset
+                           else "reset_n <= '0', '1' after 1 us;"))
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             (path / "testbench.vhd").write_text(source, encoding="utf-8")
@@ -149,41 +176,41 @@ class CpuExecutesBootRomTest(unittest.TestCase):
                         f"{result.stdout}\n{result.stderr}")
             return result.stdout + result.stderr
 
-    def test_the_cpu_fetches_and_executes_from_the_boot_rom(self) -> None:
-        # Opcode fetches prove the processor is running code from the ROM
-        # rather than sitting in reset or spinning on a bus fault.
+    def test_the_cpu_runs_the_whole_diagnostic(self) -> None:
+        """One simulation, every claim checked, because each run costs a minute.
+
+        Together these say: the processor executes from ROM, computes the
+        pattern and places it through the Spectrum's interleaved layout, drives
+        I/O separately from memory, passes a 16 KiB write and read-back, and
+        keeps looping afterwards. The specific screen offsets are derived from
+        the layout rather than from a previous run, so they would catch address
+        arithmetic that is wrong in a self-consistent way.
+        """
         output = self.run_simulation(
-            'assert opcode_fetches > 100\n'
-            '    report "CPU did not fetch opcodes; it is not executing"\n'
-            '    severity error;'
+            'assert opcode_fetches > 100000 '
+            'report "CPU is not executing from ROM" severity error;\n'
+            '        assert io_writes > 0 '
+            'report "no I/O write; OUT (0xfe),A did not execute" severity error;\n'
+            '        assert attribute_writes > 1000 '
+            'report "attributes not cycled; memory check failed or CPU stalled" '
+            'severity error;\n'
+            '        assert writes_seen > 6144 '
+            'report "no writes beyond the bitmap; diagnostic did not complete" '
+            'severity error;\n'
+            '        assert display_ram(0) = x"00" report "origin: offset 0x0000 wrong" severity error;\n        assert display_ram(5) = x"05" report "column offset within a row: offset 0x0005 wrong" severity error;\n        assert display_ram(256) = x"01" report "pixel row field, y and 0x07: offset 0x0100 wrong" severity error;\n        assert display_ram(291) = x"0a" report "character row field, y and 0x38: offset 0x0123 wrong" severity error;\n        assert display_ram(2055) = x"47" report "screen third field, y and 0xc0: offset 0x0807 wrong" severity error;\n        assert display_ram(6143) = x"a0" report "last byte of the bitmap: offset 0x17ff wrong" severity error;'
         )
         self.assertIn("opcode_fetches=", output)
+        self.assertIn("attribute_writes=", output)
 
-    def test_the_firmware_writes_the_display_pattern(self) -> None:
-        # The firmware fills 0x4000 upward with an alternating byte pattern.
-        # Reaching those writes means the CPU executed a loop with arithmetic,
-        # memory addressing and conditional branching correctly.
-        output = self.run_simulation(
-            'assert writes_seen > 100\n'
-            '    report "no display writes; the firmware loop did not run"\n'
-            '    severity error;\n'
-            '        assert display_ram(0) = x"aa" or display_ram(0) = x"55"\n'
-            '            report "first display byte is neither aa nor 55"\n'
-            '            severity error;\n'
-            '        assert display_ram(1) /= display_ram(0)\n'
-            '            report "pattern does not alternate between adjacent bytes"\n'
-            '            severity error;'
-        )
-        self.assertIn("display_writes=", output)
-
-    def test_the_border_is_set_through_an_io_write(self) -> None:
-        # The firmware starts with OUT (0xFE),A. An I/O write proves the CPU
-        # drives IORQ separately from MREQ, which a memory-only test misses.
-        self.run_simulation(
-            'assert io_writes > 0\n'
-            '    report "no I/O write; OUT (0xfe),A did not execute"\n'
-            '    severity error;'
-        )
+    def test_the_checks_fail_when_the_cpu_is_held_in_reset(self) -> None:
+        # A green test that cannot fail is worth nothing. With RESET_n held low
+        # the processor fetches nothing, and the same assertion must fire.
+        with self.assertRaises(AssertionError) as raised:
+            self.run_simulation(
+                'assert opcode_fetches > 100000 '
+                'report "CPU is not executing from ROM" severity error;',
+                duration="20 ms", hold_reset=True)
+        self.assertIn("opcode_fetches=0", str(raised.exception))
 
 
 if __name__ == "__main__":
