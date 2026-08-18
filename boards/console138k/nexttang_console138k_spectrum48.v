@@ -28,7 +28,11 @@ module nexttang_console138k_spectrum48 #(
     output wire       tmds_clk_n,
     output wire [2:0] tmds_d_p,
     output wire [2:0] tmds_d_n,
-    output wire       tmds_psv
+    output wire       tmds_psv,
+
+    // Z80 bus brought out to PMOD1 for a logic analyser. Passive: nothing in
+    // the machine depends on these.
+    output wire [5:0] probe
 );
     // ----------------------------------------------------------------- clocks
     wire serial_clock;
@@ -359,6 +363,11 @@ module nexttang_console138k_spectrum48 #(
                 halt_seen <= 1'b1;
         end
     end
+
+    // Slow enough for a 24 MHz analyser and chosen to show the machine's
+    // rhythm: opcode fetches, memory against IO, writes, and the 50 Hz frame
+    // interrupt the ROM runs on.
+    assign probe = {interrupt_n, wr_n, iorq_n, mreq_n, m1_n, cpu_clock};
 
     nexttang_debug_status_uart #(
         .CLOCK_HZ(3500000)

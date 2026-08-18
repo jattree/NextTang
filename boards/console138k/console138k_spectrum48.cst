@@ -27,3 +27,28 @@ IO_PORT "tmds_d_n[2]" PULL_MODE=NONE IO_TYPE=LVCMOS33D DRIVE=8;
 // unconstrained and therefore floating.
 IO_LOC "tmds_psv" K14;
 IO_PORT "tmds_psv" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+
+// Z80 bus on PMOD1 for a logic analyser. Ground reference is connector pins 3
+// and 4. PMOD1_IO0 and IO1 are W19 and W20 in bank 4 and are left alone because
+// that bank's voltage is not established here; IO2 to IO7 are bank 2, the same
+// bank as the status UART pin, which is known to drive 3.3V logic.
+//
+//   probe   signal        PMOD1     FPGA   connector pin
+//   0       cpu_clock     IO2       F19    9
+//   1       m1_n          IO3       F20    10
+//   2       mreq_n        IO4       E22    7
+//   3       iorq_n        IO5       D22    8
+//   4       wr_n          IO6       E21    5
+//   5       interrupt_n   IO7       D21    6
+IO_LOC "probe[0]" F19;
+IO_PORT "probe[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[1]" F20;
+IO_PORT "probe[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[2]" E22;
+IO_PORT "probe[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[3]" D22;
+IO_PORT "probe[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[4]" E21;
+IO_PORT "probe[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "probe[5]" D21;
+IO_PORT "probe[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
