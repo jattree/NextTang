@@ -33,110 +33,6 @@ def committed_image() -> bytes:
     return bytes(image)
 
 
-def run_diagnostic(image: bytes, corrupt_memory: bool = False) -> tuple:
-    memory = bytearray(65536)
-    ports = []
-    registers = {"a": 0, "b": 0, "c": 0, "d": 0, "h": 0, "l": 0, "sp": 0}
-    program_counter = 0
-    zero = False
-    corruption_done = False
-
-    def fetch_byte() -> int:
-        nonlocal program_counter
-        value = image[program_counter]
-        program_counter = (program_counter + 1) & 0xFFFF
-        return value
-
-    def fetch_word() -> int:
-        low = fetch_byte()
-        return low | (fetch_byte() << 8)
-
-    def hl() -> int:
-        return (registers["h"] << 8) | registers["l"]
-
-    def set_hl(value: int) -> None:
-        registers["h"] = (value >> 8) & 0xFF
-        registers["l"] = value & 0xFF
-
-    def bc() -> int:
-        return (registers["b"] << 8) | registers["c"]
-
-    def set_bc(value: int) -> None:
-        registers["b"] = (value >> 8) & 0xFF
-        registers["c"] = value & 0xFF
-
-    for step in range(500_000):
-        if corrupt_memory and program_counter == 68 and not corruption_done:
-            memory[0x8123] ^= 0x01
-            corruption_done = True
-
-        opcode = fetch_byte()
-        if opcode == 0xF3:  # DI
-            pass
-        elif opcode == 0x31:  # LD SP,nn
-            registers["sp"] = fetch_word()
-        elif opcode == 0xAF:  # XOR A
-            registers["a"] = 0
-            zero = True
-        elif opcode == 0xD3:  # OUT (n),A
-            ports.append((fetch_byte(), registers["a"]))
-        elif opcode == 0x21:  # LD HL,nn
-            set_hl(fetch_word())
-        elif opcode == 0x01:  # LD BC,nn
-            set_bc(fetch_word())
-        elif opcode == 0x16:  # LD D,n
-            registers["d"] = fetch_byte()
-        elif opcode == 0x7A:  # LD A,D
-            registers["a"] = registers["d"]
-        elif opcode == 0x77:  # LD (HL),A
-            memory[hl()] = registers["a"]
-        elif opcode == 0x2F:  # CPL
-            registers["a"] ^= 0xFF
-        elif opcode == 0x57:  # LD D,A
-            registers["d"] = registers["a"]
-        elif opcode == 0x23:  # INC HL
-            set_hl((hl() + 1) & 0xFFFF)
-        elif opcode == 0x0B:  # DEC BC
-            set_bc((bc() - 1) & 0xFFFF)
-        elif opcode == 0x78:  # LD A,B
-            registers["a"] = registers["b"]
-        elif opcode == 0xB1:  # OR C
-            registers["a"] |= registers["c"]
-            zero = registers["a"] == 0
-        elif opcode == 0x20:  # JR NZ,e
-            displacement = fetch_byte()
-            if not zero:
-                program_counter = (
-                    program_counter
-                    + (displacement if displacement < 0x80 else displacement - 0x100)
-                ) & 0xFFFF
-        elif opcode == 0x14:  # INC D
-            registers["d"] = (registers["d"] + 1) & 0xFF
-        elif opcode == 0x7E:  # LD A,(HL)
-            registers["a"] = memory[hl()]
-        elif opcode == 0xBA:  # CP D
-            zero = registers["a"] == registers["d"]
-        elif opcode == 0x3E:  # LD A,n
-            registers["a"] = fetch_byte()
-        elif opcode == 0x18:  # JR e
-            displacement = fetch_byte()
-            program_counter = (
-                program_counter
-                + (displacement if displacement < 0x80 else displacement - 0x100)
-            ) & 0xFFFF
-        else:
-            raise AssertionError(
-                f"unsupported diagnostic opcode 0x{opcode:02x} at "
-                f"0x{(program_counter - 1) & 0xffff:04x}"
-            )
-
-        if ports and ((program_counter == 85 and ports[-1][1] == 4) or
-                      (program_counter == 87 and ports[-1][1] == 2)):
-            return memory, ports, program_counter, step + 1
-
-    raise AssertionError("diagnostic did not reach a stable pass or failure loop")
-
-
 class DiagnosticBootTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which("sjasmplus"), "sjasmplus is not installed")
     def test_committed_rom_reproduces_from_assembly(self) -> None:
@@ -264,24 +160,6 @@ end architecture;
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("DIAGNOSTIC_BOOTROM_PASS", result.stdout)
-
-    def test_machine_code_reaches_visual_pass_state(self) -> None:
-        memory, ports, program_counter, steps = run_diagnostic(committed_image())
-        self.assertEqual(ports, [(0xFE, 0), (0xFE, 4)])
-        self.assertEqual(program_counter, 85)
-        self.assertLess(steps, 500_000)
-        self.assertEqual(memory[0x4000:0x4004], bytes([0xAA, 0x55, 0xAA, 0x55]))
-        self.assertEqual(memory[0x5800:0x5804], bytes([0x47, 0x48, 0x49, 0x4A]))
-        self.assertEqual(memory[0x8000:0x8004], bytes([0x5A, 0xA5, 0x5A, 0xA5]))
-        self.assertEqual(memory[0xBFFC:0xC000], bytes([0x5A, 0xA5, 0x5A, 0xA5]))
-
-    def test_machine_code_leaves_red_border_after_readback_failure(self) -> None:
-        _, ports, program_counter, steps = run_diagnostic(
-            committed_image(), corrupt_memory=True
-        )
-        self.assertEqual(ports, [(0xFE, 0), (0xFE, 2)])
-        self.assertEqual(program_counter, 87)
-        self.assertLess(steps, 500_000)
 
 
 if __name__ == "__main__":

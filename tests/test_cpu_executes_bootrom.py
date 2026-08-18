@@ -60,6 +60,7 @@ architecture sim of testbench is
     -- half of the diagnostic would never be reached.
     type work_ram_type is array (0 to 16#4000# - 1) of std_logic_vector(7 downto 0);
     signal work_ram : work_ram_type := (others => (others => '0'));
+    constant FAULTY_RAM : boolean := FAULT_INJECT;
 
     function in_work_ram(a : std_logic_vector(15 downto 0)) return boolean is
     begin
@@ -120,7 +121,14 @@ begin
                 end if;
             end if;
             if mreq_n = '0' and wr_n = '0' and in_work_ram(address) then
-                work_ram(to_integer(unsigned(address)) - 16#8000#) <= data_out;
+                -- Fault injection corrupts one byte, which is what a real
+                -- memory fault looks like to the firmware: everything else
+                -- verifies and one location does not.
+                if FAULTY_RAM and unsigned(address) = 16#8100# then
+                    work_ram(to_integer(unsigned(address)) - 16#8000#) <= x"00";
+                else
+                    work_ram(to_integer(unsigned(address)) - 16#8000#) <= data_out;
+                end if;
             end if;
             if iorq_n = '0' and wr_n = '0' then
                 io_writes <= io_writes + 1;
@@ -150,10 +158,11 @@ end architecture;
 
 class CpuExecutesBootRomTest(unittest.TestCase):
     def run_simulation(self, checks: str, duration: str = "900 ms",
-                       hold_reset: bool = False) -> str:
+                       hold_reset: bool = False, faulty_ram: bool = False) -> str:
         source = (HARNESS
                   .replace("CHECKS", checks)
                   .replace("DURATION", duration)
+                  .replace("FAULT_INJECT", "true" if faulty_ram else "false")
                   .replace("RESET_DRIVE",
                            "reset_n <= '0';" if hold_reset
                            else "reset_n <= '0', '1' after 1 us;"))
@@ -201,6 +210,24 @@ class CpuExecutesBootRomTest(unittest.TestCase):
         )
         self.assertIn("opcode_fetches=", output)
         self.assertIn("attribute_writes=", output)
+
+    def test_a_memory_fault_reaches_the_failure_screen(self) -> None:
+        """A corrupted byte must produce the distinct failure display.
+
+        This replaces coverage that previously came from a hand-written partial
+        Z80 interpreter in test_diagnostic_boot. Running it on the real core
+        exercises the same branch without a second, weaker model of the CPU.
+        """
+        output = self.run_simulation(
+            'assert attribute_writes > 0 '
+            'report "firmware never wrote attributes at all" severity error;\n'
+            '        assert display_ram(16#1800#) = x"42" '
+            'report "failure screen did not set bright red on black" '
+            'severity error;\n'
+            '        assert display_ram(0) = x"ff" '
+            'report "failure screen did not fill the bitmap" severity error;',
+            duration="600 ms", faulty_ram=True)
+        self.assertIn("display_writes=", output)
 
     def test_the_checks_fail_when_the_cpu_is_held_in_reset(self) -> None:
         # A green test that cannot fail is worth nothing. With RESET_n held low
