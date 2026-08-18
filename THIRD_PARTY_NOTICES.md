@@ -4,8 +4,9 @@ This file is release documentation. Distribute it with every NextTang bitstream
 or other synthesized artifact containing any of the files named below. Source
 redistributions must also retain the notices in the source files themselves.
 
-No audited upstream HDL has been imported into NextTang yet. These notices are
-recorded now so the redistribution obligation is explicit before import.
+The T80 CPU family files listed below were imported on 2026-08-18 and are
+present in this repository. The obligation is therefore live: distribute this
+file with every bitstream or other synthesized artifact built from them.
 
 ## T80 CPU family
 

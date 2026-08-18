@@ -5,8 +5,17 @@ NextTang has selected the MiSTer ZXNext repository at commit
 (`Release 20260603`) as the baseline for the first port. Its Git tree is
 `e2febf8f495714629a279693ce2d9dd7d2d757ab`.
 
-No HDL from that repository has been imported into NextTang yet. Selecting and
-auditing a baseline is not a build, simulation, synthesis, or hardware result.
+The first import from that repository landed on 2026-08-18: the five T80 CPU
+family files under `rtl/cpu/`, taken byte-identical from the pinned commit and
+verified against the Git blob hashes recorded in
+[the per-file audit](upstream-files.tsv). Their notices are retained unmodified
+in the sources, and `THIRD_PARTY_NOTICES.md` must accompany any synthesized
+artifact built from them.
+
+Nothing else has been imported. Selecting and auditing a baseline is not a
+build, simulation, synthesis, or hardware result, and importing source is not a
+claim that it works on this hardware: the T80 files have not yet been wired to
+anything, simulated, or synthesized in this project.
 
 ## Audit result
 

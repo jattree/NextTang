@@ -91,6 +91,48 @@ class CheckRepoTests(unittest.TestCase):
 
             self.assertEqual(errors, ["required local/generated path is not ignored: secret.lic"])
 
+    def test_audited_imports_are_exempt_from_formatting_rules(self) -> None:
+        # Vendored upstream source is verified byte-for-byte against Git blob
+        # hashes, so reformatting it would break the provenance claim. The
+        # exemption must apply to a path the manifest marks as imported.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "docs").mkdir()
+            (root / "docs" / "upstream-files.tsv").write_text(
+                "path\tgit_blob\tobserved_notice\tdisposition\n"
+                "rtl/cpu/vendor.vhd\tabc123\tBSD-3-Clause\timported-notice-retained\n",
+                encoding="utf-8")
+            (root / "rtl" / "cpu").mkdir(parents=True)
+            vendored = root / "rtl" / "cpu" / "vendor.vhd"
+            vendored.write_text("-- trailing space here   \nno final newline", encoding="utf-8")
+
+            self.assertEqual(check_repo.text_errors(vendored, root), [])
+
+    def test_the_exemption_does_not_cover_project_files(self) -> None:
+        # The hole must be exactly the manifest's imported paths and no wider,
+        # or the formatting rules quietly stop applying to our own code.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "docs").mkdir()
+            (root / "docs" / "upstream-files.tsv").write_text(
+                "path\tgit_blob\tobserved_notice\tdisposition\n"
+                "rtl/cpu/vendor.vhd\tabc123\tBSD-3-Clause\timported-notice-retained\n"
+                "rtl/cpu/candidate.vhd\tdef456\tBSD-3-Clause\tcandidate-import-retain-notice\n",
+                encoding="utf-8")
+            (root / "rtl" / "cpu").mkdir(parents=True)
+
+            ours = root / "rtl" / "ours.v"
+            ours.write_text("// trailing space   \n", encoding="utf-8")
+            self.assertTrue(check_repo.text_errors(ours, root),
+                            "project files must still be checked")
+
+            # A path still listed as a candidate has not been imported, so it
+            # gets no exemption either.
+            candidate = root / "rtl" / "cpu" / "candidate.vhd"
+            candidate.write_text("-- trailing space   \n", encoding="utf-8")
+            self.assertTrue(check_repo.text_errors(candidate, root),
+                            "un-imported candidates must still be checked")
+
 
 if __name__ == "__main__":
     unittest.main()

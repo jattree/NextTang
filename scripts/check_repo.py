@@ -213,8 +213,29 @@ def svg_errors(path: Path, root: Path = REPO_ROOT) -> list[str]:
     return errors
 
 
+def imported_upstream_paths(root: Path = REPO_ROOT) -> frozenset[str]:
+    """Paths taken byte-identical from an audited upstream tree.
+
+    These are verified against the Git blob hashes in the per-file audit and
+    their licences require the notices to survive redistribution, so the
+    project's own formatting rules must not be applied to them. Reformatting
+    would break both the hash match and the provenance claim it supports.
+    """
+    manifest = root / "docs" / "upstream-files.tsv"
+    if not manifest.is_file():
+        return frozenset()
+    paths = set()
+    for line in manifest.read_text(encoding="utf-8").splitlines()[1:]:
+        columns = line.split("\t")
+        if len(columns) >= 4 and columns[3].startswith("imported"):
+            paths.add(columns[0])
+    return frozenset(paths)
+
+
 def text_errors(path: Path, root: Path = REPO_ROOT) -> list[str]:
     relative = path.relative_to(root)
+    if relative.as_posix() in imported_upstream_paths(root):
+        return []
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
