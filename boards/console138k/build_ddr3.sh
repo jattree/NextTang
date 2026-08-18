@@ -137,6 +137,7 @@ repo_source_files=(
 {
     printf '%s\n' \
         'set_device -device_version C GW5AST-LV138PG484AC1/I0' \
+        'set_option -gen_text_timing_rpt 1' \
         "set_option -top_module $top_module" \
         "set_option -output_base_name $base_name" \
         "add_file {$vendor_source/ddr3_memory_interface/ddr3_memory_interface.v}" \
@@ -173,39 +174,7 @@ for required_file in \
     fi
 done
 
-python3 - "$timing_report" <<'PY'
-from html.parser import HTMLParser
-from pathlib import Path
-import re
-import sys
-
-
-class TextCollector(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        cleaned = " ".join(data.split())
-        if cleaned:
-            self.parts.append(cleaned)
-
-
-collector = TextCollector()
-collector.feed(Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace"))
-report = " | ".join(collector.parts)
-for analysis in ("Setup", "Hold"):
-    match = re.search(
-        rf"Numbers of {analysis} Violated Endpoints \| (\d+)", report
-    )
-    if match is None:
-        raise SystemExit(f"timing check: missing {analysis.lower()} violation count")
-    if int(match.group(1)) != 0:
-        raise SystemExit(
-            f"timing check: {match.group(1)} {analysis.lower()} endpoints violated"
-        )
-print("timing check: PASS (0 setup violations, 0 hold violations)")
-PY
+python3 "$repo_root/scripts/check_timing.py" "$timing_report" || exit 1
 
 for source_file in "${repo_source_files[@]}"; do
     printf '%s  %s\n' \

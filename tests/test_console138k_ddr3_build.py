@@ -71,7 +71,9 @@ class Console138kDdr3BuildDriverTests(unittest.TestCase):
         )
         self.assertIn("vendor-source-sha256.txt", source)
         self.assertIn("build-manifest.txt", source)
-        self.assertIn("Numbers of {analysis} Violated Endpoints", source)
+        # The driver must reject a build that violates timing. It calls the
+        # shared checker rather than carrying its own copy of the parsing.
+        self.assertIn("scripts/check_timing.py", source)
         self.assertIn("nexttang_console138k_ddr3_logo", source)
         self.assertIn("nexttang_ddr3_logo_engine.v", source)
 
