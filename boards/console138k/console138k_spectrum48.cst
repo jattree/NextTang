@@ -1,0 +1,29 @@
+// Tang Console 138K NEO, GW5AST-138C PG484. Processor with display output.
+IO_LOC "sys_clk" V22;
+IO_PORT "sys_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=OFF;
+
+IO_LOC "debug_uart_tx" E18;
+IO_PORT "debug_uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+IO_LOC "tmds_clk_p" G15;
+IO_PORT "tmds_clk_p" PULL_MODE=NONE IO_TYPE=LVCMOS33D DRIVE=8;
+IO_LOC "tmds_clk_n" G16;
+IO_PORT "tmds_clk_n" PULL_MODE=NONE IO_TYPE=LVCMOS33D DRIVE=8;
+IO_LOC "tmds_d_p[0]" J14;
+IO_PORT "tmds_d_p[0]" PULL_MODE=NONE IO_TYPE=LVCMOS33D DRIVE=8;
+IO_LOC "tmds_d_n[0]" H14;
+IO_PORT "tmds_d_n[0]" PULL_MODE=NONE IO_TYPE=LVCMOS33D DRIVE=8;
+IO_LOC "tmds_d_p[1]" J15;
+IO_PORT "tmds_d_p[1]" PULL_MODE=NONE IO_TYPE=LVCMOS33D DRIVE=8;
+IO_LOC "tmds_d_n[1]" H15;
+IO_PORT "tmds_d_n[1]" PULL_MODE=NONE IO_TYPE=LVCMOS33D DRIVE=8;
+IO_LOC "tmds_d_p[2]" K17;
+IO_PORT "tmds_d_p[2]" PULL_MODE=NONE IO_TYPE=LVCMOS33D DRIVE=8;
+IO_LOC "tmds_d_n[2]" J17;
+IO_PORT "tmds_d_n[2]" PULL_MODE=NONE IO_TYPE=LVCMOS33D DRIVE=8;
+
+// Source-side 5V presence on the HDMI connector. Sipeed report this has to be
+// driven high for a sink to see the output. Every earlier image left it
+// unconstrained and therefore floating.
+IO_LOC "tmds_psv" K14;
+IO_PORT "tmds_psv" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
