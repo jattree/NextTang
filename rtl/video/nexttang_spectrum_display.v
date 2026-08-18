@@ -93,6 +93,24 @@ module nexttang_spectrum_display #(
     reg [7:0] attribute_active;
     reg [H_BITS-1:0] previous_pixel;
 
+    // Screen memory answers a cycle after the address is presented, so the byte
+    // arriving now belongs to the previous cycle's fetch. Routing it by the
+    // current phase puts the bitmap in the attribute latch and the attribute in
+    // the bitmap latch, which still draws colour and so looks like a picture
+    // until you compare it against what was written.
+    reg fetched_attribute;
+    reg fetched_active;
+
+    always @(posedge pixel_clk) begin
+        if (reset) begin
+            fetched_attribute <= 0;
+            fetched_active <= 0;
+        end else begin
+            fetched_attribute <= fetch_attribute;
+            fetched_active <= fetch_active;
+        end
+    end
+
     always @(posedge pixel_clk) begin
         if (reset) begin
             bitmap_latch <= 0;
@@ -101,8 +119,8 @@ module nexttang_spectrum_display #(
             attribute_active <= 0;
             previous_pixel <= 0;
         end else begin
-            if (fetch_active) begin
-                if (fetch_attribute)
+            if (fetched_active) begin
+                if (fetched_attribute)
                     attribute_latch <= screen_data;
                 else
                     bitmap_latch <= screen_data;

@@ -148,6 +148,38 @@ class SpectrumDisplayTest(unittest.TestCase):
 """))
         self.assertIn("ATTRIBUTE_OK", output)
 
+    def test_bitmap_and_attribute_bytes_do_not_swap(self) -> None:
+        # Screen memory answers a cycle after the address is presented, so the
+        # byte arriving now belongs to the previous cycle's fetch phase. Routing
+        # it by the current phase swaps the two, which still draws colour and so
+        # looked like a working picture on hardware.
+        #
+        # The vector has to make the swap change the output. Bitmap 0xf0 with
+        # attribute 0x02 renders the leftmost pixel as red ink. Swapped, 0xf0 is
+        # read as an attribute (bright, paper 6) and 0x02 as the bitmap, which
+        # renders yellow instead.
+        x, y = 0, 0
+        output = run_testbench(HARNESS.replace("BODY", f"""
+    initial begin
+        for (i = 0; i < 8192; i = i + 1) memory[i] = 8'h00;
+        memory[{screen_offset(x, y)}] = 8'hf0;      // left four pixels set
+        memory[{attribute_offset(x, y)}] = 8'h02;   // red ink, black paper
+        reset = 1; @(posedge clock); @(posedge clock); reset = 0;
+
+        goto(LEFT + 2, TOP + 2);
+        $display("PIXEL r=%02x g=%02x b=%02x", red, green, blue);
+        if (green !== 8'h00 || blue !== 8'h00)
+            $fatal(1, "expected red ink, got r=%02x g=%02x b=%02x. The bitmap and attribute bytes are swapped.",
+                   red, green, blue);
+        if (red === 8'h00)
+            $fatal(1, "set pixel drew no ink at all");
+        $display("NO_SWAP_OK");
+        $finish;
+    end
+"""))
+        self.assertIn("NO_SWAP_OK", output)
+
+
     def test_the_border_shows_outside_the_picture(self) -> None:
         # Left of the picture the border colour must show regardless of what is
         # in screen memory, which is what makes the display look like the
