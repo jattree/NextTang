@@ -28,25 +28,49 @@ module nexttang_key_sequencer #(
     localparam integer START_CYCLES = (CLOCK_HZ / 1000) * START_DELAY_MS;
     localparam integer HOLD_CYCLES  = (CLOCK_HZ / 1000) * HOLD_MS;
     localparam integer GAP_CYCLES   = (CLOCK_HZ / 1000) * GAP_MS;
-    localparam integer STEPS = 12;
+    localparam integer STEPS = 31;
 
-    // Each step is {symbol shift, row, column}. The keyword P at the start of a
-    // line gives PRINT, and symbol shift with P gives a quote.
+    // Each step is {symbol shift, row, column}.
     //
-    //   PRINT "NEXTTANG"
-    function [6:0] step_key(input [3:0] index);
+    //   10 PRINT "nexttang was here"
+    //   20 GOTO 10
+    //   RUN
+    //
+    // A letter typed where a statement may start gives its keyword, so P after
+    // a line number is PRINT, G is GOTO and R on an empty line is RUN. Symbol
+    // shift with P is a quote.
+    function [6:0] step_key(input [4:0] index);
         case (index)
-            4'd0:  step_key = {1'b0, 3'd5, 3'd0};   // P, which prints as PRINT
-            4'd1:  step_key = {1'b1, 3'd5, 3'd0};   // symbol shift P, a quote
-            4'd2:  step_key = {1'b0, 3'd7, 3'd3};   // N
-            4'd3:  step_key = {1'b0, 3'd2, 3'd2};   // E
-            4'd4:  step_key = {1'b0, 3'd0, 3'd2};   // X
-            4'd5:  step_key = {1'b0, 3'd2, 3'd4};   // T
-            4'd6:  step_key = {1'b0, 3'd2, 3'd4};   // T
-            4'd7:  step_key = {1'b0, 3'd1, 3'd0};   // A
-            4'd8:  step_key = {1'b0, 3'd7, 3'd3};   // N
-            4'd9:  step_key = {1'b0, 3'd1, 3'd4};   // G
-            4'd10: step_key = {1'b1, 3'd5, 3'd0};   // symbol shift P, a quote
+            5'd0:  step_key = {1'b0, 3'd3, 3'd0};   // 1
+            5'd1:  step_key = {1'b0, 3'd4, 3'd0};   // 0
+            5'd2:  step_key = {1'b0, 3'd5, 3'd0};   // P, gives PRINT
+            5'd3:  step_key = {1'b1, 3'd5, 3'd0};   // quote
+            5'd4:  step_key = {1'b0, 3'd7, 3'd3};   // N
+            5'd5:  step_key = {1'b0, 3'd2, 3'd2};   // E
+            5'd6:  step_key = {1'b0, 3'd0, 3'd2};   // X
+            5'd7:  step_key = {1'b0, 3'd2, 3'd4};   // T
+            5'd8:  step_key = {1'b0, 3'd2, 3'd4};   // T
+            5'd9:  step_key = {1'b0, 3'd1, 3'd0};   // A
+            5'd10: step_key = {1'b0, 3'd7, 3'd3};   // N
+            5'd11: step_key = {1'b0, 3'd1, 3'd4};   // G
+            5'd12: step_key = {1'b0, 3'd7, 3'd0};   // space
+            5'd13: step_key = {1'b0, 3'd2, 3'd1};   // W
+            5'd14: step_key = {1'b0, 3'd1, 3'd0};   // A
+            5'd15: step_key = {1'b0, 3'd1, 3'd1};   // S
+            5'd16: step_key = {1'b0, 3'd7, 3'd0};   // space
+            5'd17: step_key = {1'b0, 3'd6, 3'd4};   // H
+            5'd18: step_key = {1'b0, 3'd2, 3'd2};   // E
+            5'd19: step_key = {1'b0, 3'd2, 3'd3};   // R
+            5'd20: step_key = {1'b0, 3'd2, 3'd2};   // E
+            5'd21: step_key = {1'b1, 3'd5, 3'd0};   // quote
+            5'd22: step_key = {1'b0, 3'd6, 3'd0};   // ENTER
+            5'd23: step_key = {1'b0, 3'd3, 3'd1};   // 2
+            5'd24: step_key = {1'b0, 3'd4, 3'd0};   // 0
+            5'd25: step_key = {1'b0, 3'd1, 3'd4};   // G, gives GOTO
+            5'd26: step_key = {1'b0, 3'd3, 3'd0};   // 1
+            5'd27: step_key = {1'b0, 3'd4, 3'd0};   // 0
+            5'd28: step_key = {1'b0, 3'd6, 3'd0};   // ENTER
+            5'd29: step_key = {1'b0, 3'd2, 3'd3};   // R, gives RUN
             default: step_key = {1'b0, 3'd6, 3'd0}; // ENTER
         endcase
     endfunction
@@ -54,7 +78,7 @@ module nexttang_key_sequencer #(
     localparam [1:0] WAITING = 2'd0, HOLDING = 2'd1, RELEASING = 2'd2, DONE = 2'd3;
 
     reg [1:0]  state = WAITING;
-    reg [3:0]  step = 0;
+    reg [4:0]  step = 0;
     reg [26:0] timer = 0;
 
     wire [6:0] current = step_key(step);
@@ -109,9 +133,19 @@ module nexttang_key_sequencer #(
                     end
                 end
 
+                // A listing that fills the screen stops at "scroll?" and
+                // waits for a key. SPACE is BREAK there and would end the
+                // program, so ENTER is tapped forever to keep it running.
                 default: begin
-                    keys <= 0;
                     finished <= 1'b1;
+                    if (timer == HOLD_CYCLES + GAP_CYCLES - 1)
+                        timer <= 0;
+                    else
+                        timer <= timer + 1'b1;
+
+                    keys <= 0;
+                    if (timer < HOLD_CYCLES)
+                        keys[6 * 5 + 0] <= 1'b1;      // ENTER
                 end
             endcase
         end
