@@ -135,12 +135,19 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 
     wire cpu_clock;
 
-    CLKDIV #(.DIV_MODE("8")) cpu_clock_divider (
-        .HCLKIN(clock_28),
-        .RESETN(machine_pll_locked),
-        .CALIB(1'b0),
-        .CLKOUT(cpu_clock)
-    );
+    // 3.5 MHz is 7 halved. Dividing it here rather than with a third CLKDIV
+    // keeps clock_28 down to two HCLK sections, which is what the device will
+    // route, and ties the CPU's phase to the ULA it shares screen memory with.
+    reg cpu_clock_divided = 1'b0;
+
+    always @(posedge clock_7 or negedge machine_pll_locked) begin
+        if (!machine_pll_locked)
+            cpu_clock_divided <= 1'b0;
+        else
+            cpu_clock_divided <= ~cpu_clock_divided;
+    end
+
+    assign cpu_clock = cpu_clock_divided;
 
     reg [3:0] pixel_reset_shift = 0;
     reg [3:0] cpu_reset_shift = 0;

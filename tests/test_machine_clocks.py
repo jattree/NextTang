@@ -277,8 +277,8 @@ module PLL #(
     input wire ENCLK4, ENCLK5, ENCLK6, SSCPOL, SSCON
 );
     assign CLKOUT0 = testbench.source_28;
-    assign CLKOUT1 = testbench.source_14;
-    assign CLKOUT2 = testbench.source_7;
+    assign CLKOUT1 = 1'b0;
+    assign CLKOUT2 = 1'b0;
     assign CLKOUT3 = testbench.source_28_n;
     assign CLKOUT4 = 0;
     assign CLKOUT5 = 0;
@@ -310,21 +310,51 @@ module PLL #(
 
         if (vco_mhz / ODIV0_SEL != 28.0)
             $fatal(1, "CLKOUT0 is %f MHz, not the required 28", vco_mhz / ODIV0_SEL);
-        if (vco_mhz / ODIV1_SEL != 14.0)
-            $fatal(1, "CLKOUT1 is %f MHz, not the required 14", vco_mhz / ODIV1_SEL);
-        if (vco_mhz / ODIV2_SEL != 7.0)
-            $fatal(1, "CLKOUT2 is %f MHz, not the required 7", vco_mhz / ODIV2_SEL);
         if (ODIV3_SEL != ODIV0_SEL)
             $fatal(1, "the shifted output must divide the same as CLKOUT0");
-        if (CLKOUT0_EN != "TRUE" || CLKOUT1_EN != "TRUE" ||
-            CLKOUT2_EN != "TRUE" || CLKOUT3_EN != "TRUE")
+        if (CLKOUT0_EN != "TRUE" || CLKOUT3_EN != "TRUE")
             $fatal(1, "a machine-clock output was disabled");
-        if (CLKOUT0_PE_COARSE != 0 || CLKOUT0_PE_FINE != 0 ||
-            CLKOUT1_PE_COARSE != 0 || CLKOUT1_PE_FINE != 0 ||
-            CLKOUT2_PE_COARSE != 0 || CLKOUT2_PE_FINE != 0)
+        // 14 and 7 are divided from 28 in fabric. Taking them as further PLL
+        // outputs put them on unrelated clock resources, and the skew between
+        // them broke hold timing inside the ULA.
+        if (CLKOUT1_EN != "FALSE" || CLKOUT2_EN != "FALSE")
+            $fatal(1, "14 and 7 MHz must not be separate PLL outputs");
+        if (CLKOUT0_PE_COARSE != 0 || CLKOUT0_PE_FINE != 0)
             $fatal(1, "machine-clock phase was not zero");
         if (CLKOUT3_PE_COARSE != 13 || CLKOUT3_PE_FINE != 4)
             $fatal(1, "complementary 28 MHz phase was not 180 degrees");
+    end
+endmodule
+
+
+module CLKDIV #(parameter DIV_MODE = "2") (
+    output reg CLKOUT,
+    input wire CALIB,
+    input wire HCLKIN,
+    input wire RESETN
+);
+    integer divisor;
+    integer count;
+
+    initial begin
+        CLKOUT = 1'b0;
+        count = 0;
+        if (DIV_MODE == "2") divisor = 2;
+        else if (DIV_MODE == "4") divisor = 4;
+        else if (DIV_MODE == "8") divisor = 8;
+        else $fatal(1, "CLKDIV mode %s is not one this board uses", DIV_MODE);
+    end
+
+    always @(posedge HCLKIN or negedge RESETN) begin
+        if (!RESETN) begin
+            count <= 0;
+            CLKOUT <= 1'b0;
+        end else if (count == divisor / 2 - 1) begin
+            count <= 0;
+            CLKOUT <= ~CLKOUT;
+        end else begin
+            count <= count + 1;
+        end
     end
 endmodule
 
@@ -332,8 +362,6 @@ module testbench;
     reg clock_in = 0;
     reg source_28 = 0;
     reg source_28_n = 1;
-    reg source_14 = 0;
-    reg source_7 = 0;
     reg source_lock = 0;
     wire clock_28;
     wire clock_28_n;
@@ -341,29 +369,49 @@ module testbench;
     wire clock_7;
     wire locked;
 
+    integer edges_28 = 0;
+    integer edges_14 = 0;
+    integer edges_7 = 0;
+
     nexttang_console138k_machine_pll dut (
         .clock_in(clock_in), .clock_28(clock_28), .clock_28_n(clock_28_n),
         .clock_14(clock_14), .clock_7(clock_7), .locked(locked)
     );
 
+    always #5 source_28 = ~source_28;
+    always @(*) source_28_n = ~source_28;
+
+    always @(posedge clock_28) edges_28 = edges_28 + 1;
+    always @(posedge clock_14) edges_14 = edges_14 + 1;
+    always @(posedge clock_7) edges_7 = edges_7 + 1;
+
     initial begin
+        source_lock = 0;
+        #200;
+        // Held in reset the dividers must not run, or their phase against each
+        // other on release is not defined.
+        if (edges_14 != 0 || edges_7 != 0)
+            $fatal(1, "a divider ran while the PLL was unlocked");
+        if (!clock_28)
+            ;
         source_lock = 1;
-        source_28 = 1;
-        source_28_n = 0;
-        source_14 = 1;
-        source_7 = 1;
-        #1;
+        #100;
+        edges_28 = 0;
+        edges_14 = 0;
+        edges_7 = 0;
+        #10000;
         if (!locked)
             $fatal(1, "PLL lock output was not mapped");
-        if ({clock_28, clock_28_n, clock_14, clock_7} !== 4'b1011)
-            $fatal(1, "machine clocks were mapped to the wrong PLL outputs");
-        source_28 = 0;
-        source_28_n = 1;
-        source_14 = 0;
-        source_7 = 0;
-        #1;
-        if ({clock_28, clock_28_n, clock_14, clock_7} !== 4'b0100)
-            $fatal(1, "machine clock output did not follow its mapped channel");
+        if (edges_28 == 0)
+            $fatal(1, "28 MHz was not mapped to CLKOUT0");
+        // 14 and 7 are divided from the same source and released together, so
+        // the counts must stand in exact ratio rather than merely be close.
+        if (edges_14 * 2 < edges_28 - 2 || edges_14 * 2 > edges_28 + 2)
+            $fatal(1, "14 MHz is not half of 28: %0d against %0d",
+                   edges_14, edges_28);
+        if (edges_7 * 4 < edges_28 - 4 || edges_7 * 4 > edges_28 + 4)
+            $fatal(1, "7 MHz is not a quarter of 28: %0d against %0d",
+                   edges_7, edges_28);
         $display("CONSOLE138K_MACHINE_PLL_PASS");
         $finish;
     end
@@ -421,8 +469,8 @@ module PLL #(
     input wire ENCLK4, ENCLK5, ENCLK6, SSCPOL, SSCON
 );
     assign CLKOUT0 = testbench.source_28;
-    assign CLKOUT1 = testbench.source_14;
-    assign CLKOUT2 = testbench.source_7;
+    assign CLKOUT1 = 1'b0;
+    assign CLKOUT2 = 1'b0;
     assign CLKOUT3 = testbench.source_28_n;
     assign CLKOUT4 = 0;
     assign CLKOUT5 = 0;
@@ -443,6 +491,38 @@ module DCS #(
                     CLKSEL[1] ? CLKIN1 :
                     CLKSEL[2] ? CLKIN2 :
                     CLKSEL[3] ? CLKIN3 : 1'b0;
+endmodule
+
+
+module CLKDIV #(parameter DIV_MODE = "2") (
+    output reg CLKOUT,
+    input wire CALIB,
+    input wire HCLKIN,
+    input wire RESETN
+);
+    integer divisor;
+    integer count;
+
+    initial begin
+        CLKOUT = 1'b0;
+        count = 0;
+        if (DIV_MODE == "2") divisor = 2;
+        else if (DIV_MODE == "4") divisor = 4;
+        else if (DIV_MODE == "8") divisor = 8;
+        else $fatal(1, "CLKDIV mode %s is not one this board uses", DIV_MODE);
+    end
+
+    always @(posedge HCLKIN or negedge RESETN) begin
+        if (!RESETN) begin
+            count <= 0;
+            CLKOUT <= 1'b0;
+        end else if (count == divisor / 2 - 1) begin
+            count <= 0;
+            CLKOUT <= ~CLKOUT;
+        end else begin
+            count <= count + 1;
+        end
+    end
 endmodule
 
 module testbench;
@@ -480,9 +560,13 @@ module testbench;
         end
     endtask
 
+    // 7 MHz is divided from 28 now, so it is stepped by running its source.
     task pulse_7;
         begin
-            source_7 = 1; #1; source_7 = 0; #1;
+            pulse_28();
+            pulse_28();
+            pulse_28();
+            pulse_28();
         end
     endtask
 

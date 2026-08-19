@@ -5,10 +5,13 @@ create_clock -name sys_clk -period 20.000 [get_ports {sys_clk}]
 create_clock -name serial_clock -period 2.6891 [get_nets {serial_clock}]
 create_clock -name pixel_clock -period 13.4454 [get_pins {video_pll/pll/CLKOUT1}]
 
-create_clock -name clock_28 -period 35.714 [get_nets {clock_28}]
-create_clock -name clock_14 -period 71.429 [get_nets {clock_14}]
-create_clock -name clock_7 -period 142.857 [get_nets {clock_7}]
-create_generated_clock -name cpu_clock -source [get_nets {clock_28}] -divide_by 8 [get_pins {cpu_clock_divider/CLKOUT}]
+# The machine PLL emits these from one VCO, so they are phase related. Declaring
+# them as three independent clocks leaves the tool guessing at their alignment,
+# and the ULA's video read crosses them into a falling edge latch inside zxula.
+create_clock -name clock_28 -period 35.714 [get_pins {machine_pll/pll/CLKOUT0}]
+create_generated_clock -name clock_14 -source [get_pins {machine_pll/pll/CLKOUT0}] -divide_by 2 [get_pins {machine_pll/divider_14/CLKOUT}]
+create_generated_clock -name clock_7 -source [get_pins {machine_pll/pll/CLKOUT0}] -divide_by 4 [get_pins {machine_pll/divider_7/CLKOUT}]
+create_generated_clock -name cpu_clock -source [get_pins {machine_pll/divider_7/CLKOUT}] -divide_by 2 [get_pins {cpu_clock_divided_s0/Q}]
 
 # The frame buffer and its toggle handshakes are the only boundary between the
 # native 50 Hz machine raster and the 720p60 output. Each scalar control signal

@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 NextTang contributors
 //
-// 50 MHz input, 50 MHz PFD and 700 MHz VCO.  Three phase-zero outputs divide
-// the common VCO by 25, 50 and 100 for exact 28, 14 and 7 MHz machine clocks.
-// A fourth divide-by-25 output is shifted by 180 degrees.
+// 50 MHz input, 50 MHz PFD and 700 MHz VCO.  One phase-zero output divides the
+// VCO by 25 for an exact 28 MHz, and a second divide-by-25 output is shifted by
+// 180 degrees.  14 and 7 MHz are divided down from 28 in fabric rather than
+// taken as further PLL outputs.
+//
+// They were PLL outputs, and the three clocks then landed on unrelated clock
+// resources with 405 ps of skew between them, which broke hold timing inside
+// the upstream ULA on its own 7 to 14 MHz paths.  Dividing from one source with
+// one reset makes the relationship the constraints declare a real one.
 //
 // The 50 MHz board clock on V22 is used rather than the Dock's 27 MHz on V10,
 // which has no clock-capable routing on this device.  Integer dividers reach
@@ -21,6 +27,8 @@ module nexttang_console138k_machine_pll (
 );
     wire ground = 1'b0;
     wire power = 1'b1;
+    wire unused_clock_one;
+    wire unused_clock_two;
     wire unused_clock_four;
     wire unused_clock_five;
     wire unused_clock_six;
@@ -29,8 +37,8 @@ module nexttang_console138k_machine_pll (
     PLL pll (
         .LOCK(locked),
         .CLKOUT0(clock_28),
-        .CLKOUT1(clock_14),
-        .CLKOUT2(clock_7),
+        .CLKOUT1(unused_clock_one),
+        .CLKOUT2(unused_clock_two),
         .CLKOUT3(clock_28_n),
         .CLKOUT4(unused_clock_four),
         .CLKOUT5(unused_clock_five),
@@ -91,8 +99,8 @@ module nexttang_console138k_machine_pll (
     defparam pll.MDIV_FRAC_SEL = 0;
     defparam pll.ODIV0_FRAC_SEL = 0;
     defparam pll.CLKOUT0_EN = "TRUE";
-    defparam pll.CLKOUT1_EN = "TRUE";
-    defparam pll.CLKOUT2_EN = "TRUE";
+    defparam pll.CLKOUT1_EN = "FALSE";
+    defparam pll.CLKOUT2_EN = "FALSE";
     defparam pll.CLKOUT3_EN = "TRUE";
     defparam pll.CLKOUT4_EN = "FALSE";
     defparam pll.CLKOUT5_EN = "FALSE";
@@ -107,6 +115,24 @@ module nexttang_console138k_machine_pll (
     defparam pll.CLKOUT2_PE_FINE = 0;
     defparam pll.CLKOUT3_PE_COARSE = 13;
     defparam pll.CLKOUT3_PE_FINE = 4;
+
+    // Both dividers take the same high speed clock and come out of the same
+    // reset, so their counters start together and 7 MHz keeps a fixed phase
+    // against 14 MHz. A CLKDIV output is not a valid HCLKIN, so 7 is divided
+    // from 28 directly rather than chained off 14.
+    CLKDIV #(.DIV_MODE("2")) divider_14 (
+        .HCLKIN(clock_28),
+        .RESETN(locked),
+        .CALIB(1'b0),
+        .CLKOUT(clock_14)
+    );
+
+    CLKDIV #(.DIV_MODE("4")) divider_7 (
+        .HCLKIN(clock_28),
+        .RESETN(locked),
+        .CALIB(1'b0),
+        .CLKOUT(clock_7)
+    );
 endmodule
 
 `default_nettype wire
