@@ -84,8 +84,8 @@ rtl/video/layer2.vhd	1dfa7096669eff482200ba30f02328c2a8d1cf37	GPL-3.0-or-later	c
 rtl/video/lores.vhd	17ba4cd46ae9a7ce43cbd32cb8387b9993cde5be	GPL-3.0-or-later	candidate-import-retain-notice
 rtl/video/sprites.vhd	61962ec723327f138590d1c50f3003f2d37d7ad6	GPL-3.0-or-later	candidate-import-retain-notice
 rtl/video/tilemap.vhd	987d57f9281dcc3fc011e08c5f4876e8ac06a987	GPL-3.0-or-later	candidate-import-retain-notice
-rtl/video/zxula.vhd	af1d61ad617fe6ee576cf46ab3dfe0dbc2cd549b	GPL-3.0-or-later	candidate-import-retain-notice
-rtl/video/zxula_timing.vhd	a0329facfa0175e50c708ac6749fc8c8f9bd6993	GPL-3.0-or-later	candidate-import-retain-notice
+rtl/video/zxula.vhd	af1d61ad617fe6ee576cf46ab3dfe0dbc2cd549b	GPL-3.0-or-later	imported-upstream-retain-notice
+rtl/video/zxula_timing.vhd	a0329facfa0175e50c708ac6749fc8c8f9bd6993	GPL-3.0-or-later	imported-upstream-retain-notice
 rtl/zxnext.vhd	615d1fc9b908ba0f7651ae2895db3fcbb4676fc0	GPL-3.0-or-later	candidate-import-retain-notice
 sys/alsa.sv	90343893eac82574438c6dbdc0881d2a3d9048fa	GPL-2.0-or-later	exclude-mister-framework
 sys/arcade_video.v	f41d0422958ad1ebf97f10934a05129c1bca9bb8	GPL-2.0-or-later	exclude-mister-framework

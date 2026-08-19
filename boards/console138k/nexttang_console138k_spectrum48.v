@@ -18,7 +18,11 @@
 
 `default_nettype none
 
-module nexttang_console138k_spectrum48 #(
+`ifndef NEXTTANG_SPECTRUM48_TOP
+`define NEXTTANG_SPECTRUM48_TOP nexttang_console138k_spectrum48
+`endif
+
+module `NEXTTANG_SPECTRUM48_TOP #(
     // The build writes the image into its own directory and runs there.
     parameter ROM_IMAGE = "48k.mem"
 ) (
@@ -47,14 +51,16 @@ module nexttang_console138k_spectrum48 #(
     );
 
     wire clock_28;
+    wire clock_14;
+    wire clock_7;
     wire machine_pll_locked;
 
     nexttang_console138k_machine_pll machine_pll (
         .clock_in(sys_clk),
         .clock_28(clock_28),
         .clock_28_n(),
-        .clock_14(),
-        .clock_7(),
+        .clock_14(clock_14),
+        .clock_7(clock_7),
         .locked(machine_pll_locked)
     );
 
@@ -146,6 +152,8 @@ module nexttang_console138k_spectrum48 #(
     wire [7:0] ram_data;
     wire [12:0] display_address;
     wire [7:0]  display_data;
+    wire [13:0] ula_vram_address;
+    wire [7:0]  ula_vram_data;
 
     nexttang_rom #(
         .ADDRESS_BITS(14),
@@ -162,9 +170,15 @@ module nexttang_console138k_spectrum48 #(
         .write_address(cpu_address),
         .write_data(cpu_data_out),
         .read_data(ram_data),
+`ifdef NEXTTANG_SPECTRUM48_USE_ULA
+        .port_b_clock(clock_7),
+        .port_b_address({2'b01, ula_vram_address}),  // ULA screen bank at 0x4000
+        .port_b_data(ula_vram_data)
+`else
         .port_b_clock(pixel_clock),
-        .port_b_address({3'b010, display_address}),   // screen lives at 0x4000
+        .port_b_address({3'b010, display_address}),  // screen lives at 0x4000
         .port_b_data(display_data)
+`endif
     );
 
     // Port 0xFE is decoded on address bit 0 alone, as the original did. Reading
@@ -214,21 +228,189 @@ module nexttang_console138k_spectrum48 #(
     end
 
     // ------------------------------------------------------------------ video
-    wire hsync;
-    wire vsync;
-    wire data_enable;
+    wire timing_hsync;
+    wire timing_vsync;
+    wire timing_data_enable;
     wire [10:0] horizontal_position;
     wire [9:0]  vertical_position;
 
     nexttang_video_timing timing (
         .pixel_clk(pixel_clock),
         .reset(pixel_reset),
-        .hsync(hsync),
-        .vsync(vsync),
-        .data_enable(data_enable),
+        .hsync(timing_hsync),
+        .vsync(timing_vsync),
+        .data_enable(timing_data_enable),
         .horizontal_position(horizontal_position),
         .vertical_position(vertical_position)
     );
+
+    wire hsync;
+    wire vsync;
+    wire data_enable;
+    wire [7:0] red;
+    wire [7:0] green;
+    wire [7:0] blue;
+
+`ifdef NEXTTANG_SPECTRUM48_USE_ULA
+    // The imported timing and ULA modules generate the native 48K raster.  A
+    // frame buffer is the explicit 50 Hz -> 60 Hz clock and cadence boundary;
+    // it doubles the qualified 360x288 source to 720x576 inside 720p.
+    wire ula_frame_sync;
+    wire ula_hdmi_pixel_enable;
+    wire ula_hdmi_frame_lock;
+    wire ula_hblank_n;
+    wire ula_vblank_n;
+    wire ula_hsync_n;
+    wire ula_vsync_n;
+    wire [8:0] ula_hc;
+    wire [8:0] ula_vc;
+    wire [8:0] ula_cvc;
+    wire [8:0] ula_whc;
+    wire [8:0] ula_wvc;
+    wire [8:0] ula_phc;
+    wire [1:0] ula_subpixel;
+    wire ula_interrupt;
+    wire ula_line_interrupt;
+
+    zxula_timing ula_timing (
+        .i_CLK_28(clock_28),
+        .i_50_60(1'b0),
+        .i_timing(3'b000),
+        .i_cu_offset(8'h00),
+        .i_CLK_7(clock_7),
+        .o_vblank_n(ula_vblank_n),
+        .o_hblank_n(ula_hblank_n),
+        .o_hsync_n(ula_hsync_n),
+        .o_vsync_n(ula_vsync_n),
+        .o_frame_sync(ula_frame_sync),
+        .o_hdmi_pixel_en(ula_hdmi_pixel_enable),
+        .o_hdmi_frame_lock(ula_hdmi_frame_lock),
+        .o_hc_ula(ula_hc),
+        .o_vc_ula(ula_vc),
+        .o_vc_cu(ula_cvc),
+        .o_whc(ula_whc),
+        .o_wvc(ula_wvc),
+        .o_phc(ula_phc),
+        .center(1'b1),
+        .o_sc(ula_subpixel),
+        .i_inten_ula_n(1'b0),
+        .i_inten_line(1'b0),
+        .i_int_line(9'b0),
+        .o_int_ula(ula_interrupt),
+        .o_int_line(ula_line_interrupt)
+    );
+
+    wire ula_shadow;
+    wire ula_vram_read;
+    wire ula_border;
+    wire [7:0] ula_pixel;
+    wire ula_select_background;
+    wire ula_clipped;
+    wire [7:0] ula_floating_bus;
+    wire ula_wait_n;
+    wire ula_cpu_contend;
+
+    zxula ula (
+        .i_CLK_7(clock_7),
+        .i_CLK_14(clock_14),
+        .i_CLK_CPU(cpu_clock),
+        .i_cpu_mreq_n(mreq_n),
+        .i_cpu_iorq_n(iorq_n),
+        .i_hc(ula_hc),
+        .i_vc(ula_vc),
+        .i_phc(ula_phc),
+        .i_timing_pentagon(1'b0),
+        .i_timing_p3(1'b0),
+        .i_port_ff_reg(6'b0),
+        .i_port_fe_border(border_colour),
+        .i_ula_shadow_en(1'b0),
+        .i_ulanext_en(1'b0),
+        .i_ulanext_format(8'hff),
+        .i_ulap_en(1'b0),
+        .o_ula_vram_a(ula_vram_address),
+        .o_ula_shadow(ula_shadow),
+        .o_ula_vram_rd(ula_vram_read),
+        .i_ula_vram_d(ula_vram_data),
+        .o_ula_border(ula_border),
+        .o_ula_pixel(ula_pixel),
+        .o_ula_select_bgnd(ula_select_background),
+        .o_ula_clipped(ula_clipped),
+        .i_ula_clip_x1(8'h00),
+        .i_ula_clip_x2(8'hff),
+        .i_ula_clip_y1(8'h00),
+        .i_ula_clip_y2(8'hbf),
+        .i_ula_scroll_x(8'h00),
+        .i_ula_scroll_y(8'h00),
+        .i_ula_fine_scroll_x(1'b0),
+        .i_p3_floating_bus(8'hff),
+        .o_ula_floating_bus(ula_floating_bus),
+        .i_contention_en(1'b0),
+        .i_contention_port(1'b0),
+        .i_contention_memory(1'b0),
+        .o_cpu_wait_n(ula_wait_n),
+        .o_cpu_contend(ula_cpu_contend)
+    );
+
+    wire capture_frame_start;
+    wire capture_pixel_valid;
+    wire [8:0] capture_x;
+    wire [8:0] capture_y;
+    wire [7:0] capture_pixel;
+    wire capture_protocol_error;
+
+    nexttang_ula_capture capture (
+        .clock(clock_7),
+        .reset(!machine_pll_locked),
+        .frame_sync(ula_frame_sync),
+        .pixel_valid(ula_hdmi_pixel_enable),
+        .pixel(ula_pixel),
+        .capture_frame_start(capture_frame_start),
+        .capture_pixel_valid(capture_pixel_valid),
+        .capture_x(capture_x),
+        .capture_y(capture_y),
+        .capture_pixel(capture_pixel),
+        .protocol_error(capture_protocol_error)
+    );
+
+    wire scaled_frame_valid;
+    wire scaled_overrun;
+    wire [7:0] scaled_pixel;
+    wire output_frame_start = horizontal_position == 0 && vertical_position == 0;
+
+    nexttang_framebuffer_scaler scaler (
+        .source_clock(clock_7),
+        .source_reset(!machine_pll_locked),
+        .source_frame_start(capture_frame_start),
+        .source_pixel_valid(capture_pixel_valid),
+        .source_x(capture_x),
+        .source_y(capture_y),
+        .source_pixel(capture_pixel),
+        .source_overrun(scaled_overrun),
+        .output_clock(pixel_clock),
+        .output_reset(pixel_reset),
+        .output_frame_start(output_frame_start),
+        .output_hsync(timing_hsync),
+        .output_vsync(timing_vsync),
+        .output_data_enable(timing_data_enable),
+        .output_x(horizontal_position),
+        .output_y(vertical_position),
+        .scaled_hsync(hsync),
+        .scaled_vsync(vsync),
+        .scaled_data_enable(data_enable),
+        .scaled_pixel(scaled_pixel),
+        .output_frame_valid(scaled_frame_valid)
+    );
+
+    nexttang_ula_palette palette (
+        .palette_index(scaled_pixel),
+        .red(red),
+        .green(green),
+        .blue(blue)
+    );
+`else
+    assign hsync = timing_hsync;
+    assign vsync = timing_vsync;
+    assign data_enable = timing_data_enable;
 
     reg previous_vsync = 0;
     reg [4:0] flash_counter = 0;
@@ -244,10 +426,6 @@ module nexttang_console138k_spectrum48 #(
         end
     end
 
-    wire [7:0] red;
-    wire [7:0] green;
-    wire [7:0] blue;
-
     nexttang_spectrum_display #(.SCALE(3)) display (
         .pixel_clk(pixel_clock),
         .reset(pixel_reset),
@@ -262,6 +440,7 @@ module nexttang_console138k_spectrum48 #(
         .green(green),
         .blue(blue)
     );
+`endif
 
     wire [9:0] red_symbol;
     wire [9:0] green_symbol;
@@ -363,13 +542,24 @@ module nexttang_console138k_spectrum48 #(
     // interrupt the ROM runs on.
     assign probe = {interrupt_n, wr_n, iorq_n, mreq_n, m1_n, cpu_clock};
 
+`ifdef NEXTTANG_SPECTRUM48_USE_ULA
+    wire [5:0] status_flags = {
+        capture_protocol_error, scaled_overrun, scaled_frame_valid,
+        screen_write_seen, opcode_seen, video_pll_locked
+    };
+`else
+    wire [5:0] status_flags = {
+        typing_finished, border_write_seen, high_ram_write_seen,
+        screen_write_seen, opcode_seen, video_pll_locked
+    };
+`endif
+
     nexttang_debug_status_uart #(
         .CLOCK_HZ(3500000)
     ) status_uart (
         .clock(cpu_clock),
         .reset(cpu_reset),
-        .flags({typing_finished, border_write_seen, high_ram_write_seen,
-                screen_write_seen, opcode_seen, video_pll_locked}),
+        .flags(status_flags),
         .value(opcode_count),
         .transmit(debug_uart_tx)
     );

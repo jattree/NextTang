@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL v3" src="https://img.shields.io/github/license/jattree/NextTang?style=flat-square&amp;color=0ea5e9"></a>
   <a href="https://github.com/jattree/NextTang/actions/workflows/quality.yml"><img alt="Quality checks" src="https://img.shields.io/github/actions/workflow/status/jattree/NextTang/quality.yml?branch=main&amp;style=flat-square&amp;label=quality"></a>
-  <a href="#current-status"><img alt="Status: first hardware image" src="https://img.shields.io/badge/status-first_hardware_image-f97316?style=flat-square"></a>
+  <a href="#current-status"><img alt="Status: standard ULA on hardware" src="https://img.shields.io/badge/status-standard_ULA_on_hardware-f97316?style=flat-square"></a>
   <a href="#hardware-targets"><img alt="Targets: Tang Nano 20K, Console 60K, and Console 138K" src="https://img.shields.io/badge/targets-Nano_20K_%7C_Console_60K_%7C_138K-334155?style=flat-square"></a>
   <a href="https://t.me/NextTang"><img alt="Telegram: NextTang" src="https://img.shields.io/badge/Telegram-NextTang-26A5E4?style=flat-square&amp;logo=telegram&amp;logoColor=white"></a>
   <a href="https://www.youtube.com/@NextTangFPGA"><img alt="YouTube: NextTang" src="https://img.shields.io/badge/YouTube-NextTang-FF0000?style=flat-square&amp;logo=youtube&amp;logoColor=white"></a>
@@ -26,22 +26,25 @@
 ## Current status
 
 > [!IMPORTANT]
-> The first NextTang-owned Console 138K smoke image is hardware-verified. It is
-> a board and video test, not the ZX Spectrum Next machine core, and establishes
-> no software-compatibility claim.
+> The Console 138K now boots a user-supplied Sinclair 48K ROM through the
+> imported T80 and standard upstream ULA. This is a hardware-verified platform
+> slice, not yet the ZX Spectrum Next machine core or a broad compatibility
+> claim.
 
-The image loads into volatile FPGA SRAM through the onboard debugger and
-generates DVI-compatible 1280 x 720/60 HDMI colour bars with a moving NextTang
-logo, above three diagnostic bands reporting the Dock's 27 MHz reference, the
-50 MHz board clock and the generated refresh rate. The pixel clock is
-74.375 MHz, 0.168 per cent above the standard 74.25 MHz, because exact 74.25 MHz
-is unreachable from this board's 50 MHz input; the monitor reports the mode as
-1280x720 60Hz. The exact C-device build reports zero setup and hold
-violations. Source,
-constraints and behavioural tests are under [`boards/console138k/`](boards/console138k/),
-[`rtl/smoke/`](rtl/smoke/) and
-[`tests/test_console138k_smoke.py`](tests/test_console138k_smoke.py). Generated
-bitstreams remain outside Git.
+The `ula` profile reads the Spectrum display file from on-chip machine RAM,
+captures complete native 360 x 288/50 Hz ULA frames and presents a 2x
+720 x 576 image inside the established 1280 x 720/60 HDMI output. A triple
+frame buffer keeps the machine and HDMI clock domains separate and changes the
+displayed bank only at a complete output-frame boundary. Five consecutive
+volatile-SRAM loads produced clean settled Elgato frames and matching FT232RL
+status with no framebuffer overrun or capture-protocol error. The exact
+C-device build reports zero setup and hold violations. Generated bitstreams,
+the user ROM and hardware captures remain outside Git.
+
+The original colour-bar/logo smoke image and the simpler 48K renderer remain
+separate rollback targets. Source, constraints and regressions are under
+[`boards/console138k/`](boards/console138k/), [`rtl/video/`](rtl/video/) and
+[`tests/`](tests/).
 
 Bring-up status is deliberately split between NextTang-owned behaviour and the
 factory TangCore baseline:
@@ -49,9 +52,9 @@ factory TangCore baseline:
 | Area | Current evidence |
 | --- | --- |
 | JTAG and programming | Hardware-verified 6 MHz scan and volatile SRAM loading; Gowin `GW5AST-138`, IDCODE `0x1081b` |
-| Clocks | Video-clock path hardware-verified: 74.375 MHz pixel clock from the 50 MHz board clock, refresh measured in-design over eight consecutive loads and reported by the monitor as 1280x720 60Hz. The Dock's 27 MHz reference on V10 is present but unusable as a video clock, since that pin has no clock-capable routing. Standalone 28, 14, 7 and 3.5 MHz machine-clock logic is simulation- and exact-device build-verified, but not connected to the core or hardware-verified |
-| UART | Behaviourally tested and included in the smoke image, but the attempted hardware read did not decode correctly |
-| HDMI | Hardware-verified for 720p60 video, colour, logo rendering and frame-driven motion; no HDMI audio |
+| Clocks | The 50 MHz board input, 74.375 MHz pixel path and 28/14/7/3.5 MHz machine tree are connected in the hardware-running 48K ULA image. The 3.5 MHz cadence is independently bounded by the decoded UART interval; the other machine clocks are vendor-model and build-verified but have not each been measured at a pin |
+| UART | Hardware-decoded through an external FT232RL. The current image reports video lock, CPU opcodes, screen writes, complete scaled frames, overrun and capture-protocol status on each line |
+| HDMI | Hardware-verified for 720p60 output, the standard 48K/50 Hz upstream ULA raster and frame-safe 50-to-60 Hz conversion; no HDMI audio |
 | DDR3 | Hardware-verified on the 30354 1 GB Hynix SOM: calibration, paired writes, read-back, every usable address-line position, the 512 MB boundary and the final aligned 32-byte beat pass with distinct retained patterns. The Console input is 50 MHz and the working path retains Gowin's generated dynamic PLL and `PLL_INIT`. Exhaustive every-cell and sustained-load testing remain open ([resolved issue #5](https://github.com/jattree/NextTang/issues/5)) |
 | SD | Factory TangCore reads the supplied card and loads packaged cores; no NextTang SD implementation |
 | Audio | Not brought up |
@@ -63,9 +66,10 @@ on-chip display buffers from DDR3, and advances the logo only after a complete
 refill. This proves a bounded live DDR consumer, not the machine CPU/video
 memory service or a full-screen DDR framebuffer.
 
-The next engineering gates are connecting the machine clock and CPU memory
-service to the working DDR3 controller, then open boot, storage, input and audio
-before any ZX Spectrum Next compatibility claim. The
+The next engineering gate is connecting banked machine memory to the working
+DDR3 controller while retaining the verified ULA output. Importing the wider
+Next core, storage, physical input and audio follow before any ZX Spectrum Next
+compatibility claim. The
 [starter roadmap](ROADMAP.md) defines the required evidence.
 
 The one part of the project not waiting on that board is the
@@ -114,7 +118,7 @@ cooperation or code sharing is welcome where technically and legally possible.
 
 | Target | Intended role | Status |
 | --- | --- | --- |
-| Tang Console 138K | Initial port, full development instrumentation, deep trace | Hardware received; `GW5AST-LV138PG484AC1/I0` visually identified, `GW5AST-138` JTAG identity verified, and first owned 720p60 smoke image hardware-verified |
+| Tang Console 138K | Initial port, full development instrumentation, deep trace | `GW5AST-LV138PG484AC1/I0` identified; JTAG, DDR3, 48K CPU/ROM/BASIC, standard upstream ULA and frame-safe 720p output hardware-verified for the inspected 30354 1 GB SOM configuration |
 | Tang Console 60K | Portable release core and lighter debugging | Planned; contributor wanted |
 | Tang Nano 20K | Later compact release target; not a development platform | In scope; not currently scheduled |
 

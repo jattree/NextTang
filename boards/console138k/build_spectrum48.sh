@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Build the machine CPU bring-up image for the Console 138K.
+# Build the machine CPU bring-up image for the Console 138K.  The `ula`
+# profile is a separate target that replaces only the ad-hoc display path with
+# the imported ULA and frame-safe 720p scaler.
 #
-# This is the project's first synthesis of VHDL: the imported T80 core and the
-# diagnostic boot ROM. Everything else in the tree is Verilog, so a failure
-# here is most likely mixed-language support rather than the design.
+# This path mixes the imported VHDL T80 and, in the `ula` profile, the imported
+# VHDL raster with the original Verilog platform shell.
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
@@ -14,7 +15,7 @@ profile=
 output_dir=
 
 usage() {
-    printf '%s\n' 'usage: boards/console138k/build_spectrum.sh --toolchain vendor --profile release --output ABSOLUTE_DIRECTORY'
+    printf '%s\n' 'usage: boards/console138k/build_spectrum48.sh --toolchain vendor --profile release|ula --output ABSOLUTE_DIRECTORY'
 }
 
 while (($#)); do
@@ -37,7 +38,7 @@ if [[ "$toolchain" != vendor ]]; then
     printf 'console138k spectrum build: toolchain not implemented: %s\n' "$toolchain" >&2
     exit 2
 fi
-if [[ "$profile" != release ]]; then
+if [[ "$profile" != release && "$profile" != ula ]]; then
     printf 'console138k spectrum build: profile not implemented: %s\n' "$profile" >&2
     exit 2
 fi
@@ -54,7 +55,14 @@ if [[ -n $(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
     exit 2
 fi
 
-base_name=nexttang_console138k_spectrum48
+if [[ "$profile" == ula ]]; then
+    base_name=nexttang_console138k_spectrum48_ula
+    timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_ula.sdc"
+else
+    base_name=nexttang_console138k_spectrum48
+    timing_constraints="$repo_root/boards/console138k/console138k_spectrum48.sdc"
+fi
+
 project_tcl="$output_dir/$base_name.tcl"
 build_log="$output_dir/vendor-build.log"
 bitstream="$output_dir/impl/pnr/$base_name.fs"
@@ -75,12 +83,36 @@ source_files=(
     "$repo_root/boards/console138k/nexttang_console138k_machine_pll.v"
     "$repo_root/boards/console138k/nexttang_console138k_pll.v"
     "$repo_root/rtl/video/nexttang_video_timing.v"
-    "$repo_root/rtl/video/nexttang_spectrum_display.v"
     "$repo_root/rtl/video/nexttang_tmds_encoder.v"
-    "$repo_root/boards/console138k/nexttang_console138k_spectrum48.v"
     "$repo_root/boards/console138k/console138k_spectrum48.cst"
-    "$repo_root/boards/console138k/console138k_spectrum48.sdc"
+    "$timing_constraints"
 )
+
+if [[ "$profile" == ula ]]; then
+    source_files+=(
+        "$repo_root/rtl/video/zxula_timing.vhd"
+        "$repo_root/rtl/video/zxula.vhd"
+        "$repo_root/rtl/video/nexttang_ula_capture.v"
+        "$repo_root/rtl/video/nexttang_framebuffer_scaler.v"
+        "$repo_root/rtl/video/nexttang_ula_palette.v"
+        "$repo_root/boards/console138k/nexttang_console138k_spectrum48_ula.v"
+    )
+else
+    source_files+=(
+        "$repo_root/rtl/video/nexttang_spectrum_display.v"
+        "$repo_root/boards/console138k/nexttang_console138k_spectrum48.v"
+    )
+fi
+
+# The ULA wrapper textually includes the established Spectrum 48K top. Gowin
+# only receives the wrapper as a source file, but the included top is still a
+# build input and must be present in the reproducibility manifest.
+hash_files=("${source_files[@]}")
+if [[ "$profile" == ula ]]; then
+    hash_files+=(
+        "$repo_root/boards/console138k/nexttang_console138k_spectrum48.v"
+    )
+fi
 
 if [[ -z "${NEXTTANG_48K_ROM:-}" || ! -f "${NEXTTANG_48K_ROM}" ]]; then
     printf 'console138k spectrum48 build: set NEXTTANG_48K_ROM to a 48K ROM image\n' >&2
@@ -117,7 +149,7 @@ python3 "$repo_root/scripts/rom_to_mem.py" "$NEXTTANG_48K_ROM" "$rom_image" \
     exit 1
 }
 
-sha256sum "${source_files[@]}" >"$source_hashes"
+sha256sum "${hash_files[@]}" >"$source_hashes"
 
 if [[ ! -f "$bitstream" ]]; then
     printf 'console138k spectrum build: no bitstream produced (see %s)\n' "$build_log" >&2

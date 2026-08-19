@@ -6,15 +6,20 @@ NextTang has selected the MiSTer ZXNext repository at commit
 `e2febf8f495714629a279693ce2d9dd7d2d757ab`.
 
 The first import from that repository landed on 2026-08-18: the five T80 CPU
-family files under `rtl/cpu/`, taken byte-identical from the pinned commit and
-verified against the Git blob hashes recorded in
-[the per-file audit](upstream-files.tsv). Their notices are retained unmodified
-in the sources, and `THIRD_PARTY_NOTICES.md` must accompany any synthesized
-artifact built from them.
+family files under `rtl/cpu/`. The second imports `rtl/video/zxula.vhd` and
+`rtl/video/zxula_timing.vhd` for the native machine raster. All seven files were
+taken byte-identical from the pinned commit and verified against the Git blob
+hashes recorded in [the per-file audit](upstream-files.tsv). Their notices are
+retained unmodified in the sources, and `THIRD_PARTY_NOTICES.md` must accompany
+any synthesized artifact built from them.
 
-Nothing else has been imported. Those files have since been simulated and
-synthesized for this device, which is not the same as having run on the board:
-no bitstream built from them has been loaded onto hardware yet.
+The CPU files have run on the Console 138K in the hardware-verified 48K image.
+The two ULA files first passed separate exact-device synthesis probes and now
+also run in the separate hardware-verified `ula` profile. That image reads the
+48K display file, captures each complete 360 x 288 native frame and presents a
+2x 720 x 576 image inside the established 720p60 output. This does not yet
+connect upstream ULA timing to CPU contention or interrupt timing, and does not
+verify ULANext, ULA+, LoRes or the other Next display layers.
 
 One line of `rtl/cpu/t80n.vhd` is modified from the pinned commit. Upstream
 writes `ioq := (ioq and x"7")`, masking a nine-bit variable with a four-bit

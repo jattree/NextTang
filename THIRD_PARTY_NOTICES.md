@@ -4,9 +4,19 @@ This file is release documentation. Distribute it with every NextTang bitstream
 or other synthesized artifact containing any of the files named below. Source
 redistributions must also retain the notices in the source files themselves.
 
-The T80 CPU family files listed below were imported on 2026-08-18 and are
-present in this repository. The obligation is therefore live: distribute this
-file with every bitstream or other synthesized artifact built from them.
+The T80 CPU family and ZX Spectrum Next ULA files listed below were imported on
+2026-08-18 and are present in this repository. The obligation is therefore
+live: distribute this file with every bitstream or other synthesized artifact
+built from them.
+
+## ZX Spectrum Next ULA
+
+`rtl/video/zxula.vhd` is copyright 2020 Alvin Albrecht, Fabio Belavenuto and
+Victor Trucco. `rtl/video/zxula_timing.vhd` is copyright 2023 Alvin Albrecht
+and Fabio Belavenuto. Both are part of the ZX Spectrum Next Project and are
+distributed under the GNU General Public License version 3 or, at the user's
+option, any later version. Their complete upstream notices are retained in the
+source files; the project-wide GPLv3 terms are in `LICENSE`.
 
 ## T80 CPU family
 
