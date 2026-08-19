@@ -19,10 +19,22 @@ class Spectrum48BuildDriverTests(unittest.TestCase):
             text=True,
         )
 
-    def test_help_lists_release_and_ula_profiles(self) -> None:
+    def test_help_lists_all_profiles(self) -> None:
         result = self.run_driver("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("--profile release|ula", result.stdout)
+        self.assertIn("--profile release|ula|ula-ddr-upper", result.stdout)
+
+    def test_ddr_profile_requires_explicit_vendor_source(self) -> None:
+        result = self.run_driver(
+            "--toolchain",
+            "vendor",
+            "--profile",
+            "ula-ddr-upper",
+            "--output",
+            "/tmp/nexttang-unused-build-output",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("requires --vendor-source ABSOLUTE_DIRECTORY", result.stderr)
 
     def test_rejects_relative_output_before_running_vendor_tools(self) -> None:
         result = self.run_driver(
@@ -46,6 +58,13 @@ class Spectrum48BuildDriverTests(unittest.TestCase):
             source,
         )
         self.assertIn('sha256sum "${hash_files[@]}"', source)
+
+    def test_ddr_profile_combines_constraints_and_hashes_vendor_inputs(self) -> None:
+        source = BUILD_DRIVER.read_text(encoding="utf-8")
+        self.assertIn("console138k_spectrum48_ula_ddr3_extra.cst", source)
+        self.assertIn('>"$pin_constraints"', source)
+        self.assertIn('printf \'add_file {%s}\\n\' "$pin_constraints"', source)
+        self.assertIn("vendor-source-sha256.txt", source)
 
     def test_driver_pins_exact_console_device_and_checks_timing(self) -> None:
         source = BUILD_DRIVER.read_text(encoding="utf-8")

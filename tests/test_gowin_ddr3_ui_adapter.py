@@ -13,7 +13,7 @@ ADAPTER_RTL = (
 
 
 class GowinDdr3UiAdapterTest(unittest.TestCase):
-    def test_address_mask_and_independent_write_handshakes(self) -> None:
+    def test_address_mask_paired_write_and_bounded_drain(self) -> None:
         testbench = r"""
 `timescale 1ns/1ps
 module testbench;
@@ -42,7 +42,7 @@ module testbench;
 
     always #5 clock = ~clock;
 
-    nexttang_gowin_ddr3_ui_adapter dut (
+    nexttang_gowin_ddr3_ui_adapter #(.WRITE_DRAIN_CYCLES(3)) dut (
         .clock(clock), .reset(reset), .line_request(line_request),
         .line_ready(line_ready), .line_write(line_write),
         .line_address(line_address), .line_write_data(line_write_data),
@@ -89,9 +89,9 @@ module testbench;
         if (controller_command != 3'b000 ||
             controller_address != {10'b0, 16'h91a2, 3'b0})
             $fatal(1, "write command address mapping was wrong");
-        if (!controller_command_enable || !controller_write_data_enable ||
+        if (controller_command_enable || controller_write_data_enable ||
             controller_write_data != {line_write_data, 128'b0})
-            $fatal(1, "write channels were not issued together");
+            $fatal(1, "write was issued before both channels were ready");
         if (controller_write_data_mask != 32'hffdf_ffff)
             $fatal(1, "upper-half byte mask mapping was wrong");
         if (!controller_write_data_end || controller_burst)
@@ -102,23 +102,29 @@ module testbench;
         line_write_enable = 0;
         @(negedge clock);
         controller_command_ready = 1;
-        @(posedge clock);
         #1;
-        controller_command_ready = 0;
-        if (controller_command_enable || !controller_write_data_enable)
-            $fatal(1, "independent command acceptance was not retained");
+        if (controller_command_enable || controller_write_data_enable)
+            $fatal(1, "command was accepted without write data");
         if (controller_address != {10'b0, 16'h91a2, 3'b0} ||
             controller_write_data_mask != 32'hffdf_ffff)
             $fatal(1, "write metadata changed under data backpressure");
 
-        repeat (2) @(posedge clock);
         @(negedge clock);
         controller_write_data_ready = 1;
+        #1;
+        if (!controller_command_enable || !controller_write_data_enable)
+            $fatal(1, "paired write was not presented together");
         @(posedge clock);
         #1;
+        controller_command_ready = 0;
         controller_write_data_ready = 0;
+        if (controller_command_enable || controller_write_data_enable ||
+            line_response_valid || line_ready)
+            $fatal(1, "write did not enter its bounded drain");
+        repeat (3) @(posedge clock);
+        #1;
         if (!line_response_valid || !line_ready)
-            $fatal(1, "write did not complete after both channels accepted");
+            $fatal(1, "write did not complete after its bounded drain");
 
         line_write_data = 128'h00112233445566778899aabbccddeeff;
         line_write_enable = 16'h8000;
@@ -130,18 +136,22 @@ module testbench;
             $fatal(1, "lower-half write mapping was wrong");
         @(negedge clock);
         controller_write_data_ready = 1;
-        @(posedge clock);
         #1;
-        controller_write_data_ready = 0;
-        if (!controller_command_enable || controller_write_data_enable)
-            $fatal(1, "data-first write acceptance was not retained");
+        if (controller_command_enable || controller_write_data_enable)
+            $fatal(1, "write data was accepted without its command");
         @(negedge clock);
         controller_command_ready = 1;
+        #1;
+        if (!controller_command_enable || !controller_write_data_enable)
+            $fatal(1, "second paired write was not presented together");
         @(posedge clock);
         #1;
         controller_command_ready = 0;
+        controller_write_data_ready = 0;
+        repeat (3) @(posedge clock);
+        #1;
         if (!line_response_valid || !line_ready)
-            $fatal(1, "data-first write did not complete");
+            $fatal(1, "second write did not complete after its drain");
 
         issue_line(0, 17'h00002);
         #1;

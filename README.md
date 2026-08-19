@@ -27,9 +27,10 @@
 
 > [!IMPORTANT]
 > The Console 138K now boots a user-supplied Sinclair 48K ROM through the
-> imported T80 and standard upstream ULA. This is a hardware-verified platform
-> slice, not yet the ZX Spectrum Next machine core or a broad compatibility
-> claim.
+> imported T80 and standard upstream ULA, with the ULA-visible lower 16 KiB in
+> on-chip block RAM and the CPU's upper 32 KiB served from onboard DDR3. This
+> is a hardware-verified platform slice, not yet the ZX Spectrum Next machine
+> core or a broad compatibility claim.
 
 The `ula` profile reads the Spectrum display file from on-chip machine RAM,
 captures complete native 360 x 288/50 Hz ULA frames and presents a 2x
@@ -40,6 +41,19 @@ volatile-SRAM loads produced clean settled Elgato frames and matching FT232RL
 status with no framebuffer overrun or capture-protocol error. The exact
 C-device build reports zero setup and hold violations. Generated bitstreams,
 the user ROM and hardware captures remain outside Git.
+
+The separate `ula-ddr-upper` profile retains that video path while moving CPU
+addresses `0x8000` to `0xffff` behind the bounded clock-domain and DDR3
+service. A fail-first WAIT regression caught the CPU advancing before an upper
+memory request had completed. Hardware then exposed a second regression: the
+Gowin controller must accept each write command and its data together and be
+given a bounded drain before the following read. With both causal fixes in
+place, the exact-C image boots the ROM and repeatedly prints the same complete
+`nexttang was here` loop as the internal-RAM control. The status UART reports
+opcode activity, an upper-RAM write and live calibration, with timeout,
+overrun and calibration-loss clear. This verifies one 48K split-memory
+workload on the received 30354 SOM; it does not verify banked Next memory,
+contention or general game compatibility.
 
 The original colour-bar/logo smoke image and the simpler 48K renderer remain
 separate rollback targets. Source, constraints and regressions are under
@@ -55,7 +69,7 @@ factory TangCore baseline:
 | Clocks | The 50 MHz board input, 74.375 MHz pixel path and 28/14/7/3.5 MHz machine tree are connected in the hardware-running 48K ULA image. The 3.5 MHz cadence is independently bounded by the decoded UART interval; the other machine clocks are vendor-model and build-verified but have not each been measured at a pin |
 | UART | Hardware-decoded through an external FT232RL. The current image reports video lock, CPU opcodes, screen writes, complete scaled frames, overrun and capture-protocol status on each line |
 | HDMI | Hardware-verified for 720p60 output, the standard 48K/50 Hz upstream ULA raster and frame-safe 50-to-60 Hz conversion; no HDMI audio |
-| DDR3 | Hardware-verified on the 30354 1 GB Hynix SOM: calibration, paired writes, read-back, every usable address-line position, the 512 MB boundary and the final aligned 32-byte beat pass with distinct retained patterns. The Console input is 50 MHz and the working path retains Gowin's generated dynamic PLL and `PLL_INIT`. Exhaustive every-cell and sustained-load testing remain open ([resolved issue #5](https://github.com/jattree/NextTang/issues/5)) |
+| DDR3 | Hardware-verified on the 30354 1 GB Hynix SOM: calibration, paired writes, read-back, every usable address-line position, the 512 MB boundary and the final aligned 32-byte beat pass with distinct retained patterns. The first integrated machine workload also boots the 48K ROM with CPU addresses `0x8000`-`0xffff` served from DDR3 while the ULA-visible lower 16 KiB remains local. The Console input is 50 MHz and the working path retains Gowin's generated dynamic PLL and `PLL_INIT`. Exhaustive every-cell, sustained-load and banked-Next testing remain open ([resolved issue #5](https://github.com/jattree/NextTang/issues/5)) |
 | SD | Factory TangCore reads the supplied card and loads packaged cores; no NextTang SD implementation |
 | Audio | Not brought up |
 | USB HID | The supplied controller navigates factory TangCore; no NextTang USB HID implementation |
@@ -66,10 +80,10 @@ on-chip display buffers from DDR3, and advances the logo only after a complete
 refill. This proves a bounded live DDR consumer, not the machine CPU/video
 memory service or a full-screen DDR framebuffer.
 
-The next engineering gate is connecting banked machine memory to the working
-DDR3 controller while retaining the verified ULA output. Importing the wider
-Next core, storage, physical input and audio follow before any ZX Spectrum Next
-compatibility claim. The
+The next engineering gate is replacing this deliberately narrow 48K split with
+the wider core's banked memory contract while retaining the verified ULA and
+DDR3 paths. Storage, physical input and audio follow before any ZX Spectrum
+Next compatibility claim. The
 [starter roadmap](ROADMAP.md) defines the required evidence.
 
 The one part of the project not waiting on that board is the
@@ -198,6 +212,23 @@ boards/console138k/build_ddr3.sh \
 
 The driver requires an empty output directory, checks fresh reports and timing,
 and records repository and vendor-source hashes beside the generated bitstream.
+
+The first hardware-verified machine/DDR integration uses the same private
+vendor-source boundary. It keeps the lower 16 KiB local for the ULA and serves
+the upper 32 KiB from DDR3:
+
+```bash
+mkdir -p /tmp/nexttang-spectrum48-ddr
+NEXTTANG_48K_ROM=/absolute/path/to/48.rom \
+boards/console138k/build_spectrum48.sh \
+  --toolchain vendor \
+  --profile ula-ddr-upper \
+  --vendor-source /absolute/path/to/generated/ddr3/source \
+  --output /tmp/nexttang-spectrum48-ddr
+```
+
+The ROM and generated Gowin DDR3/PLL sources are user-supplied build inputs and
+are not redistributed by this repository.
 
 See the [toolchain guide](docs/toolchain.md) for the provisional Gowin and
 open-source tool versions and supported target/profile combinations. Other

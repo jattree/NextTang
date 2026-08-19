@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Extra pins for the combined Spectrum 48K ULA and DDR3 target. The build
+// driver appends these to console138k_ddr3.cst because Gowin only honours the
+// last CST passed to this project.
+
+// HDMI source-side 5V presence.
+IO_LOC "tmds_psv" K14;
+IO_PORT "tmds_psv" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+
+// Sixth PMOD status bit. The DDR-only targets expose probe[4:0].
+IO_LOC "probe[5]" F19;
+IO_PORT "probe[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
