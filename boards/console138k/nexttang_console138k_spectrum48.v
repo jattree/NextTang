@@ -27,6 +27,10 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     parameter ROM_IMAGE = "48k.mem"
 ) (
     input  wire       sys_clk,
+    // Scan codes from the BL616, which reads a USB keyboard on the board's own
+    // USB-A ports under the factory firmware. Read only, so it does not
+    // contend with the debugger for this multiplexed pin group.
+    input  wire       bl616_uart_rx,
     output wire       debug_uart_tx,
     output wire       tmds_clk_p,
     output wire       tmds_clk_n,

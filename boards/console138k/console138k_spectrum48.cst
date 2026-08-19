@@ -52,3 +52,8 @@ IO_LOC "probe[4]" E21;
 IO_PORT "probe[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
 IO_LOC "probe[5]" D21;
 IO_PORT "probe[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+// Scan codes from the BL616. Read only: this pin group is shared with JTAG and
+// the debugger drives it while a bitstream is loaded.
+IO_LOC "bl616_uart_rx" V14;
+IO_PORT "bl616_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
