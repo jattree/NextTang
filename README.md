@@ -66,13 +66,14 @@ factory TangCore baseline:
 | Area | Current evidence |
 | --- | --- |
 | JTAG and programming | Hardware-verified 6 MHz scan and volatile SRAM loading; Gowin `GW5AST-138`, IDCODE `0x1081b` |
-| Clocks | The 50 MHz board input, 74.375 MHz pixel path and 28/14/7/3.5 MHz machine tree are connected in the hardware-running 48K ULA image. The 3.5 MHz cadence is independently bounded by the decoded UART interval; the other machine clocks are vendor-model and build-verified but have not each been measured at a pin |
+| Clocks | The 50 MHz board input, 74.375 MHz pixel path and 28/14/7/3.5 MHz machine tree are connected in the hardware-running 48K ULA image. 14 and 7 MHz divide from 28 through `CLKDIV` under one reset and 3.5 divides from 7, after three separate PLL outputs declared as independent clocks hid a hold violation inside the upstream ULA and made the design placement-dependent. The 3.5 MHz cadence is independently bounded by the decoded UART interval; the other machine clocks are vendor-model and build-verified but have not each been measured at a pin |
 | UART | Hardware-decoded through an external FT232RL. The current image reports video lock, CPU opcodes, screen writes, complete scaled frames, overrun and capture-protocol status on each line |
 | HDMI | Hardware-verified for 720p60 output, the standard 48K/50 Hz upstream ULA raster and frame-safe 50-to-60 Hz conversion; no HDMI audio |
 | DDR3 | Hardware-verified on the 30354 1 GB Hynix SOM: calibration, paired writes, read-back, every usable address-line position, the 512 MB boundary and the final aligned 32-byte beat pass with distinct retained patterns. The first integrated machine workload also boots the 48K ROM with CPU addresses `0x8000`-`0xffff` served from DDR3 while the ULA-visible lower 16 KiB remains local. The Console input is 50 MHz and the working path retains Gowin's generated dynamic PLL and `PLL_INIT`. Exhaustive every-cell, sustained-load and banked-Next testing remain open ([resolved issue #5](https://github.com/jattree/NextTang/issues/5)) |
+| Tape | Hardware-verified. A user-supplied TZX is played into the EAR input for the ROM's own loader. Manic Miner loads and runs; Cobra loads through its own turbo speed loader to its credits. The tape and every generated memory image stay outside Git |
 | SD | Factory TangCore reads the supplied card and loads packaged cores; no NextTang SD implementation |
 | Audio | Not brought up |
-| USB HID | The supplied controller navigates factory TangCore; no NextTang USB HID implementation |
+| USB HID | The supplied controller navigates factory TangCore. NextTang reads a USB keyboard through that same firmware's PS/2 scan code message on its 2 Mbit/s UART, so the MCU is not reflashed and hubs and multiple devices stay its concern. Decoded to the forty key matrix the Next uses. Build-verified and simulated; not yet hardware-verified |
 
 The first DDR-to-video integration is also hardware-verified. An exact-C demo
 stores the 16 KiB RGB332 logo in onboard DDR3, repeatedly refills alternating
@@ -82,8 +83,8 @@ memory service or a full-screen DDR framebuffer.
 
 The next engineering gate is replacing this deliberately narrow 48K split with
 the wider core's banked memory contract while retaining the verified ULA and
-DDR3 paths. Storage, physical input and audio follow before any ZX Spectrum
-Next compatibility claim. The
+DDR3 paths. Storage and audio follow, and physical input needs verifying on
+hardware, before any ZX Spectrum Next compatibility claim. The
 [starter roadmap](ROADMAP.md) defines the required evidence.
 
 The one part of the project not waiting on that board is the
