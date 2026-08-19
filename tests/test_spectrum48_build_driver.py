@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 
@@ -22,7 +23,10 @@ class Spectrum48BuildDriverTests(unittest.TestCase):
     def test_help_lists_all_profiles(self) -> None:
         result = self.run_driver("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("--profile release|ula|ula-ddr-upper", result.stdout)
+        self.assertIn(
+            "--profile release|ula|ula-tape|ula-ddr-upper|ula-ddr-upper-tape",
+            result.stdout,
+        )
 
     def test_ddr_profile_requires_explicit_vendor_source(self) -> None:
         result = self.run_driver(
@@ -65,6 +69,66 @@ class Spectrum48BuildDriverTests(unittest.TestCase):
         self.assertIn('>"$pin_constraints"', source)
         self.assertIn('printf \'add_file {%s}\\n\' "$pin_constraints"', source)
         self.assertIn("vendor-source-sha256.txt", source)
+
+    def test_tape_profile_requires_absolute_user_supplied_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vendor = root / "vendor"
+            for relative in (
+                "ddr3_memory_interface/ddr3_memory_interface.v",
+                "gowin_pll/gowin_pll.v",
+                "gowin_pll/gowin_pll_mod.v",
+                "pll_init.v",
+            ):
+                path = vendor / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("// test\n", encoding="utf-8")
+
+            result = self.run_driver(
+                "--toolchain",
+                "vendor",
+                "--profile",
+                "ula-ddr-upper-tape",
+                "--vendor-source",
+                str(vendor),
+                "--tape",
+                "relative/Cobra.tzx",
+                "--output",
+                str(root / "unused"),
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("requires --tape ABSOLUTE_TZX_OR_ZIP", result.stderr)
+
+    def test_internal_ram_tape_profile_needs_a_tape_but_no_vendor_source(
+        self,
+    ) -> None:
+        # The control for the DDR tape target takes the same user tape without
+        # any generated vendor memory controller, so it must fail on a missing
+        # tape rather than on a missing vendor source.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result = self.run_driver(
+                "--toolchain",
+                "vendor",
+                "--profile",
+                "ula-tape",
+                "--output",
+                str(root / "unused"),
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("requires --tape ABSOLUTE_TZX_OR_ZIP", result.stderr)
+
+    def test_tape_profile_records_converter_and_input_manifest(self) -> None:
+        source = BUILD_DRIVER.read_text(encoding="utf-8")
+        self.assertIn("scripts/tzx_to_mem.py", source)
+        self.assertIn("tape-input-sha256.txt", source)
+        self.assertIn("nexttang_tzx_player.v", source)
+        self.assertIn(
+            "nexttang_console138k_spectrum48_ula_ddr3_tape.v",
+            source,
+        )
 
     def test_driver_pins_exact_console_device_and_checks_timing(self) -> None:
         source = BUILD_DRIVER.read_text(encoding="utf-8")

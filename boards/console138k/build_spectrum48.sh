@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build the machine CPU bring-up image for the Console 138K.  The `ula`
 # profile is a separate target that replaces only the ad-hoc display path with
-# the imported ULA and frame-safe 720p scaler.
+# the imported ULA and frame-safe 720p scaler. The tape profile also accepts a
+# user-supplied TZX or single-member TZX ZIP outside Git.
 #
 # This path mixes the imported VHDL T80 and, in the `ula` profile, the imported
 # VHDL raster with the original Verilog platform shell.
@@ -13,20 +14,22 @@ repo_root=$(cd -- "$script_dir/../.." && pwd -P)
 toolchain=
 profile=
 vendor_source=
+tape_file=
 output_dir=
 
 usage() {
-    printf '%s\n' 'usage: boards/console138k/build_spectrum48.sh --toolchain vendor --profile release|ula|ula-ddr-upper [--vendor-source ABSOLUTE_DIRECTORY] --output ABSOLUTE_DIRECTORY'
+    printf '%s\n' 'usage: boards/console138k/build_spectrum48.sh --toolchain vendor --profile release|ula|ula-tape|ula-ddr-upper|ula-ddr-upper-tape [--vendor-source ABSOLUTE_DIRECTORY] [--tape ABSOLUTE_TZX_OR_ZIP] --output ABSOLUTE_DIRECTORY'
 }
 
 while (($#)); do
     case "$1" in
-        --toolchain|--profile|--vendor-source|--output)
+        --toolchain|--profile|--vendor-source|--tape|--output)
             [[ $# -ge 2 ]] || { usage >&2; exit 2; }
             case "$1" in
                 --toolchain) toolchain=$2 ;;
                 --profile) profile=$2 ;;
                 --vendor-source) vendor_source=$2 ;;
+                --tape) tape_file=$2 ;;
                 --output) output_dir=$2 ;;
             esac
             shift 2
@@ -41,13 +44,16 @@ if [[ "$toolchain" != vendor ]]; then
     exit 2
 fi
 if [[ "$profile" != release && "$profile" != ula && \
-      "$profile" != ula-ddr-upper ]]; then
+      "$profile" != ula-tape && \
+      "$profile" != ula-ddr-upper && \
+      "$profile" != ula-ddr-upper-tape ]]; then
     printf 'console138k spectrum build: profile not implemented: %s\n' "$profile" >&2
     exit 2
 fi
 
 vendor_files=()
-if [[ "$profile" == ula-ddr-upper ]]; then
+if [[ "$profile" == ula-ddr-upper || \
+      "$profile" == ula-ddr-upper-tape ]]; then
     if [[ "$vendor_source" != /* || ! -d "$vendor_source" ]]; then
         printf '%s\n' 'console138k spectrum build: DDR profile requires --vendor-source ABSOLUTE_DIRECTORY' >&2
         exit 2
@@ -65,6 +71,11 @@ if [[ "$profile" == ula-ddr-upper ]]; then
         fi
     done
 fi
+if [[ ("$profile" == ula-ddr-upper-tape || "$profile" == ula-tape) && \
+      ("$tape_file" != /* || ! -f "$tape_file") ]]; then
+    printf '%s\n' 'console138k spectrum build: tape profile requires --tape ABSOLUTE_TZX_OR_ZIP' >&2
+    exit 2
+fi
 if [[ "$output_dir" != /* ]]; then
     printf '%s\n' 'console138k spectrum build: --output must be an absolute path' >&2
     exit 2
@@ -78,11 +89,21 @@ if [[ -n $(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
     exit 2
 fi
 
-if [[ "$profile" == ula-ddr-upper ]]; then
+if [[ "$profile" == ula-ddr-upper-tape ]]; then
+    base_name=nexttang_console138k_spectrum48_ula_ddr3_tape
+    pin_constraints_base="$repo_root/boards/console138k/console138k_ddr3.cst"
+    pin_constraints_extra="$repo_root/boards/console138k/console138k_spectrum48_ula_ddr3_extra.cst"
+    timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_ula_ddr3.sdc"
+elif [[ "$profile" == ula-ddr-upper ]]; then
     base_name=nexttang_console138k_spectrum48_ula_ddr3
     pin_constraints_base="$repo_root/boards/console138k/console138k_ddr3.cst"
     pin_constraints_extra="$repo_root/boards/console138k/console138k_spectrum48_ula_ddr3_extra.cst"
     timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_ula_ddr3.sdc"
+elif [[ "$profile" == ula-tape ]]; then
+    base_name=nexttang_console138k_spectrum48_ula_tape
+    pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
+    pin_constraints_extra=
+    timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_ula.sdc"
 elif [[ "$profile" == ula ]]; then
     base_name=nexttang_console138k_spectrum48_ula
     pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
@@ -93,6 +114,12 @@ else
     pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
     pin_constraints_extra=
     timing_constraints="$repo_root/boards/console138k/console138k_spectrum48.sdc"
+fi
+
+if [[ "$profile" == ula-ddr-upper-tape || "$profile" == ula-tape ]]; then
+    python3 "$repo_root/scripts/tzx_to_mem.py" \
+        "$tape_file" "$output_dir/tape.mem" \
+        --manifest "$output_dir/tape-input-sha256.txt" || exit 1
 fi
 
 if [[ -n "$pin_constraints_extra" ]]; then
@@ -129,7 +156,9 @@ source_files=(
     "$repo_root/rtl/video/nexttang_tmds_encoder.v"
 )
 
-if [[ "$profile" == ula || "$profile" == ula-ddr-upper ]]; then
+if [[ "$profile" == ula || "$profile" == ula-tape || \
+      "$profile" == ula-ddr-upper || \
+      "$profile" == ula-ddr-upper-tape ]]; then
     source_files+=(
         "$repo_root/rtl/video/zxula_timing.vhd"
         "$repo_root/rtl/video/zxula.vhd"
@@ -137,7 +166,8 @@ if [[ "$profile" == ula || "$profile" == ula-ddr-upper ]]; then
         "$repo_root/rtl/video/nexttang_framebuffer_scaler.v"
         "$repo_root/rtl/video/nexttang_ula_palette.v"
     )
-    if [[ "$profile" == ula-ddr-upper ]]; then
+    if [[ "$profile" == ula-ddr-upper || \
+          "$profile" == ula-ddr-upper-tape ]]; then
         source_files+=(
             "$repo_root/rtl/memory/nexttang_cpu_memory_service.v"
             "$repo_root/rtl/memory/nexttang_memory_cdc_bridge.v"
@@ -146,7 +176,23 @@ if [[ "$profile" == ula || "$profile" == ula-ddr-upper ]]; then
             "$repo_root/rtl/memory/nexttang_spectrum48_split_memory.v"
             "$repo_root/rtl/memory/nexttang_gowin_ddr3_ui_adapter.v"
             "$repo_root/boards/console138k/nexttang_console138k_ddr3_pll.v"
-            "$repo_root/boards/console138k/nexttang_console138k_spectrum48_ula_ddr3.v"
+        )
+        if [[ "$profile" == ula-ddr-upper-tape ]]; then
+            source_files+=(
+                "$repo_root/rtl/input/nexttang_load_key_sequencer.v"
+                "$repo_root/rtl/input/nexttang_tzx_player.v"
+                "$repo_root/boards/console138k/nexttang_console138k_spectrum48_ula_ddr3_tape.v"
+            )
+        else
+            source_files+=(
+                "$repo_root/boards/console138k/nexttang_console138k_spectrum48_ula_ddr3.v"
+            )
+        fi
+    elif [[ "$profile" == ula-tape ]]; then
+        source_files+=(
+            "$repo_root/rtl/input/nexttang_load_key_sequencer.v"
+            "$repo_root/rtl/input/nexttang_tzx_player.v"
+            "$repo_root/boards/console138k/nexttang_console138k_spectrum48_ula_tape.v"
         )
     else
         source_files+=(
@@ -168,10 +214,15 @@ hash_files+=("$pin_constraints_base" "$timing_constraints")
 if [[ -n "$pin_constraints_extra" ]]; then
     hash_files+=("$pin_constraints_extra")
 fi
-if [[ "$profile" == ula || "$profile" == ula-ddr-upper ]]; then
+if [[ "$profile" == ula || "$profile" == ula-tape || \
+      "$profile" == ula-ddr-upper || \
+      "$profile" == ula-ddr-upper-tape ]]; then
     hash_files+=(
         "$repo_root/boards/console138k/nexttang_console138k_spectrum48.v"
     )
+fi
+if [[ "$profile" == ula-ddr-upper-tape || "$profile" == ula-tape ]]; then
+    hash_files+=("$repo_root/scripts/tzx_to_mem.py")
 fi
 
 if [[ -z "${NEXTTANG_48K_ROM:-}" || ! -f "${NEXTTANG_48K_ROM}" ]]; then

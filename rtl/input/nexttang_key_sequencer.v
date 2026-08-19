@@ -9,6 +9,13 @@
 // starting because the ROM spends its first second testing memory and ignores
 // the keyboard until it reaches its main loop.
 //
+// The gap has to outlast five scans, because the ROM only frees a key's slot
+// five scans after release and the line types the same key twice. Scans happen
+// on the frame interrupt, and a machine slowed by external memory misses
+// interrupts, so the gap is set well clear of the 100 ms a 50 Hz machine would
+// need rather than close to it. At 140 ms the second t of nexttang was lost on
+// the DDR-backed build and printed nextang.
+//
 // This exists to prove the read path and the interpreter without a keyboard
 // attached. A real keyboard drives the same matrix input.
 
@@ -18,7 +25,7 @@ module nexttang_key_sequencer #(
     parameter integer CLOCK_HZ = 3500000,
     parameter integer START_DELAY_MS = 3000,
     parameter integer HOLD_MS = 140,
-    parameter integer GAP_MS = 140
+    parameter integer GAP_MS = 500
 ) (
     input  wire        clock,
     input  wire        reset,
@@ -79,7 +86,13 @@ module nexttang_key_sequencer #(
 
     reg [1:0]  state = WAITING;
     reg [4:0]  step = 0;
-    reg [26:0] timer = 0;
+    // Sized from the parameters so a longer delay cannot silently wrap.
+    localparam integer LONGEST_WAIT =
+        (START_CYCLES > HOLD_CYCLES)
+            ? ((START_CYCLES > GAP_CYCLES) ? START_CYCLES : GAP_CYCLES)
+            : ((HOLD_CYCLES > GAP_CYCLES) ? HOLD_CYCLES : GAP_CYCLES);
+
+    reg [$clog2(LONGEST_WAIT + 1) - 1:0] timer = 0;
 
     wire [6:0] current = step_key(step);
     wire [2:0] row = current[5:3];

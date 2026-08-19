@@ -387,19 +387,90 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 `endif
 
     // Port 0xFE is decoded on address bit 0 alone, as the original did. Reading
-    // it returns the keyboard in the low five bits, with the tape input low.
+    // it returns the keyboard in the low five bits and EAR on bit 6.
     wire port_fe = !iorq_n && !cpu_address[0];
 
     wire [39:0] keys;
+    wire [39:0] typist_keys;
+    wire [39:0] keyboard_keys;
+
+    // The typist still types LOAD "" so a tape image loads on its own; a real
+    // keyboard is simply held down alongside it.
+    assign keys = typist_keys | keyboard_keys;
+
+    wire [7:0] keyboard_scancode;
+    wire keyboard_scancode_valid;
+
+    nexttang_bl616_keyboard #(
+        .CLOCK_HZ(3500000),
+        .BAUD_RATE(2000000)
+    ) bl616_keyboard (
+        .clock(cpu_clock),
+        .reset(cpu_reset),
+        .receive(bl616_uart_rx),
+        .scancode(keyboard_scancode),
+        .scancode_valid(keyboard_scancode_valid)
+    );
+
+    nexttang_ps2_matrix key_decode (
+        .clock(cpu_clock),
+        .reset(cpu_reset),
+        .scancode(keyboard_scancode),
+        .scancode_valid(keyboard_scancode_valid),
+        .keys(keyboard_keys)
+    );
     wire [4:0] key_columns;
     wire typing_finished;
 
+`ifdef NEXTTANG_SPECTRUM48_USE_TAPE
+    // The capture card takes about forty seconds to relock after the FPGA is
+    // reconfigured, so a tape that starts at the ROM's own pace is already
+    // past its header blocks before anything can be recorded or watched. Wait
+    // out the relock so the typing and the first blocks are visible.
+    nexttang_load_key_sequencer #(
+        .CLOCK_HZ(3500000),
+        .START_DELAY_MS(45000)
+    ) typist (
+        .clock(cpu_clock),
+        .reset(cpu_reset),
+        .keys(typist_keys),
+        .finished(typing_finished)
+    );
+
+    wire tape_ear;
+    wire tape_active;
+    wire tape_finished;
+    wire tape_fault;
+    wire tape_fault_unsupported;
+    wire [7:0] tape_block;
+    wire [16:0] tape_byte_position;
+
+    nexttang_tzx_player #(
+        .CLOCK_HZ(3500000),
+        .TZX_BYTES(65536),
+        .IMAGE("tape.mem")
+    ) tape_player (
+        .clock(cpu_clock),
+        .reset(cpu_reset),
+        .start(typing_finished),
+        .ear(tape_ear),
+        .active(tape_active),
+        .finished(tape_finished),
+        .fault(tape_fault),
+        .fault_unsupported(tape_fault_unsupported),
+        .current_block(tape_block),
+        .byte_position(tape_byte_position)
+    );
+`else
     nexttang_key_sequencer #(.CLOCK_HZ(3500000)) typist (
         .clock(cpu_clock),
         .reset(cpu_reset),
-        .keys(keys),
+        .keys(typist_keys),
         .finished(typing_finished)
     );
+
+    wire tape_ear = 1'b0;
+`endif
 
     nexttang_keyboard_matrix keyboard (
         .row_select(cpu_address[15:8]),
@@ -417,7 +488,8 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 
     always @(*) begin
         if (!iorq_n)
-            cpu_data_in = port_fe ? {1'b1, 1'b0, 1'b1, key_columns} : 8'hff;
+            cpu_data_in = port_fe
+                ? {1'b1, tape_ear, 1'b1, key_columns} : 8'hff;
         else if (in_rom)
             cpu_data_in = rom_data;
         else
@@ -747,21 +819,57 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     // interrupt the ROM runs on.
     assign probe = {interrupt_n, wr_n, iorq_n, mreq_n, m1_n, cpu_clock};
 
+`ifdef NEXTTANG_SPECTRUM48_USE_TAPE
 `ifdef NEXTTANG_SPECTRUM48_USE_DDR3
+    // For this profile C/P are tape active/finished. Y combines tape and
+    // memory-service faults. The trailing UART value is the next tape byte.
+    wire [5:0] status_flags = {
+        tape_fault | tape_fault_unsupported | fault_calibration_lost |
+            fault_overrun | fault_timeout,
+        tape_finished, tape_active, calibration_complete,
+        high_ram_write_seen, opcode_seen
+    };
+`else
+    // The internal-RAM control has no calibration to report, so R is the video
+    // PLL lock and Y is the tape player alone. C/P stay tape active/finished
+    // so both tape profiles decode the same way.
+    wire [5:0] status_flags = {
+        tape_fault | tape_fault_unsupported,
+        tape_finished, tape_active, video_pll_locked,
+        high_ram_write_seen, opcode_seen
+    };
+`endif
+    // Where the processor actually is. A machine that stops answering the
+    // tape has either crashed or is looping, and the opcode address says
+    // which, and where.
+    reg [15:0] last_opcode_address = 0;
+
+    always @(posedge cpu_clock) begin
+        if (cpu_reset)
+            last_opcode_address <= 0;
+        else if (!m1_n && !mreq_n && rfsh_n)
+            last_opcode_address <= cpu_address;
+    end
+
+    wire [31:0] status_value = {15'b0, tape_byte_position};
+`elsif NEXTTANG_SPECTRUM48_USE_DDR3
     wire [5:0] status_flags = {
         fault_calibration_lost, fault_overrun, fault_timeout,
         calibration_complete, high_ram_write_seen, opcode_seen
     };
+    wire [31:0] status_value = opcode_count;
 `elsif NEXTTANG_SPECTRUM48_USE_ULA
     wire [5:0] status_flags = {
         capture_protocol_error, scaled_overrun, scaled_frame_valid,
         screen_write_seen, opcode_seen, video_pll_locked
     };
+    wire [31:0] status_value = opcode_count;
 `else
     wire [5:0] status_flags = {
         typing_finished, border_write_seen, high_ram_write_seen,
         screen_write_seen, opcode_seen, video_pll_locked
     };
+    wire [31:0] status_value = opcode_count;
 `endif
 
     nexttang_debug_status_uart #(
@@ -770,7 +878,7 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .clock(cpu_clock),
         .reset(cpu_reset),
         .flags(status_flags),
-        .value(opcode_count),
+        .value(status_value),
         .transmit(debug_uart_tx)
     );
 
