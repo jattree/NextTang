@@ -117,6 +117,109 @@ class Console138kDdr3BuildDriverTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("--image must be an absolute path", result.stderr)
 
+    def test_spec256_profile_rejects_a_missing_image(self) -> None:
+        result = self.run_driver(
+            "--toolchain",
+            "vendor",
+            "--profile",
+            "spec256",
+            "--vendor-source",
+            "/tmp/vendor",
+            "--output",
+            "/tmp/output",
+            "--image",
+            "/tmp/nexttang-spec256-image-does-not-exist.mem",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("image does not exist", result.stderr)
+
+    def test_spec256_profile_rejects_an_oversized_image(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            image = Path(temporary_directory) / "frame.mem"
+            image.write_bytes(b"0" * 196609)
+
+            result = self.run_driver(
+                "--toolchain",
+                "vendor",
+                "--profile",
+                "spec256",
+                "--vendor-source",
+                "/tmp/vendor",
+                "--output",
+                "/tmp/output",
+                "--image",
+                str(image),
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("image exceeds the 192 KiB limit", result.stderr)
+
+    def test_spec256_profile_rejects_the_wrong_pixel_count(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            image = Path(temporary_directory) / "frame.mem"
+            image.write_text("00\n" * 10, encoding="ascii")
+
+            result = self.run_driver(
+                "--toolchain",
+                "vendor",
+                "--profile",
+                "spec256",
+                "--vendor-source",
+                "/tmp/vendor",
+                "--output",
+                "/tmp/output",
+                "--image",
+                str(image),
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("must contain 49152 RGB332 hex bytes", result.stderr)
+
+    def test_spec256_profile_rejects_non_hex_pixels(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            image = Path(temporary_directory) / "frame.mem"
+            pixels = ["00"] * (256 * 192)
+            pixels[24576] = "zz"
+            image.write_text("\n".join(pixels) + "\n", encoding="ascii")
+
+            result = self.run_driver(
+                "--toolchain",
+                "vendor",
+                "--profile",
+                "spec256",
+                "--vendor-source",
+                "/tmp/vendor",
+                "--output",
+                "/tmp/output",
+                "--image",
+                str(image),
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("must contain 49152 RGB332 hex bytes", result.stderr)
+
+    def test_non_spec256_profile_rejects_an_image(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            image = Path(temporary_directory) / "frame.mem"
+            image.write_text("00\n", encoding="ascii")
+
+            result = self.run_driver(
+                "--toolchain",
+                "vendor",
+                "--profile",
+                "logo",
+                "--vendor-source",
+                "/tmp/vendor",
+                "--output",
+                "/tmp/output",
+                "--image",
+                str(image),
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--image is only valid for profile spec256", result.stderr)
+
     def test_spec256_profile_reaches_vendor_validation_with_valid_image(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
