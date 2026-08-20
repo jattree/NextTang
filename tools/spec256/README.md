@@ -33,3 +33,15 @@ The original format and graphical-processor model are described by the
 [archived Spec256 documentation](https://web.archive.org/web/20070418181853/http://emulatronia.com/emusdaqui/spec256/comofunciona-eng.htm).
 These tools are a clean implementation of the observed data mapping; no GZX
 source or game asset is included.
+
+Generate the first asset-free instruction fixture:
+
+```sh
+python3 tools/spec256/conformance.py /tmp/spec256-conformance
+```
+
+`LD_COPY.SNA` runs `LD A,(0x9000)`, `LD (0x4000),A`, then halts. Its GFX file
+gives the source byte a different value in each graphical plane. A compatible
+graphical processor should leave paper pixels with palette indices 1, 2, 4, 8,
+16, 32, 64 and 128. Generated SNA and GFX files are test artifacts and must not
+be committed.
