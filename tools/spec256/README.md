@@ -24,6 +24,17 @@ python3 tools/spec256/render.py /absolute/path/to/GAME.GFX \
   --output /tmp/game.ppm
 ```
 
+For an FPGA build, emit one RGB332 byte per paper pixel without committing the
+generated image:
+
+```sh
+python3 tools/spec256/render.py /absolute/path/to/GAME.GFX \
+  --background /absolute/path/to/GAME.B00 \
+  --palette /absolute/path/to/sp256.pal \
+  --output-format rgb332-mem \
+  --output /tmp/game-rgb332.mem
+```
+
 The mapping and renderer are covered by `tests/test_spec256_gfx.py` and
 `tests/test_spec256_render.py`.
 

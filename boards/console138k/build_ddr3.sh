@@ -8,21 +8,23 @@ toolchain=
 profile=
 vendor_source=
 output_dir=
+image_file=
 
 usage() {
     printf '%s\n' \
-        'usage: boards/console138k/build_ddr3.sh --toolchain vendor --profile diagnostic|logo --vendor-source ABSOLUTE_DIRECTORY --output ABSOLUTE_DIRECTORY'
+        'usage: boards/console138k/build_ddr3.sh --toolchain vendor --profile diagnostic|logo|spec256 --vendor-source ABSOLUTE_DIRECTORY --output ABSOLUTE_DIRECTORY [--image ABSOLUTE_RGB332_MEM]'
 }
 
 while (($#)); do
     case "$1" in
-        --toolchain|--profile|--vendor-source|--output)
+        --toolchain|--profile|--vendor-source|--output|--image)
             [[ $# -ge 2 ]] || { usage >&2; exit 2; }
             case "$1" in
                 --toolchain) toolchain=$2 ;;
                 --profile) profile=$2 ;;
                 --vendor-source) vendor_source=$2 ;;
                 --output) output_dir=$2 ;;
+                --image) image_file=$2 ;;
             esac
             shift 2
             ;;
@@ -44,13 +46,40 @@ if [[ "$toolchain" != vendor ]]; then
     exit 2
 fi
 case "$profile" in
-    diagnostic|logo) ;;
+    diagnostic|logo|spec256) ;;
     *)
         printf 'console138k DDR3 build: profile not implemented: %s\n' \
             "$profile" >&2
         exit 2
         ;;
 esac
+if [[ "$profile" == spec256 ]]; then
+    if [[ "$image_file" != /* ]]; then
+        printf '%s\n' \
+            'console138k DDR3 build: --image must be an absolute path' >&2
+        exit 2
+    fi
+    if [[ ! -f "$image_file" ]]; then
+        printf 'console138k DDR3 build: image does not exist: %s\n' \
+            "$image_file" >&2
+        exit 2
+    fi
+    if (( $(stat -c '%s' "$image_file") > 196608 )); then
+        printf '%s\n' \
+            'console138k DDR3 build: image exceeds the 192 KiB limit' >&2
+        exit 2
+    fi
+    if [[ $(wc -l <"$image_file") -ne 49152 ]] ||
+       LC_ALL=C grep -q -m1 -Ev '^[0-9a-fA-F]{2}$' "$image_file"; then
+        printf '%s\n' \
+            'console138k DDR3 build: image must contain 49152 RGB332 hex bytes' >&2
+        exit 2
+    fi
+elif [[ -n "$image_file" ]]; then
+    printf '%s\n' \
+        'console138k DDR3 build: --image is only valid for profile spec256' >&2
+    exit 2
+fi
 for directory_option in vendor_source output_dir; do
     directory_value=${!directory_option}
     if [[ "$directory_value" != /* ]]; then
@@ -92,10 +121,12 @@ common_source_files=(
     "$repo_root/rtl/video/nexttang_tmds_encoder.v"
     "$repo_root/boards/console138k/nexttang_console138k_pll.v"
     "$repo_root/boards/console138k/nexttang_console138k_ddr3_pll.v"
-    "$repo_root/boards/console138k/console138k_ddr3.cst"
-    "$repo_root/boards/console138k/console138k_ddr3.sdc"
 )
+constraint_cst="$repo_root/boards/console138k/console138k_ddr3.cst"
+constraint_sdc="$repo_root/boards/console138k/console138k_ddr3.sdc"
+constraint_prefix=
 extra_hash_files=()
+user_input_files=()
 case "$profile" in
     diagnostic)
         base_name=nexttang_console138k_ddr3_diagnostic
@@ -115,6 +146,7 @@ case "$profile" in
             "$repo_root/rtl/memory/nexttang_ddr3_logo_engine.v"
             "$repo_root/rtl/video/nexttang_logo_framebuffer.v"
             "$repo_root/rtl/video/nexttang_ddr_logo_video.v"
+            "$repo_root/rtl/video/nexttang_spec256_frame_video.v"
             "$repo_root/boards/console138k/nexttang_console138k_ddr3_logo.v"
         )
         extra_hash_files=(
@@ -123,7 +155,42 @@ case "$profile" in
         cp -- "$repo_root/rtl/smoke/nexttang_logo_128x128_rgb332.mem" \
             "$output_dir/"
         ;;
+    spec256)
+        base_name=nexttang_console138k_ddr3_spec256
+        top_module=$base_name
+        target_name=console138k-ddr3-spec256
+        constraint_prefix="display/"
+        profile_source_files=(
+            "$repo_root/rtl/memory/nexttang_ddr3_logo_engine.v"
+            "$repo_root/rtl/video/nexttang_logo_framebuffer.v"
+            "$repo_root/rtl/video/nexttang_ddr_logo_video.v"
+            "$repo_root/rtl/video/nexttang_spec256_frame_video.v"
+            "$repo_root/boards/console138k/nexttang_console138k_ddr3_logo.v"
+            "$repo_root/boards/console138k/nexttang_console138k_ddr3_spec256.v"
+        )
+        user_input_files=("$image_file")
+        cp -- "$image_file" \
+            "$output_dir/spec256_frame_256x192_rgb332.mem"
+        ;;
 esac
+
+if [[ -n "$constraint_prefix" ]]; then
+    constraint_cst="$output_dir/console138k_ddr3_spec256.cst"
+    constraint_sdc="$output_dir/console138k_ddr3_spec256.sdc"
+    sed \
+        -e "s|\"memory_pll/|\"${constraint_prefix}memory_pll/|g" \
+        -e "s|\"ddr3/|\"${constraint_prefix}ddr3/|g" \
+        "$repo_root/boards/console138k/console138k_ddr3.cst" \
+        >"$constraint_cst"
+    sed \
+        -e "s|get_nets {memory_clock}|get_nets {${constraint_prefix}memory_clock}|g" \
+        -e "s|{ddr3/|{${constraint_prefix}ddr3/|g" \
+        -e "s|{video_serial_clock}|{${constraint_prefix}video_serial_clock}|g" \
+        -e "s|{pixel_clock_divider/|{${constraint_prefix}pixel_clock_divider/|g" \
+        -e "s|{status_metastability_|{${constraint_prefix}status_metastability_|g" \
+        "$repo_root/boards/console138k/console138k_ddr3.sdc" \
+        >"$constraint_sdc"
+fi
 project_tcl="$output_dir/$base_name.tcl"
 bitstream="$output_dir/impl/pnr/$base_name.fs"
 timing_report="$output_dir/impl/pnr/${base_name}_tr_content.html"
@@ -132,6 +199,8 @@ repo_source_files=(
     "${common_source_files[@]}"
     "${profile_source_files[@]}"
     "${extra_hash_files[@]}"
+    "$repo_root/boards/console138k/console138k_ddr3.cst"
+    "$repo_root/boards/console138k/console138k_ddr3.sdc"
 )
 
 {
@@ -148,6 +217,8 @@ repo_source_files=(
                        "${profile_source_files[@]}"; do
         printf 'add_file {%s}\n' "$source_file"
     done
+    printf 'add_file {%s}\n' "$constraint_cst"
+    printf 'add_file {%s}\n' "$constraint_sdc"
     printf '%s\n' 'run all'
 } >"$project_tcl"
 
@@ -188,6 +259,14 @@ for vendor_file in "${vendor_files[@]}"; do
         "${vendor_file#"$vendor_source/"}"
 done >"$output_dir/vendor-source-sha256.txt"
 
+if ((${#user_input_files[@]})); then
+    for user_input_file in "${user_input_files[@]}"; do
+        printf '%s  %s\n' \
+            "$(sha256sum "$user_input_file" | awk '{print $1}')" \
+            "$(basename "$user_input_file")"
+    done >"$output_dir/user-input-sha256.txt"
+fi
+
 source_tree_state=clean
 if [[ -n $(git -C "$repo_root" status --porcelain -- \
         boards/console138k rtl/memory rtl/smoke rtl/video) ]]; then
@@ -205,6 +284,10 @@ fi
     printf 'built_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'bitstream_sha256=%s\n' \
         "$(sha256sum "$bitstream" | awk '{print $1}')"
+    if ((${#user_input_files[@]})); then
+        printf 'image_sha256=%s\n' \
+            "$(sha256sum "$image_file" | awk '{print $1}')"
+    fi
 } >"$output_dir/build-manifest.txt"
 
 printf 'console138k DDR3 build: PASS\nbitstream: %s\n' "$bitstream"

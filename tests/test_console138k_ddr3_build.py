@@ -24,7 +24,8 @@ class Console138kDdr3BuildDriverTests(unittest.TestCase):
         result = self.run_driver("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--vendor-source ABSOLUTE_DIRECTORY", result.stdout)
-        self.assertIn("--profile diagnostic|logo", result.stdout)
+        self.assertIn("--profile diagnostic|logo|spec256", result.stdout)
+        self.assertIn("--image ABSOLUTE_RGB332_MEM", result.stdout)
 
     def test_rejects_relative_directories_before_running_vendor_tools(self) -> None:
         result = self.run_driver(
@@ -98,6 +99,64 @@ class Console138kDdr3BuildDriverTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("required vendor source missing", result.stderr)
+
+    def test_spec256_profile_requires_an_absolute_image(self) -> None:
+        result = self.run_driver(
+            "--toolchain",
+            "vendor",
+            "--profile",
+            "spec256",
+            "--vendor-source",
+            "/tmp/vendor",
+            "--output",
+            "/tmp/output",
+            "--image",
+            "relative/frame.mem",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--image must be an absolute path", result.stderr)
+
+    def test_spec256_profile_reaches_vendor_validation_with_valid_image(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            vendor_source = root / "vendor"
+            output = root / "output"
+            image = root / "frame.mem"
+            vendor_source.mkdir()
+            output.mkdir()
+            image.write_text("00\n" * (256 * 192), encoding="ascii")
+
+            result = self.run_driver(
+                "--toolchain",
+                "vendor",
+                "--profile",
+                "spec256",
+                "--vendor-source",
+                str(vendor_source),
+                "--output",
+                str(output),
+                "--image",
+                str(image),
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("required vendor source missing", result.stderr)
+
+    def test_spec256_profile_retargets_internal_constraints_for_wrapper(self) -> None:
+        source = BUILD_DRIVER.read_text(encoding="utf-8")
+
+        self.assertIn('constraint_prefix="display/"', source)
+        self.assertIn("console138k_ddr3_spec256.cst", source)
+        self.assertIn("console138k_ddr3_spec256.sdc", source)
+        self.assertIn("${constraint_prefix}memory_pll/", source)
+        self.assertIn("${constraint_prefix}ddr3/", source)
+        self.assertIn("${constraint_prefix}pixel_clock_divider/", source)
+        self.assertIn(
+            "get_nets {${constraint_prefix}memory_clock}",
+            source,
+        )
+        self.assertNotIn('s|{memory_clock}|', source)
 
 
 if __name__ == "__main__":

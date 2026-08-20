@@ -3,7 +3,13 @@
 
 `default_nettype none
 
-module nexttang_console138k_ddr3_logo (
+module nexttang_console138k_ddr3_logo #(
+    parameter IMAGE_FILE = "nexttang_logo_128x128_rgb332.mem",
+    parameter integer IMAGE_BEATS = 512,
+    parameter integer BEAT_ADDRESS_WIDTH = 9,
+    parameter integer PIXEL_ADDRESS_WIDTH = 14,
+    parameter integer STATIC_SPEC256_FRAME = 0
+) (
     input  wire        sys_clk,
     output wire        status_led,
     output wire [4:0]  probe,
@@ -146,7 +152,7 @@ module nexttang_console138k_ddr3_logo (
     wire engine_logo_ready;
     wire engine_buffer_write_enable;
     wire engine_buffer_write_bank;
-    wire [8:0] engine_buffer_write_address;
+    wire [BEAT_ADDRESS_WIDTH-1:0] engine_buffer_write_address;
     wire [255:0] engine_buffer_write_data;
     wire [2:0] engine_status;
 
@@ -165,7 +171,7 @@ module nexttang_console138k_ddr3_logo (
     reg [2:0] status_pixel = 0;
 
     wire framebuffer_read_bank;
-    wire [13:0] framebuffer_read_address;
+    wire [PIXEL_ADDRESS_WIDTH-1:0] framebuffer_read_address;
     wire [7:0] framebuffer_read_data;
     wire logo_available_pixel;
     wire [7:0] red;
@@ -287,7 +293,9 @@ module nexttang_console138k_ddr3_logo (
     end
 
     nexttang_ddr3_logo_engine #(
-        .LOGO_FILE("nexttang_logo_128x128_rgb332.mem")
+        .LOGO_FILE(IMAGE_FILE),
+        .LOGO_BEATS(IMAGE_BEATS),
+        .BEAT_ADDRESS_WIDTH(BEAT_ADDRESS_WIDTH)
     ) logo_engine (
         .clock(controller_clock),
         .reset(!controller_reset_n),
@@ -316,7 +324,11 @@ module nexttang_console138k_ddr3_logo (
         .status(engine_status)
     );
 
-    nexttang_logo_framebuffer logo_framebuffer (
+    nexttang_logo_framebuffer #(
+        .BEAT_ADDRESS_WIDTH(BEAT_ADDRESS_WIDTH),
+        .BEAT_COUNT(IMAGE_BEATS),
+        .PIXEL_ADDRESS_WIDTH(PIXEL_ADDRESS_WIDTH)
+    ) logo_framebuffer (
         .write_clock(controller_clock),
         .write_enable(engine_buffer_write_enable),
         .write_bank(engine_buffer_write_bank),
@@ -328,22 +340,43 @@ module nexttang_console138k_ddr3_logo (
         .read_data(framebuffer_read_data)
     );
 
-    nexttang_ddr_logo_video logo_video (
-        .pixel_clock(pixel_clock),
-        .reset(pixel_reset),
-        .completion_toggle(completion_toggle_pixel),
-        .completion_bank(completion_bank_pixel),
-        .reload_request_toggle(pixel_reload_request_toggle),
-        .reload_request_bank(pixel_reload_request_bank),
-        .framebuffer_read_bank(framebuffer_read_bank),
-        .framebuffer_read_address(framebuffer_read_address),
-        .framebuffer_read_data(framebuffer_read_data),
-        .logo_available(logo_available_pixel),
-        .red(red), .green(green), .blue(blue),
-        .hsync(hsync), .vsync(vsync), .data_enable(data_enable),
-        .horizontal_position(horizontal_position),
-        .vertical_position(vertical_position)
-    );
+    generate
+        if (STATIC_SPEC256_FRAME) begin : static_spec256_video
+            nexttang_spec256_frame_video frame_video (
+                .pixel_clock(pixel_clock),
+                .reset(pixel_reset),
+                .completion_toggle(completion_toggle_pixel),
+                .completion_bank(completion_bank_pixel),
+                .reload_request_toggle(pixel_reload_request_toggle),
+                .reload_request_bank(pixel_reload_request_bank),
+                .framebuffer_read_bank(framebuffer_read_bank),
+                .framebuffer_read_address(framebuffer_read_address),
+                .framebuffer_read_data(framebuffer_read_data),
+                .frame_available(logo_available_pixel),
+                .red(red), .green(green), .blue(blue),
+                .hsync(hsync), .vsync(vsync), .data_enable(data_enable),
+                .horizontal_position(horizontal_position),
+                .vertical_position(vertical_position)
+            );
+        end else begin : moving_logo_video
+            nexttang_ddr_logo_video logo_video (
+                .pixel_clock(pixel_clock),
+                .reset(pixel_reset),
+                .completion_toggle(completion_toggle_pixel),
+                .completion_bank(completion_bank_pixel),
+                .reload_request_toggle(pixel_reload_request_toggle),
+                .reload_request_bank(pixel_reload_request_bank),
+                .framebuffer_read_bank(framebuffer_read_bank),
+                .framebuffer_read_address(framebuffer_read_address),
+                .framebuffer_read_data(framebuffer_read_data),
+                .logo_available(logo_available_pixel),
+                .red(red), .green(green), .blue(blue),
+                .hsync(hsync), .vsync(vsync), .data_enable(data_enable),
+                .horizontal_position(horizontal_position),
+                .vertical_position(vertical_position)
+            );
+        end
+    endgenerate
 
     DDR3_Memory_Interface_Top ddr3 (
         .clk(sys_clk),

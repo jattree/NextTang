@@ -448,6 +448,189 @@ endmodule
         )
         self.assertIn("DDR_LOGO_MOTION_PASS", output)
 
+    def test_engine_address_width_covers_a_full_spec256_paper(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            frame_path = Path(temporary_directory) / "frame.mem"
+            frame_path.write_text("00\n" * (256 * 192), encoding="ascii")
+            output = run_iverilog(
+                rf"""
+`timescale 1ns/1ps
+module testbench;
+    reg clock = 0;
+    reg reset = 1;
+    wire [10:0] buffer_write_address;
+    wire [28:0] controller_address;
+
+    always #5 clock = ~clock;
+
+    nexttang_ddr3_logo_engine #(
+        .LOGO_FILE("{frame_path}"),
+        .LOGO_BEATS(1536),
+        .BEAT_ADDRESS_WIDTH(11)
+    ) dut (
+        .clock(clock), .reset(reset), .calibration_complete(1'b0),
+        .reload_request_toggle(1'b0), .reload_request_bank(1'b0),
+        .completion_toggle(), .completion_bank(), .logo_ready(),
+        .buffer_write_enable(), .buffer_write_bank(),
+        .buffer_write_address(buffer_write_address), .buffer_write_data(),
+        .controller_command_ready(1'b0), .controller_command(),
+        .controller_command_enable(), .controller_address(controller_address),
+        .controller_write_data_ready(1'b0), .controller_write_data(),
+        .controller_write_data_enable(), .controller_write_data_end(),
+        .controller_write_data_mask(), .controller_read_data(256'b0),
+        .controller_read_data_valid(1'b0), .controller_burst(), .status()
+    );
+
+    initial begin
+        #1;
+        force dut.beat_index = 11'd1535;
+        force dut.byte_index = 5'd31;
+        #1;
+        if (!dut.final_beat || dut.source_address != 16'd49151)
+            $fatal(1, "Spec256 source endpoint was not reachable");
+        if (controller_address != 29'h01002ff8)
+            $fatal(1, "DDR endpoint address was %08x", controller_address);
+        $display("DDR_SPEC256_ENGINE_WIDTH_PASS");
+        $finish;
+    end
+endmodule
+""",
+                REPO_ROOT / "rtl" / "memory" / "nexttang_ddr3_logo_engine.v",
+            )
+        self.assertIn("DDR_SPEC256_ENGINE_WIDTH_PASS", output)
+
+    def test_framebuffer_reaches_the_last_spec256_pixel(self) -> None:
+        output = run_iverilog(
+            r"""
+`timescale 1ns/1ps
+module testbench;
+    reg write_clock = 0;
+    reg read_clock = 0;
+    reg write_enable = 0;
+    reg [10:0] write_address = 0;
+    reg [255:0] write_data = 0;
+    reg [15:0] read_address = 0;
+    wire [7:0] read_data;
+
+    always #3 write_clock = ~write_clock;
+    always #5 read_clock = ~read_clock;
+
+    nexttang_logo_framebuffer #(
+        .BEAT_ADDRESS_WIDTH(11),
+        .BEAT_COUNT(1536),
+        .PIXEL_ADDRESS_WIDTH(16)
+    ) dut (
+        .write_clock(write_clock), .write_enable(write_enable),
+        .write_bank(1'b0), .write_address(write_address),
+        .write_data(write_data), .read_clock(read_clock),
+        .read_bank(1'b0), .read_address(read_address),
+        .read_data(read_data)
+    );
+
+    initial begin
+        @(negedge write_clock);
+        write_address = 11'd1535;
+        write_data[31 * 8 +: 8] = 8'ha7;
+        write_enable = 1;
+        @(negedge write_clock);
+        write_enable = 0;
+        read_address = 16'd49151;
+        repeat (2) @(posedge read_clock);
+        #1;
+        if (read_data !== 8'ha7)
+            $fatal(1, "last Spec256 pixel returned %02x", read_data);
+        $display("SPEC256_FRAMEBUFFER_ENDPOINT_PASS");
+        $finish;
+    end
+endmodule
+""",
+            REPO_ROOT / "rtl" / "video" / "nexttang_logo_framebuffer.v",
+        )
+        self.assertIn("SPEC256_FRAMEBUFFER_ENDPOINT_PASS", output)
+
+    def test_static_spec256_video_waits_for_a_complete_ddr_frame(self) -> None:
+        output = run_iverilog(
+            r"""
+`timescale 1ns/1ps
+module testbench;
+    reg pixel_clock = 0;
+    reg reset = 1;
+    reg completion_toggle = 0;
+    reg completion_bank = 0;
+    wire request_toggle;
+    wire request_bank;
+    wire read_bank;
+    wire [2:0] read_address;
+    reg [7:0] read_data = 8'he3;
+    wire frame_available;
+    wire [7:0] red;
+    wire [7:0] green;
+    wire [7:0] blue;
+    wire hsync;
+    wire vsync;
+    wire data_enable;
+    wire [3:0] horizontal_position;
+    wire [3:0] vertical_position;
+
+    always #1 pixel_clock = ~pixel_clock;
+
+    nexttang_spec256_frame_video #(
+        .H_ACTIVE(12), .H_FRONT(1), .H_SYNC(1), .H_BACK(1),
+        .V_ACTIVE(8), .V_FRONT(1), .V_SYNC(1), .V_BACK(1),
+        .H_BITS(4), .V_BITS(4),
+        .FRAME_WIDTH(4), .FRAME_HEIGHT(2),
+        .FRAME_X_BITS(2), .FRAME_Y_BITS(1), .SCALE_SHIFT(1)
+    ) dut (
+        .pixel_clock(pixel_clock), .reset(reset),
+        .completion_toggle(completion_toggle),
+        .completion_bank(completion_bank),
+        .reload_request_toggle(request_toggle),
+        .reload_request_bank(request_bank),
+        .framebuffer_read_bank(read_bank),
+        .framebuffer_read_address(read_address),
+        .framebuffer_read_data(read_data),
+        .frame_available(frame_available),
+        .red(red), .green(green), .blue(blue),
+        .hsync(hsync), .vsync(vsync), .data_enable(data_enable),
+        .horizontal_position(horizontal_position),
+        .vertical_position(vertical_position)
+    );
+
+    task finish_frame;
+        begin
+            wait (dut.horizontal_counter == 14 && dut.vertical_counter == 10);
+            @(posedge pixel_clock);
+            #1;
+        end
+    endtask
+
+    initial begin
+        repeat (3) @(posedge pixel_clock);
+        reset = 0;
+        if (frame_available)
+            $fatal(1, "frame was visible before DDR completion");
+        completion_toggle = 1;
+        completion_bank = 1;
+        finish_frame();
+        if (!frame_available || read_bank != 1)
+            $fatal(1, "completed DDR bank was not selected");
+        if (request_toggle || request_bank)
+            $fatal(1, "static display requested an unnecessary reload");
+
+        wait (horizontal_position == 2 && vertical_position == 2);
+        @(posedge pixel_clock);
+        #1;
+        if ({red, green, blue} !== 24'hff00ff)
+            $fatal(1, "RGB332 expansion returned %02x%02x%02x", red, green, blue);
+        $display("STATIC_SPEC256_VIDEO_PASS");
+        $finish;
+    end
+endmodule
+""",
+            REPO_ROOT / "rtl" / "video" / "nexttang_spec256_frame_video.v",
+        )
+        self.assertIn("STATIC_SPEC256_VIDEO_PASS", output)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,6 +23,7 @@ from tools.spec256.render import (  # noqa: E402
     render_paper_indices,
     spectrum_screen_offset,
     write_ppm,
+    write_rgb332_mem,
 )
 
 
@@ -119,6 +120,48 @@ class Spec256RenderTests(unittest.TestCase):
             path = Path(temporary) / "test.ppm"
             with self.assertRaisesRegex(ValueError, "256-entry palette"):
                 write_ppm(path, 1, 1, b"\x00", ((0, 0, 0),))
+
+    def test_rgb332_writer_quantises_palette_and_checks_its_size(self) -> None:
+        palette = [(0, 0, 0)] * 256
+        palette[1] = (255, 128, 64)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "test.mem"
+            write_rgb332_mem(path, bytes((0, 1)), tuple(palette))
+            output = path.read_text(encoding="ascii")
+
+            self.assertEqual(output, "00\nf1\n")
+            with self.assertRaisesRegex(ValueError, "256-entry palette"):
+                write_rgb332_mem(path, b"\x00", ((0, 0, 0),))
+
+    def test_cli_can_emit_rgb332_memory_initialisation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gfx = root / "TEST.GFX"
+            palette = root / "sp256.pal"
+            output = root / "test.mem"
+            gfx.write_bytes(bytes(GFX_SIZE))
+            palette.write_text("0 " * (256 * 3), encoding="ascii")
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(REPO_ROOT / "tools/spec256/render.py"),
+                    str(gfx),
+                    "--palette",
+                    str(palette),
+                    "--output-format",
+                    "rgb332-mem",
+                    "--output",
+                    str(output),
+                ],
+                cwd=REPO_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(output.read_text(encoding="ascii").splitlines()), 49152)
 
     def test_renderer_runs_directly_from_repository_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

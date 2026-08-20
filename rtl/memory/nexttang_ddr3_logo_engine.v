@@ -9,6 +9,7 @@
 module nexttang_ddr3_logo_engine #(
     parameter LOGO_FILE = "rtl/smoke/nexttang_logo_128x128_rgb332.mem",
     parameter integer LOGO_BEATS = 512,
+    parameter integer BEAT_ADDRESS_WIDTH = 9,
     parameter [28:0] LOGO_BASE_ADDRESS = 29'h01000000,
     parameter integer CALIBRATION_TIMEOUT_CYCLES = 270000000,
     parameter integer TRANSACTION_TIMEOUT_CYCLES = 25000000,
@@ -24,7 +25,7 @@ module nexttang_ddr3_logo_engine #(
     output reg          logo_ready,
     output reg          buffer_write_enable,
     output reg          buffer_write_bank,
-    output reg  [8:0]   buffer_write_address,
+    output reg  [BEAT_ADDRESS_WIDTH-1:0] buffer_write_address,
     output reg  [255:0] buffer_write_data,
     input  wire         controller_command_ready,
     output wire [2:0]   controller_command,
@@ -62,7 +63,7 @@ module nexttang_ddr3_logo_engine #(
 
     reg [7:0] source_pixels [0:LOGO_BEATS * 32 - 1];
     reg [3:0] state;
-    reg [8:0] beat_index;
+    reg [BEAT_ADDRESS_WIDTH-1:0] beat_index;
     reg [4:0] byte_index;
     reg [7:0] source_byte;
     reg [255:0] source_data;
@@ -77,14 +78,15 @@ module nexttang_ddr3_logo_engine #(
     wire write_pair_ready = controller_command_ready &&
                             controller_write_data_ready;
     wire final_beat = beat_index == LOGO_BEATS - 1;
-    wire [13:0] source_address = {beat_index, 5'b00000} + byte_index;
+    wire [BEAT_ADDRESS_WIDTH+4:0] source_address =
+        {beat_index, 5'b00000} + byte_index;
 
     assign controller_command = state == STATE_WRITE ? 3'b000 : 3'b001;
     assign controller_command_enable =
         (state == STATE_WRITE && write_pair_ready) ||
         (state == STATE_READ_COMMAND && controller_command_ready);
     assign controller_address = LOGO_BASE_ADDRESS +
-                                {17'b0, beat_index, 3'b000};
+        {{(26-BEAT_ADDRESS_WIDTH){1'b0}}, beat_index, 3'b000};
     assign controller_write_data = source_data;
     assign controller_write_data_enable =
         state == STATE_WRITE && write_pair_ready;

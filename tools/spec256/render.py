@@ -127,6 +127,22 @@ def write_ppm(
     path.write_bytes(f"P6\n{width} {height}\n255\n".encode("ascii") + rgb)
 
 
+def write_rgb332_mem(
+    path: Path,
+    indices: bytes,
+    palette: Sequence[tuple[int, int, int]],
+) -> None:
+    """Write one RGB332 hexadecimal byte per line for FPGA initialisation."""
+    if len(palette) != 256:
+        raise ValueError("rendering requires a 256-entry palette")
+
+    values = []
+    for index in indices:
+        red, green, blue = palette[index]
+        values.append(f"{(red & 0xE0) | ((green >> 3) & 0x1C) | (blue >> 6):02x}")
+    path.write_text("\n".join(values) + "\n", encoding="ascii")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="render a user-supplied Spec256 GFX paper to PPM"
@@ -135,6 +151,12 @@ def main() -> int:
     parser.add_argument("--background", type=Path, help="optional 64000-byte B00")
     parser.add_argument("--palette", type=Path, required=True, help="Spec256 palette")
     parser.add_argument("--output", type=Path, required=True, help="output PPM")
+    parser.add_argument(
+        "--output-format",
+        choices=("ppm", "rgb332-mem"),
+        default="ppm",
+        help="output encoding (default: ppm)",
+    )
     arguments = parser.parse_args()
 
     try:
@@ -146,7 +168,10 @@ def main() -> int:
         )
         indices = render_paper_indices(planes, background)
         palette = load_palette(arguments.palette)
-        write_ppm(arguments.output, PAPER_WIDTH, PAPER_HEIGHT, indices, palette)
+        if arguments.output_format == "rgb332-mem":
+            write_rgb332_mem(arguments.output, indices, palette)
+        else:
+            write_ppm(arguments.output, PAPER_WIDTH, PAPER_HEIGHT, indices, palette)
     except (OSError, UnicodeError, ValueError) as error:
         parser.error(str(error))
     return 0
