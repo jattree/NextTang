@@ -1,8 +1,7 @@
-"""Behavioural tests for the BL616 keyboard path.
+"""Behavioural tests for the Console keyboard paths.
 
-A USB keyboard on the board's USB-A ports is read by the factory TangCore
-firmware on the BL616, which sends PS/2 scan codes to the FPGA over a UART.
-These cover the three pieces that turns into key matrix bits.
+The Console USB-A data pairs terminate at the FPGA, so physical USB keyboards
+use the FPGA HID host. The BL616 UART parser remains covered separately.
 """
 
 from pathlib import Path
@@ -16,6 +15,11 @@ RECEIVER_RTL = REPO_ROOT / "rtl" / "input" / "nexttang_uart_receiver.v"
 KEYBOARD_RTL = REPO_ROOT / "rtl" / "input" / "nexttang_bl616_keyboard.v"
 MATRIX_RTL = REPO_ROOT / "rtl" / "input" / "nexttang_ps2_matrix.v"
 KEY_MATRIX_RTL = REPO_ROOT / "rtl" / "input" / "nexttang_keyboard_matrix.v"
+USB_MATRIX_RTL = REPO_ROOT / "rtl" / "input" / "nexttang_usb_keyboard_matrix.v"
+USB_HOST_RTL = REPO_ROOT / "rtl" / "input" / "usb_hid_host.v"
+USB_HOST_ROM_RTL = REPO_ROOT / "rtl" / "input" / "usb_hid_host_dual_rom.v"
+USB_DEVICE_MODEL = REPO_ROOT / "tests" / "fixtures" / "usb_full_speed_keyboard_model.v"
+USB_HOST_TESTBENCH = REPO_ROOT / "tests" / "fixtures" / "usb_hid_host_full_speed_tb.v"
 
 
 def run(testbench: str, *sources: Path) -> str:
@@ -106,21 +110,31 @@ module testbench;
     reg line = 1;
     wire [7:0] scancode;
     wire scancode_valid;
+    wire debug_byte_valid;
+    wire debug_sync_valid;
     integer i;
     integer count = 0;
+    integer byte_count = 0;
+    integer sync_count = 0;
     reg [7:0] codes [0:15];
 
     always #5 clock = ~clock;
 
     nexttang_bl616_keyboard #(.CLOCK_HZ(1000), .BAUD_RATE(100)) dut (
         .clock(clock), .reset(reset), .receive(line),
-        .scancode(scancode), .scancode_valid(scancode_valid)
+        .scancode(scancode), .scancode_valid(scancode_valid),
+        .debug_byte_valid(debug_byte_valid),
+        .debug_sync_valid(debug_sync_valid)
     );
 
     always @(posedge clock) if (scancode_valid) begin
         codes[count] = scancode;
         count = count + 1;
     end
+    always @(posedge clock) if (debug_byte_valid)
+        byte_count = byte_count + 1;
+    always @(posedge clock) if (debug_sync_valid)
+        sync_count = sync_count + 1;
 
     task send(input [7:0] value);
         integer b;
@@ -158,6 +172,8 @@ endmodule
         if (count != 2) $fatal(1, "expected two codes, saw %0d", count);
         if (codes[0] !== 8'h1c || codes[1] !== 8'h4d)
             $fatal(1, "codes were %02x %02x", codes[0], codes[1]);
+        if (byte_count != 6) $fatal(1, "expected six UART bytes, saw %0d", byte_count);
+        if (sync_count != 1) $fatal(1, "expected one frame sync, saw %0d", sync_count);
         $display("FRAME_PASS count=%0d", count);
 """
         output = run(self.frame_testbench(body, expect), KEYBOARD_RTL, RECEIVER_RTL)
@@ -278,6 +294,181 @@ endmodule
 """)
         self.assertIn("HOLD_PASS", output)
 
+
+class UsbKeyboardMatrixTests(unittest.TestCase):
+    def test_hardware_observed_config_packet_order_classifies_keyboard(self) -> None:
+        """The two Console roots returned configuration bytes as 2/8/8."""
+        with tempfile.TemporaryDirectory() as directory:
+            simulation = Path(directory) / "usb-host-hardware-packet-order-sim"
+            build = subprocess.run(
+                [
+                    "iverilog", "-g2012", "-DNEXTTANG_USB_SIM_FAST",
+                    "-Ptestbench.DEVICE_LOW_SPEED=1",
+                    "-Ptestbench.CONFIG_LEADING_SHORT=1",
+                    "-o", str(simulation),
+                    str(USB_HOST_TESTBENCH), str(USB_DEVICE_MODEL),
+                    str(USB_HOST_RTL), str(USB_HOST_ROM_RTL),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            result = subprocess.run(
+                [str(simulation)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("USB_FULL_SPEED_KEYBOARD_PASS", result.stdout)
+
+    def test_low_speed_composite_keyboard_enumerates_and_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            simulation = Path(directory) / "usb-host-low-speed-sim"
+            build = subprocess.run(
+                [
+                    "iverilog", "-g2012", "-DNEXTTANG_USB_SIM_FAST",
+                    "-Ptestbench.DEVICE_LOW_SPEED=1",
+                    "-o", str(simulation),
+                    str(USB_HOST_TESTBENCH), str(USB_DEVICE_MODEL),
+                    str(USB_HOST_RTL), str(USB_HOST_ROM_RTL),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            result = subprocess.run(
+                [str(simulation)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("USB_FULL_SPEED_KEYBOARD_PASS", result.stdout)
+
+    def test_full_speed_composite_keyboard_enumerates_and_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            simulation = Path(directory) / "usb-host-sim"
+            build = subprocess.run(
+                [
+                    "iverilog", "-g2012", "-DNEXTTANG_USB_SIM_FAST",
+                    "-o", str(simulation),
+                    str(USB_HOST_TESTBENCH), str(USB_DEVICE_MODEL),
+                    str(USB_HOST_RTL), str(USB_HOST_ROM_RTL),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            result = subprocess.run(
+                [str(simulation)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("USB_FULL_SPEED_KEYBOARD_PASS", result.stdout)
+
+    def test_full_speed_latch_rejects_a_one_sample_idle_dip(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            simulation = Path(directory) / "usb-host-dip-sim"
+            build = subprocess.run(
+                [
+                    "iverilog", "-g2012", "-DNEXTTANG_USB_SIM_FAST",
+                    "-Ptestbench.INJECT_IDLE_DIP=1",
+                    "-o", str(simulation),
+                    str(USB_HOST_TESTBENCH), str(USB_DEVICE_MODEL),
+                    str(USB_HOST_RTL), str(USB_HOST_ROM_RTL),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            result = subprocess.run(
+                [str(simulation)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("USB_FULL_SPEED_KEYBOARD_PASS", result.stdout)
+
+    def test_full_speed_latch_waits_for_a_decided_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            simulation = Path(directory) / "usb-host-undecided-speed-sim"
+            build = subprocess.run(
+                [
+                    "iverilog", "-g2012", "-DNEXTTANG_USB_SIM_FAST",
+                    "-Ptestbench.INJECT_UNDECIDED_SPEED=1",
+                    "-o", str(simulation),
+                    str(USB_HOST_TESTBENCH), str(USB_DEVICE_MODEL),
+                    str(USB_HOST_RTL), str(USB_HOST_ROM_RTL),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            result = subprocess.run(
+                [str(simulation)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("USB_FULL_SPEED_KEYBOARD_PASS", result.stdout)
+
+    def test_hid_report_maps_digits_letters_and_shift(self) -> None:
+        testbench = r"""
+module testbench;
+    reg [1:0] device_type = 1;
+    reg [7:0] modifiers = 0;
+    reg [7:0] key1 = 0, key2 = 0, key3 = 0, key4 = 0, key5 = 0, key6 = 0;
+    wire [39:0] keys;
+
+    nexttang_usb_keyboard_matrix dut (
+        .device_type(device_type), .modifiers(modifiers),
+        .key1(key1), .key2(key2), .key3(key3), .key4(key4),
+        .key5(key5), .key6(key6), .keys(keys)
+    );
+
+    initial begin
+        key1 = 8'h1e; #1;
+        if (keys != (40'b1 << 15)) $fatal(1, "1 mapping wrong: %010x", keys);
+        key1 = 8'h04; modifiers = 8'h02; #1;
+        if (!keys[5] || !keys[0]) $fatal(1, "shift+A wrong: %010x", keys);
+        device_type = 0; #1;
+        if (keys != 0) $fatal(1, "non-keyboard report leaked: %010x", keys);
+        $display("USB_MATRIX_PASS");
+        $finish;
+    end
+endmodule
+"""
+        self.assertIn("USB_MATRIX_PASS", run(testbench, USB_MATRIX_RTL))
 
 if __name__ == "__main__":
     unittest.main()

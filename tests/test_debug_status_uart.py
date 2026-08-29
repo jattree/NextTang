@@ -63,6 +63,13 @@ RECEIVER = r"""
 
 
 class DebugStatusUartTest(unittest.TestCase):
+    def test_flags_cross_through_two_stages_before_sticky_state(self) -> None:
+        source = UART_RTL.read_text(encoding="utf-8")
+        self.assertIn("flags_meta", source)
+        self.assertIn("flags_sync", source)
+        self.assertIn("seen <= seen | flags_sync", source)
+        self.assertIn("seen & ~flags_sync", source)
+
     def test_reports_never_seen_then_asserted_then_lost(self) -> None:
         # The three states must be distinguishable in the decoded text, and a
         # flag that went away must not read the same as one that never arrived.

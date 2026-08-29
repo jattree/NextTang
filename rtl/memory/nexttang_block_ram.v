@@ -23,7 +23,8 @@
 
 module nexttang_block_ram #(
     parameter integer ADDRESS_BITS = 13,
-    parameter integer DATA_BITS = 8
+    parameter integer DATA_BITS = 8,
+    parameter IMAGE = ""
 ) (
     input  wire                     clock,
 
@@ -39,6 +40,11 @@ module nexttang_block_ram #(
     localparam integer DEPTH = 1 << ADDRESS_BITS;
 
     reg [DATA_BITS-1:0] storage [0:DEPTH-1];
+
+    initial begin
+        if (IMAGE != "")
+            $readmemh(IMAGE, storage);
+    end
 
     always @(posedge clock) begin
         if (write_enable)

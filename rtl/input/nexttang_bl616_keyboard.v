@@ -24,7 +24,9 @@ module nexttang_bl616_keyboard #(
     input  wire       reset,
     input  wire       receive,
     output reg  [7:0] scancode,
-    output reg        scancode_valid
+    output reg        scancode_valid,
+    output wire       debug_byte_valid,
+    output reg        debug_sync_valid
 );
     localparam [7:0] SYNC = 8'haa;
     localparam [7:0] COMMAND_SCANCODE = 8'h0c;
@@ -46,6 +48,8 @@ module nexttang_bl616_keyboard #(
     wire [7:0] byte_data;
     wire byte_valid;
 
+    assign debug_byte_valid = byte_valid;
+
     nexttang_uart_receiver #(
         .CLOCK_HZ(CLOCK_HZ),
         .BAUD_RATE(BAUD_RATE)
@@ -64,14 +68,18 @@ module nexttang_bl616_keyboard #(
             is_scancode <= 1'b0;
             scancode <= 0;
             scancode_valid <= 1'b0;
+            debug_sync_valid <= 1'b0;
         end else begin
             scancode_valid <= 1'b0;
+            debug_sync_valid <= 1'b0;
 
             if (byte_valid) begin
                 case (state)
                     WAIT_SYNC: begin
-                        if (byte_data == SYNC)
+                        if (byte_data == SYNC) begin
                             state <= LENGTH_HIGH;
+                            debug_sync_valid <= 1'b1;
+                        end
                     end
 
                     LENGTH_HIGH: begin

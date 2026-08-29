@@ -25,6 +25,19 @@ module nexttang_uart_receiver #(
     localparam integer HALF_BIT = CLOCKS_PER_BIT / 2;
     localparam integer COUNT_BITS = $clog2(CLOCKS_PER_BIT + 1);
 
+    // Rounding to nearest hides an unusable ratio rather than failing: at
+    // 3.5 MHz and 2 Mbaud a bit is 1.75 clocks and this counts 2, so the
+    // sampling point walks 2.5 bit-times across one frame and the receiver
+    // decodes nothing.  The behavioural tests run at a comfortable 10:1 and
+    // cannot see it, so the bound is enforced where the parameters are fixed.
+    // Eight clocks per bit keeps the mid-bit sample inside the bit for any
+    // rounding the divider can produce.
+    generate
+        if (CLOCKS_PER_BIT < 8) begin : g_baud_ratio
+            nexttang_uart_receiver_clock_too_slow_for_this_baud_rate impossible ();
+        end
+    endgenerate
+
     localparam [1:0] IDLE = 2'd0;
     localparam [1:0] START = 2'd1;
     localparam [1:0] DATA = 2'd2;

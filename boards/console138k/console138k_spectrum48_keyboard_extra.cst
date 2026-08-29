@@ -1,0 +1,10 @@
+// Console USB-A ports. Their data pairs terminate at the FPGA, so a core that
+// wants a keyboard must contain a USB host and claim these pins explicitly.
+IO_LOC "usb1_dp" H13;
+IO_PORT "usb1_dp" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb1_dn" G13;
+IO_PORT "usb1_dn" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb2_dp" M15;
+IO_PORT "usb2_dp" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb2_dn" M16;
+IO_PORT "usb2_dn" IO_TYPE=LVCMOS33 DRIVE=8;

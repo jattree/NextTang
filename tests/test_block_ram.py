@@ -19,9 +19,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RAM_RTL = REPO_ROOT / "rtl" / "memory" / "nexttang_block_ram.v"
 
 
-def run_testbench(body: str) -> str:
+def run_testbench(body: str, initial_image: bytes | None = None) -> str:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory)
+        if initial_image is not None:
+            image_path = path / "initial.mem"
+            image_path.write_text(
+                "".join(f"{byte:02x}\n" for byte in initial_image),
+                encoding="utf-8",
+            )
+            body = body.replace("IMAGE_FILE", str(image_path))
         (path / "testbench.v").write_text(body, encoding="utf-8")
         compiled = subprocess.run(
             ["iverilog", "-g2012", "-Wall", "-s", "testbench",
@@ -72,6 +79,27 @@ endmodule
 
 
 class BlockRamTest(unittest.TestCase):
+    def test_optional_image_initialises_both_read_ports(self) -> None:
+        harness = HARNESS.replace(
+            "#(.ADDRESS_BITS(8), .DATA_BITS(8))",
+            '#(.ADDRESS_BITS(8), .DATA_BITS(8), .IMAGE("IMAGE_FILE"))',
+        )
+        output = run_testbench(harness.replace("BODY", """
+    always #5 clock = ~clock;
+    always #3 port_b_clock = ~port_b_clock;
+    initial begin
+        write_address = 8'h42;
+        port_b_address = 8'h42;
+        repeat (3) @(posedge clock);
+        repeat (3) @(posedge port_b_clock);
+        if (read_data !== 8'hA5 || port_b_data !== 8'hA5)
+            $fatal(1, "initial image was not visible on both ports");
+        $display("IMAGE_OK");
+        $finish;
+    end
+"""), bytes([0] * 0x42 + [0xA5] + [0] * (256 - 0x43)))
+        self.assertIn("IMAGE_OK", output)
+
     def test_a_written_byte_reads_back_on_the_processor_port(self) -> None:
         output = run_testbench(HARNESS.replace("BODY", """
     always #5 clock = ~clock;

@@ -18,6 +18,7 @@ from tools.spec256.gfx import (
     decode_gfx,
     read_exact_file,
 )
+from tools.spec256.snapshot import parse_snapshot
 
 
 PAPER_WIDTH = 256
@@ -28,6 +29,22 @@ BACKGROUND_PAPER_X = (BACKGROUND_WIDTH - PAPER_WIDTH) // 2
 BACKGROUND_PAPER_Y = (BACKGROUND_HEIGHT - PAPER_HEIGHT) // 2
 BACKGROUND_SIZE = BACKGROUND_WIDTH * BACKGROUND_HEIGHT
 MAX_PALETTE_BYTES = 16 * 1024
+
+BITMAP_SIZE = PAPER_WIDTH * PAPER_HEIGHT // 8
+ATTRIBUTE_SIZE = (PAPER_WIDTH // 8) * (PAPER_HEIGHT // 8)
+SCREEN_SIZE = BITMAP_SIZE + ATTRIBUTE_SIZE
+
+# A graphical value of 0xFF marks a pixel the artist did not recolour, so the
+# ordinary Spectrum screen shows through with its attribute colour.  GZX has no
+# case for it and paints palette entry 255 instead.
+PASSTHROUGH_INDEX = 0xFF
+
+SPECTRUM_PALETTE = (
+    (0, 0, 0), (0, 0, 215), (215, 0, 0), (215, 0, 215),
+    (0, 215, 0), (0, 215, 215), (215, 215, 0), (215, 215, 215),
+    (0, 0, 0), (0, 0, 255), (255, 0, 0), (255, 0, 255),
+    (0, 255, 0), (0, 255, 255), (255, 255, 0), (255, 255, 255),
+)
 
 
 def spectrum_screen_offset(line: int, byte_column: int) -> int:
@@ -108,6 +125,78 @@ def load_palette(path: Path) -> tuple[tuple[int, int, int], ...]:
     )
 
 
+def spectrum_pixel_colour(
+    screen: bytes, x: int, y: int, flash_phase: bool = False
+) -> tuple[int, int, int]:
+    """Return the ordinary Spectrum colour of one pixel of a 6912-byte screen."""
+    if len(screen) != SCREEN_SIZE:
+        raise ValueError(
+            f"Spectrum screen must be exactly {SCREEN_SIZE} bytes, got {len(screen)}"
+        )
+
+    byte_column = x // 8
+    bit_set = (screen[spectrum_screen_offset(y, byte_column)] >> (7 - (x % 8))) & 1
+    attribute = screen[BITMAP_SIZE + (y // 8) * (PAPER_WIDTH // 8) + byte_column]
+
+    ink = attribute & 0x07
+    paper = (attribute >> 3) & 0x07
+    if flash_phase and (attribute & 0x80):
+        ink, paper = paper, ink
+
+    bright = (attribute >> 6) & 1
+    return SPECTRUM_PALETTE[bright * 8 + (ink if bit_set else paper)]
+
+
+def render_paper_rgb(
+    planes: Sequence[bytes],
+    palette: Sequence[tuple[int, int, int]],
+    background: bytes | None = None,
+    screen: bytes | None = None,
+    flash_phase: bool = False,
+) -> bytes:
+    """Render the paper as three bytes per pixel, resolving 0xFF passthrough.
+
+    Without a screen this matches GZX, so the existing static pipeline is
+    unchanged.  With one, a 0xFF pixel takes the ordinary Spectrum colour it
+    would have had on an unmodified machine.
+    """
+    if len(palette) != 256:
+        raise ValueError("rendering requires a 256-entry palette")
+    if screen is not None and len(screen) != SCREEN_SIZE:
+        raise ValueError(
+            f"Spectrum screen must be exactly {SCREEN_SIZE} bytes, got {len(screen)}"
+        )
+
+    indices = render_paper_indices(planes, background)
+    output = bytearray()
+    for y in range(PAPER_HEIGHT):
+        for x in range(PAPER_WIDTH):
+            index = indices[y * PAPER_WIDTH + x]
+            if index == PASSTHROUGH_INDEX and screen is not None:
+                output.extend(spectrum_pixel_colour(screen, x, y, flash_phase))
+            else:
+                output.extend(palette[index])
+    return bytes(output)
+
+
+def write_ppm_rgb(path: Path, width: int, height: int, rgb: bytes) -> None:
+    """Write three-bytes-per-pixel data as a dependency-free binary PPM."""
+    if len(rgb) != width * height * 3:
+        raise ValueError("pixel count does not match image dimensions")
+    path.write_bytes(f"P6\n{width} {height}\n255\n".encode("ascii") + rgb)
+
+
+def write_rgb332_mem_rgb(path: Path, rgb: bytes) -> None:
+    """Write one RGB332 hexadecimal byte per line from RGB pixel data."""
+    if len(rgb) % 3:
+        raise ValueError("RGB data must contain three bytes per pixel")
+    values = [
+        f"{(rgb[i] & 0xE0) | ((rgb[i + 1] >> 3) & 0x1C) | (rgb[i + 2] >> 6):02x}"
+        for i in range(0, len(rgb), 3)
+    ]
+    path.write_text("\n".join(values) + "\n", encoding="ascii")
+
+
 def write_ppm(
     path: Path,
     width: int,
@@ -149,6 +238,16 @@ def main() -> int:
     )
     parser.add_argument("gfx", type=Path, help="user-supplied GFX file")
     parser.add_argument("--background", type=Path, help="optional 64000-byte B00")
+    parser.add_argument(
+        "--snapshot",
+        type=Path,
+        help="optional 48K SNA supplying the ordinary screen for 0xFF passthrough",
+    )
+    parser.add_argument(
+        "--flash-phase",
+        action="store_true",
+        help="render the inverted half of the attribute flash cycle",
+    )
     parser.add_argument("--palette", type=Path, required=True, help="Spec256 palette")
     parser.add_argument("--output", type=Path, required=True, help="output PPM")
     parser.add_argument(
@@ -166,12 +265,18 @@ def main() -> int:
             if arguments.background is not None
             else None
         )
-        indices = render_paper_indices(planes, background)
+        screen = None
+        if arguments.snapshot is not None:
+            snapshot = parse_snapshot(arguments.snapshot.read_bytes())
+            screen = snapshot.ram[:SCREEN_SIZE]
         palette = load_palette(arguments.palette)
+        rgb = render_paper_rgb(
+            planes, palette, background, screen, arguments.flash_phase
+        )
         if arguments.output_format == "rgb332-mem":
-            write_rgb332_mem(arguments.output, indices, palette)
+            write_rgb332_mem_rgb(arguments.output, rgb)
         else:
-            write_ppm(arguments.output, PAPER_WIDTH, PAPER_HEIGHT, indices, palette)
+            write_ppm_rgb(arguments.output, PAPER_WIDTH, PAPER_HEIGHT, rgb)
     except (OSError, UnicodeError, ValueError) as error:
         parser.error(str(error))
     return 0

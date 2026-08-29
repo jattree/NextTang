@@ -25,9 +25,18 @@ set_false_path -to [get_regs {scaler/acknowledge_meta*}]
 set_false_path -to [get_regs {scaler/read_bank_meta*}]
 set_false_path -to [get_regs {scaler/publish_meta*}]
 set_false_path -to [get_regs {scaler/published_bank_meta*}]
+set_false_path -to [get_regs {status_uart/flags_meta*}]
 
 # Existing reset and status crossings remain unchanged from the verified 48K
 # target. The ULA profile does not yet enable CPU contention.
 set_false_path -from [get_regs {pixel_reset_shift*}]
 set_false_path -from [get_regs {cpu_reset_shift*}]
 set_false_path -from [get_regs {cpu/Reset_s*}]
+
+# The BL616 link receives at 2 Mbaud, which needs the 28 MHz domain: 3.5 MHz
+# gives 1.75 clocks per bit and decodes nothing. Its key vector, scancode and
+# debug flags therefore cross into the CPU domain on two flops each, and the
+# first stage of a synchroniser is unconstrained by construction.
+set_false_path -to [get_regs {keyboard_keys_meta*}]
+set_false_path -to [get_regs {keyboard_scancode_meta*}]
+set_false_path -to [get_regs {keyboard_debug_meta*}]

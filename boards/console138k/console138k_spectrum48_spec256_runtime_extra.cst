@@ -1,0 +1,5 @@
+// Runtime game-pack UART input: PMOD0 IO2, connector pin 9.  The status UART
+// remains on adjacent PMOD0 IO5 / pin 8, so the FT232RL needs only this socket
+// plus a shared ground on pin 3 or 4.
+IO_LOC "game_pack_uart_rx" G21;
+IO_PORT "game_pack_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF;

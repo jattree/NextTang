@@ -24,13 +24,29 @@
 
 module `NEXTTANG_SPECTRUM48_TOP #(
     // The build writes the image into its own directory and runs there.
-    parameter ROM_IMAGE = "48k.mem"
+    parameter ROM_IMAGE = "48k.mem",
+`ifdef NEXTTANG_SPECTRUM48_USE_SNAPSHOT
+    parameter RAM_IMAGE = "snapshot-ram.mem",
+`else
+    parameter RAM_IMAGE = "",
+`endif
+    parameter SNAPSHOT_BOOT_IMAGE = "snapshot-boot.mem",
+    parameter SPEC256_RAM_IMAGE = "spec256-ram.mem",
+    parameter SPEC256_PALETTE_IMAGE = "spec256-palette.mem",
+    parameter SPEC256_BACKGROUND_IMAGE = ""
 ) (
     input  wire       sys_clk,
-    // Scan codes from the BL616, which reads a USB keyboard on the board's own
-    // USB-A ports under the factory firmware. Read only, so it does not
+    // TangCore messages from the companion BL616. Read only, so it does not
     // contend with the debugger for this multiplexed pin group.
     input  wire       bl616_uart_rx,
+`ifdef NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
+    input  wire       loopback_uart_rx,
+`endif
+`ifdef NEXTTANG_SPEC256_RUNTIME
+    // PMOD0 IO2, beside the status UART on IO5.  Keeping both directions on
+    // one socket gives the runtime loader an ordinary TX/RX/GND connection.
+    input  wire       game_pack_uart_rx,
+`endif
     output wire       debug_uart_tx,
     output wire       tmds_clk_p,
     output wire       tmds_clk_n,
@@ -40,7 +56,14 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 
     // Z80 bus brought out to PMOD1 for a logic analyser. Passive: nothing in
     // the machine depends on these.
-    output wire [5:0] probe
+    inout  wire [5:0] probe
+`ifdef NEXTTANG_SPECTRUM48_USB_KEYBOARD
+    ,
+    inout wire usb1_dp,
+    inout wire usb1_dn,
+    inout wire usb2_dp,
+    inout wire usb2_dn
+`endif
 `ifdef NEXTTANG_SPECTRUM48_USE_DDR3
     ,
     output wire        status_led,
@@ -62,6 +85,13 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     inout  wire [3:0]  ddr_dqs_n
 `endif
 );
+`ifdef NEXTTANG_SPEC256_RUNTIME
+    // Roughly fifteen CPU clocks per bit gives the asynchronous receiver enough
+    // phase margin for the FT232RL and flying leads.  Status and commands use
+    // this same full-duplex rate so the host never changes baud mid-session.
+    localparam integer RUNTIME_UART_BAUD = 230400;
+`endif
+
     // ----------------------------------------------------------------- clocks
     wire serial_clock;
     wire pixel_clock;
@@ -156,7 +186,90 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     reg [3:0] pixel_reset_shift = 0;
     reg [3:0] cpu_reset_shift = 0;
     wire pixel_reset = !pixel_reset_shift[3];
-`ifdef NEXTTANG_SPECTRUM48_USE_DDR3
+`ifdef NEXTTANG_SPEC256_RUNTIME
+    wire loader_hold_reset;
+    wire loader_ready;
+    wire loader_fault;
+    wire [20:0] loader_received_bytes;
+    wire [7:0] loader_byte;
+    wire loader_byte_valid;
+    wire loader_boot_write;
+    wire [13:0] loader_boot_address;
+    wire loader_main_write;
+    wire [15:0] loader_main_address;
+    wire [7:0] loader_graphics_ram_write;
+    wire [15:0] loader_graphics_ram_address;
+    wire [7:0] loader_graphics_rom_write;
+    wire [13:0] loader_graphics_rom_address;
+    wire loader_palette_write;
+    wire [7:0] loader_palette_index;
+    wire [23:0] loader_palette_data;
+    wire loader_background_write;
+    wire [15:0] loader_background_address;
+    wire loader_background_valid;
+    wire [7:0] loader_write_data;
+    wire [2:0] loader_launch_key_count;
+    wire [7:0] loader_launch_key_0;
+    wire [7:0] loader_launch_key_1;
+    wire [7:0] loader_launch_key_2;
+    wire [7:0] loader_launch_key_3;
+    wire [15:0] loader_launch_start_delay_ms;
+    wire [15:0] loader_launch_hold_ms;
+    wire [15:0] loader_launch_gap_ms;
+
+    nexttang_uart_receiver #(
+        .CLOCK_HZ(3500000),
+        .BAUD_RATE(RUNTIME_UART_BAUD)
+    ) game_pack_uart (
+        .clock(cpu_clock),
+        .reset(!cpu_reset_shift[3]),
+        .receive(game_pack_uart_rx),
+        .data(loader_byte),
+        .data_valid(loader_byte_valid)
+    );
+
+    nexttang_spec256_game_loader game_pack_loader (
+        .clock(cpu_clock),
+        .reset(!cpu_reset_shift[3]),
+        .byte_data(loader_byte),
+        .byte_valid(loader_byte_valid),
+        .hold_reset(loader_hold_reset),
+        .ready(loader_ready),
+        .fault(loader_fault),
+        .received_bytes(loader_received_bytes),
+        .boot_write_enable(loader_boot_write),
+        .boot_write_address(loader_boot_address),
+        .main_write_enable(loader_main_write),
+        .main_write_address(loader_main_address),
+        .graphics_ram_write_enable(loader_graphics_ram_write),
+        .graphics_ram_write_address(loader_graphics_ram_address),
+        .graphics_rom_write_enable(loader_graphics_rom_write),
+        .graphics_rom_write_address(loader_graphics_rom_address),
+        .palette_write_enable(loader_palette_write),
+        .palette_write_index(loader_palette_index),
+        .palette_write_data(loader_palette_data),
+        .background_write_enable(loader_background_write),
+        .background_write_address(loader_background_address),
+        .background_valid(loader_background_valid),
+        .write_data(loader_write_data),
+        .launch_key_count(loader_launch_key_count),
+        .launch_key_0(loader_launch_key_0),
+        .launch_key_1(loader_launch_key_1),
+        .launch_key_2(loader_launch_key_2),
+        .launch_key_3(loader_launch_key_3),
+        .launch_start_delay_ms(loader_launch_start_delay_ms),
+        .launch_hold_ms(loader_launch_hold_ms),
+        .launch_gap_ms(loader_launch_gap_ms)
+    );
+
+    wire cpu_reset = !cpu_reset_shift[3] || loader_hold_reset;
+`elsif NEXTTANG_SPEC256_FREEZE_CPU
+    // Diagnostic-only hold: retain the CPU logic in the build while keeping
+    // it reset long enough to inspect the untouched graphical RAM on HDMI.
+    reg [31:0] spec256_freeze_counter = 32'b0;
+    wire cpu_reset = !cpu_reset_shift[3] ||
+                     spec256_freeze_counter != 32'hffffffff;
+`elsif NEXTTANG_SPECTRUM48_USE_DDR3
     reg memory_available_meta = 0;
     reg memory_available_cpu = 0;
     wire cpu_reset = !cpu_reset_shift[3] || !memory_available_cpu;
@@ -178,6 +291,16 @@ module `NEXTTANG_SPECTRUM48_TOP #(
             cpu_reset_shift <= {cpu_reset_shift[2:0], 1'b1};
     end
 
+`ifdef NEXTTANG_SPEC256_FREEZE_CPU
+    always @(posedge cpu_clock or negedge machine_pll_locked) begin
+        if (!machine_pll_locked)
+            spec256_freeze_counter <= 32'b0;
+        else if (spec256_freeze_counter != 32'hffffffff)
+            spec256_freeze_counter <= spec256_freeze_counter + 1'b1;
+    end
+`endif
+
+`ifndef NEXTTANG_SPEC256_FREEZE_CPU
 `ifdef NEXTTANG_SPECTRUM48_USE_DDR3
     always @(posedge cpu_clock or negedge machine_pll_locked) begin
         if (!machine_pll_locked) begin
@@ -188,6 +311,7 @@ module `NEXTTANG_SPECTRUM48_TOP #(
             memory_available_cpu <= memory_available_meta;
         end
     end
+`endif
 `endif
 
     // -------------------------------------------------------------- interrupt
@@ -218,6 +342,47 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 
     wire cpu_wait_n;
 
+`ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
+    wire spec256_sync_enable;
+    wire spec256_bootstrap;
+    wire [127:0] spec256_graphics_address;
+    wire [63:0] spec256_graphics_data_in;
+    wire [63:0] spec256_graphics_data_out;
+    wire [7:0] spec256_graphics_iorq;
+    wire [7:0] spec256_graphics_write;
+    wire [7:0] spec256_graphics_running;
+
+    nexttang_spec256_cpu_cluster cpu (
+        .reset_n(!cpu_reset),
+        .clock(cpu_clock),
+        .sync_enable(spec256_sync_enable),
+        .bootstrap(spec256_bootstrap),
+        .wait_n(cpu_wait_n),
+        .interrupt_n(interrupt_n),
+        .nmi_n(1'b1),
+        .bus_request_n(1'b1),
+        .m1_n(m1_n),
+        .mreq_n(mreq_n),
+        .iorq_n(iorq_n),
+        .rd_n(rd_n),
+        .wr_n(wr_n),
+        .rfsh_n(rfsh_n),
+        .halt_n(halt_n),
+        .address(cpu_address),
+        .data_in(cpu_data_in),
+        .data_out(cpu_data_out),
+        .graphics_address(spec256_graphics_address),
+        .graphics_data_in(spec256_graphics_data_in),
+        .graphics_data_out(spec256_graphics_data_out),
+        .graphics_iorq(spec256_graphics_iorq),
+        .graphics_write(spec256_graphics_write),
+        .graphics_running(spec256_graphics_running),
+        .debug_master_pc(),
+        .debug_graphics_pc(),
+        .debug_master_regs(),
+        .debug_graphics_regs()
+    );
+`else
     T80Na #(.Mode(0)) cpu (
         .RESET_n(!cpu_reset),
         .CLK_n(cpu_clock),
@@ -240,6 +405,7 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .Z80N_data_o(),
         .Z80N_command_o()
     );
+`endif
 
     // ----------------------------------------------------------------- memory
     // ROM occupies the bottom 16K and RAM the rest. The RAM is addressed by the
@@ -249,11 +415,18 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     wire memory_write = !mreq_n && !wr_n && !in_rom;
 
     wire [7:0] rom_data;
+    wire [7:0] machine_rom_data;
     wire [7:0] ram_data;
     wire [12:0] display_address;
     wire [7:0]  display_data;
     wire [13:0] ula_vram_address;
     wire [7:0]  ula_vram_data;
+`ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
+    wire [15:0] spec256_display_address;
+    wire [63:0] spec256_graphics_ram_data;
+    wire [63:0] spec256_graphics_rom_data;
+    wire [63:0] spec256_display_data;
+`endif
 
     nexttang_rom #(
         .ADDRESS_BITS(14),
@@ -261,8 +434,69 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     ) machine_rom (
         .clock(cpu_clock),
         .address(cpu_address[13:0]),
-        .data(rom_data)
+        .data(machine_rom_data)
     );
+
+`ifdef NEXTTANG_SPECTRUM48_USE_SNAPSHOT
+    wire [7:0] snapshot_boot_data;
+    reg snapshot_boot_active = 1'b1;
+
+`ifdef NEXTTANG_SPEC256_RUNTIME
+    nexttang_block_ram #(
+        .ADDRESS_BITS(14),
+        .IMAGE("")
+    ) snapshot_boot_rom (
+        .clock(cpu_clock),
+        .write_enable(loader_boot_write),
+        .write_address(loader_boot_write ? loader_boot_address :
+                                             cpu_address[13:0]),
+        .write_data(loader_write_data),
+        .read_data(snapshot_boot_data),
+        .port_b_clock(cpu_clock),
+        .port_b_address(14'b0),
+        .port_b_data()
+    );
+`else
+    nexttang_rom #(
+        .ADDRESS_BITS(14),
+        .IMAGE(SNAPSHOT_BOOT_IMAGE)
+    ) snapshot_boot_rom (
+        .clock(cpu_clock),
+        .address(cpu_address[13:0]),
+        .data(snapshot_boot_data)
+    );
+`endif
+
+    // The bootstrap ends with RET through the PC stored on the SNA stack.
+    // Its first opcode fetch in RAM is the unambiguous hand-off point: RAM is
+    // already selected for that fetch, and later ROM calls see the real ROM.
+    wire snapshot_handoff = snapshot_boot_active &&
+                            !m1_n && !mreq_n && !in_rom;
+
+    always @(posedge cpu_clock) begin
+        if (cpu_reset)
+            snapshot_boot_active <= 1'b1;
+        else if (snapshot_handoff)
+            snapshot_boot_active <= 1'b0;
+    end
+
+`ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
+    // GZX clones the complete snapshot CPU state into every graphical context.
+    // On hardware the state is restored by executable bootstrap code instead,
+    // so run that same stream through all nine CPUs before their memories split.
+    assign spec256_sync_enable = 1'b1;
+    assign spec256_bootstrap = snapshot_boot_active;
+`endif
+
+    assign rom_data = snapshot_boot_active
+        ? snapshot_boot_data : machine_rom_data;
+`else
+    assign rom_data = machine_rom_data;
+`ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
+    assign spec256_sync_enable = 1'b1;
+    assign spec256_bootstrap = 1'b0;
+`endif
+`endif
 
 `ifdef NEXTTANG_SPECTRUM48_USE_DDR3
     wire upper_transaction_complete;
@@ -376,10 +610,324 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .IO_ddr_dqs(ddr_dqs),
         .IO_ddr_dqs_n(ddr_dqs_n)
     );
+`elsif NEXTTANG_SPECTRUM48_USE_SPEC256
+    assign cpu_wait_n = 1'b1;
+
+`ifdef NEXTTANG_SPEC256_RUNTIME
+`define NEXTTANG_RUNTIME_GRAPHICS_ROM(INSTANCE, LANE, ADDRESS_SLICE, DATA_SLICE) \
+    nexttang_block_ram #(.ADDRESS_BITS(14), .IMAGE("")) INSTANCE ( \
+        .clock(cpu_clock), \
+        .write_enable(loader_graphics_rom_write[LANE]), \
+        .write_address(loader_graphics_rom_write[LANE] ? \
+                       loader_graphics_rom_address : ADDRESS_SLICE), \
+        .write_data(loader_write_data), \
+        .read_data(DATA_SLICE), \
+        .port_b_clock(cpu_clock), .port_b_address(14'b0), .port_b_data());
+    `NEXTTANG_RUNTIME_GRAPHICS_ROM(spec256_rom_0, 0,
+        spec256_graphics_address[13:0], spec256_graphics_rom_data[7:0])
+    `NEXTTANG_RUNTIME_GRAPHICS_ROM(spec256_rom_1, 1,
+        spec256_graphics_address[29:16], spec256_graphics_rom_data[15:8])
+    `NEXTTANG_RUNTIME_GRAPHICS_ROM(spec256_rom_2, 2,
+        spec256_graphics_address[45:32], spec256_graphics_rom_data[23:16])
+    `NEXTTANG_RUNTIME_GRAPHICS_ROM(spec256_rom_3, 3,
+        spec256_graphics_address[61:48], spec256_graphics_rom_data[31:24])
+    `NEXTTANG_RUNTIME_GRAPHICS_ROM(spec256_rom_4, 4,
+        spec256_graphics_address[77:64], spec256_graphics_rom_data[39:32])
+    `NEXTTANG_RUNTIME_GRAPHICS_ROM(spec256_rom_5, 5,
+        spec256_graphics_address[93:80], spec256_graphics_rom_data[47:40])
+    `NEXTTANG_RUNTIME_GRAPHICS_ROM(spec256_rom_6, 6,
+        spec256_graphics_address[109:96], spec256_graphics_rom_data[55:48])
+    `NEXTTANG_RUNTIME_GRAPHICS_ROM(spec256_rom_7, 7,
+        spec256_graphics_address[125:112], spec256_graphics_rom_data[63:56])
+`undef NEXTTANG_RUNTIME_GRAPHICS_ROM
+`else
+    nexttang_rom #(.ADDRESS_BITS(14), .IMAGE("spec256-rom-plane0.mem"))
+    spec256_rom_0 (.clock(cpu_clock),
+        .address(spec256_graphics_address[13:0]),
+        .data(spec256_graphics_rom_data[7:0]));
+    nexttang_rom #(.ADDRESS_BITS(14), .IMAGE("spec256-rom-plane1.mem"))
+    spec256_rom_1 (.clock(cpu_clock),
+        .address(spec256_graphics_address[29:16]),
+        .data(spec256_graphics_rom_data[15:8]));
+    nexttang_rom #(.ADDRESS_BITS(14), .IMAGE("spec256-rom-plane2.mem"))
+    spec256_rom_2 (.clock(cpu_clock),
+        .address(spec256_graphics_address[45:32]),
+        .data(spec256_graphics_rom_data[23:16]));
+    nexttang_rom #(.ADDRESS_BITS(14), .IMAGE("spec256-rom-plane3.mem"))
+    spec256_rom_3 (.clock(cpu_clock),
+        .address(spec256_graphics_address[61:48]),
+        .data(spec256_graphics_rom_data[31:24]));
+    nexttang_rom #(.ADDRESS_BITS(14), .IMAGE("spec256-rom-plane4.mem"))
+    spec256_rom_4 (.clock(cpu_clock),
+        .address(spec256_graphics_address[77:64]),
+        .data(spec256_graphics_rom_data[39:32]));
+    nexttang_rom #(.ADDRESS_BITS(14), .IMAGE("spec256-rom-plane5.mem"))
+    spec256_rom_5 (.clock(cpu_clock),
+        .address(spec256_graphics_address[93:80]),
+        .data(spec256_graphics_rom_data[47:40]));
+    nexttang_rom #(.ADDRESS_BITS(14), .IMAGE("spec256-rom-plane6.mem"))
+    spec256_rom_6 (.clock(cpu_clock),
+        .address(spec256_graphics_address[109:96]),
+        .data(spec256_graphics_rom_data[55:48]));
+    nexttang_rom #(.ADDRESS_BITS(14), .IMAGE("spec256-rom-plane7.mem"))
+    spec256_rom_7 (.clock(cpu_clock),
+        .address(spec256_graphics_address[125:112]),
+        .data(spec256_graphics_rom_data[63:56]));
+`endif
+
+`ifdef NEXTTANG_SPEC256_RUNTIME
+`define NEXTTANG_SPEC256_INITIAL_IMAGE(NAME) ""
+`else
+`define NEXTTANG_SPEC256_INITIAL_IMAGE(NAME) NAME
+`endif
+
+    nexttang_spectrum_ram #(
+        .IMAGE_0(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-main-bank0.mem")),
+        .IMAGE_1(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-main-bank1.mem")),
+        .IMAGE_2(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-main-bank2.mem"))
+    ) machine_ram (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .write_enable(loader_main_write || memory_write),
+        .write_address(loader_main_write ? loader_main_address : cpu_address),
+        .write_data(loader_main_write ? loader_write_data : cpu_data_out),
+`else
+        .write_enable(memory_write),
+        .write_address(cpu_address),
+        .write_data(cpu_data_out),
+`endif
+        .read_data(ram_data),
+        // Port B feeds the ordinary renderer that resolves 0xFF passthrough
+        // pixels.  The screen lives at 0x4000 of this page, as it does in the
+        // plain profile.
+        .port_b_clock(pixel_clock),
+        .port_b_address({3'b010, display_address}),
+        .port_b_data(display_data)
+    );
+
+    nexttang_spectrum_ram #(
+        .IMAGE_0(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane0-bank0.mem")),
+        .IMAGE_1(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane0-bank1.mem")),
+        .IMAGE_2(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane0-bank2.mem")))
+    spec256_ram_0 (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .write_enable(loader_graphics_ram_write[0] ||
+                      (spec256_graphics_write[0] &&
+                       spec256_graphics_address[15:14] != 2'b00)),
+        .write_address(loader_graphics_ram_write[0] ?
+                       loader_graphics_ram_address :
+                       spec256_graphics_address[15:0]),
+        .write_data(loader_graphics_ram_write[0] ? loader_write_data :
+                    spec256_graphics_data_out[7:0]),
+`else
+        .write_enable(spec256_graphics_write[0] &&
+                      spec256_graphics_address[15:14] != 2'b00),
+        .write_address(spec256_graphics_address[15:0]),
+        .write_data(spec256_graphics_data_out[7:0]),
+`endif
+        .read_data(spec256_graphics_ram_data[7:0]),
+        .port_b_clock(pixel_clock),
+        .port_b_address(spec256_display_address),
+        .port_b_data(spec256_display_data[7:0])
+    );
+
+    nexttang_spectrum_ram #(
+        .IMAGE_0(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane1-bank0.mem")),
+        .IMAGE_1(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane1-bank1.mem")),
+        .IMAGE_2(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane1-bank2.mem")))
+    spec256_ram_1 (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .write_enable(loader_graphics_ram_write[1] ||
+                      (spec256_graphics_write[1] &&
+                       spec256_graphics_address[31:30] != 2'b00)),
+        .write_address(loader_graphics_ram_write[1] ?
+                       loader_graphics_ram_address :
+                       spec256_graphics_address[31:16]),
+        .write_data(loader_graphics_ram_write[1] ? loader_write_data :
+                    spec256_graphics_data_out[15:8]),
+`else
+        .write_enable(spec256_graphics_write[1] &&
+                      spec256_graphics_address[31:30] != 2'b00),
+        .write_address(spec256_graphics_address[31:16]),
+        .write_data(spec256_graphics_data_out[15:8]),
+`endif
+        .read_data(spec256_graphics_ram_data[15:8]),
+        .port_b_clock(pixel_clock),
+        .port_b_address(spec256_display_address),
+        .port_b_data(spec256_display_data[15:8])
+    );
+
+    nexttang_spectrum_ram #(
+        .IMAGE_0(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane2-bank0.mem")),
+        .IMAGE_1(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane2-bank1.mem")),
+        .IMAGE_2(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane2-bank2.mem")))
+    spec256_ram_2 (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .write_enable(loader_graphics_ram_write[2] ||
+                      (spec256_graphics_write[2] &&
+                       spec256_graphics_address[47:46] != 2'b00)),
+        .write_address(loader_graphics_ram_write[2] ?
+                       loader_graphics_ram_address :
+                       spec256_graphics_address[47:32]),
+        .write_data(loader_graphics_ram_write[2] ? loader_write_data :
+                    spec256_graphics_data_out[23:16]),
+`else
+        .write_enable(spec256_graphics_write[2] &&
+                      spec256_graphics_address[47:46] != 2'b00),
+        .write_address(spec256_graphics_address[47:32]),
+        .write_data(spec256_graphics_data_out[23:16]),
+`endif
+        .read_data(spec256_graphics_ram_data[23:16]),
+        .port_b_clock(pixel_clock),
+        .port_b_address(spec256_display_address),
+        .port_b_data(spec256_display_data[23:16])
+    );
+
+    nexttang_spectrum_ram #(
+        .IMAGE_0(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane3-bank0.mem")),
+        .IMAGE_1(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane3-bank1.mem")),
+        .IMAGE_2(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane3-bank2.mem")))
+    spec256_ram_3 (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .write_enable(loader_graphics_ram_write[3] ||
+                      (spec256_graphics_write[3] &&
+                       spec256_graphics_address[63:62] != 2'b00)),
+        .write_address(loader_graphics_ram_write[3] ?
+                       loader_graphics_ram_address :
+                       spec256_graphics_address[63:48]),
+        .write_data(loader_graphics_ram_write[3] ? loader_write_data :
+                    spec256_graphics_data_out[31:24]),
+`else
+        .write_enable(spec256_graphics_write[3] &&
+                      spec256_graphics_address[63:62] != 2'b00),
+        .write_address(spec256_graphics_address[63:48]),
+        .write_data(spec256_graphics_data_out[31:24]),
+`endif
+        .read_data(spec256_graphics_ram_data[31:24]),
+        .port_b_clock(pixel_clock),
+        .port_b_address(spec256_display_address),
+        .port_b_data(spec256_display_data[31:24])
+    );
+
+    nexttang_spectrum_ram #(
+        .IMAGE_0(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane4-bank0.mem")),
+        .IMAGE_1(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane4-bank1.mem")),
+        .IMAGE_2(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane4-bank2.mem")))
+    spec256_ram_4 (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .write_enable(loader_graphics_ram_write[4] ||
+                      (spec256_graphics_write[4] &&
+                       spec256_graphics_address[79:78] != 2'b00)),
+        .write_address(loader_graphics_ram_write[4] ?
+                       loader_graphics_ram_address :
+                       spec256_graphics_address[79:64]),
+        .write_data(loader_graphics_ram_write[4] ? loader_write_data :
+                    spec256_graphics_data_out[39:32]),
+`else
+        .write_enable(spec256_graphics_write[4] &&
+                      spec256_graphics_address[79:78] != 2'b00),
+        .write_address(spec256_graphics_address[79:64]),
+        .write_data(spec256_graphics_data_out[39:32]),
+`endif
+        .read_data(spec256_graphics_ram_data[39:32]),
+        .port_b_clock(pixel_clock),
+        .port_b_address(spec256_display_address),
+        .port_b_data(spec256_display_data[39:32])
+    );
+
+    nexttang_spectrum_ram #(
+        .IMAGE_0(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane5-bank0.mem")),
+        .IMAGE_1(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane5-bank1.mem")),
+        .IMAGE_2(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane5-bank2.mem")))
+    spec256_ram_5 (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .write_enable(loader_graphics_ram_write[5] ||
+                      (spec256_graphics_write[5] &&
+                       spec256_graphics_address[95:94] != 2'b00)),
+        .write_address(loader_graphics_ram_write[5] ?
+                       loader_graphics_ram_address :
+                       spec256_graphics_address[95:80]),
+        .write_data(loader_graphics_ram_write[5] ? loader_write_data :
+                    spec256_graphics_data_out[47:40]),
+`else
+        .write_enable(spec256_graphics_write[5] &&
+                      spec256_graphics_address[95:94] != 2'b00),
+        .write_address(spec256_graphics_address[95:80]),
+        .write_data(spec256_graphics_data_out[47:40]),
+`endif
+        .read_data(spec256_graphics_ram_data[47:40]),
+        .port_b_clock(pixel_clock),
+        .port_b_address(spec256_display_address),
+        .port_b_data(spec256_display_data[47:40])
+    );
+
+    nexttang_spectrum_ram #(
+        .IMAGE_0(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane6-bank0.mem")),
+        .IMAGE_1(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane6-bank1.mem")),
+        .IMAGE_2(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane6-bank2.mem")))
+    spec256_ram_6 (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .write_enable(loader_graphics_ram_write[6] ||
+                      (spec256_graphics_write[6] &&
+                       spec256_graphics_address[111:110] != 2'b00)),
+        .write_address(loader_graphics_ram_write[6] ?
+                       loader_graphics_ram_address :
+                       spec256_graphics_address[111:96]),
+        .write_data(loader_graphics_ram_write[6] ? loader_write_data :
+                    spec256_graphics_data_out[55:48]),
+`else
+        .write_enable(spec256_graphics_write[6] &&
+                      spec256_graphics_address[111:110] != 2'b00),
+        .write_address(spec256_graphics_address[111:96]),
+        .write_data(spec256_graphics_data_out[55:48]),
+`endif
+        .read_data(spec256_graphics_ram_data[55:48]),
+        .port_b_clock(pixel_clock),
+        .port_b_address(spec256_display_address),
+        .port_b_data(spec256_display_data[55:48])
+    );
+
+    nexttang_spectrum_ram #(
+        .IMAGE_0(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane7-bank0.mem")),
+        .IMAGE_1(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane7-bank1.mem")),
+        .IMAGE_2(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane7-bank2.mem")))
+    spec256_ram_7 (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .write_enable(loader_graphics_ram_write[7] ||
+                      (spec256_graphics_write[7] &&
+                       spec256_graphics_address[127:126] != 2'b00)),
+        .write_address(loader_graphics_ram_write[7] ?
+                       loader_graphics_ram_address :
+                       spec256_graphics_address[127:112]),
+        .write_data(loader_graphics_ram_write[7] ? loader_write_data :
+                    spec256_graphics_data_out[63:56]),
+`else
+        .write_enable(spec256_graphics_write[7] &&
+                      spec256_graphics_address[127:126] != 2'b00),
+        .write_address(spec256_graphics_address[127:112]),
+        .write_data(spec256_graphics_data_out[63:56]),
+`endif
+        .read_data(spec256_graphics_ram_data[63:56]),
+        .port_b_clock(pixel_clock),
+        .port_b_address(spec256_display_address),
+        .port_b_data(spec256_display_data[63:56])
+    );
+`undef NEXTTANG_SPEC256_INITIAL_IMAGE
 `else
     assign cpu_wait_n = 1'b1;
 
-    nexttang_block_ram #(.ADDRESS_BITS(16)) machine_ram (
+    nexttang_block_ram #(
+        .ADDRESS_BITS(16),
+        .IMAGE(RAM_IMAGE)
+    ) machine_ram (
         .clock(cpu_clock),
         .write_enable(memory_write),
         .write_address(cpu_address),
@@ -400,40 +948,422 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     // Port 0xFE is decoded on address bit 0 alone, as the original did. Reading
     // it returns the keyboard in the low five bits and EAR on bit 6.
     wire port_fe = !iorq_n && !cpu_address[0];
+    wire port_kempston = !iorq_n && cpu_address[7:0] == 8'h1f;
 
     wire [39:0] keys;
     wire [39:0] typist_keys;
+    wire [39:0] post_tape_keys;
     wire [39:0] keyboard_keys;
+    wire [39:0] usb_keyboard_keys;
+    wire [4:0] usb_kempston_joystick;
+    wire [39:0] runtime_uart_keys;
+    wire [4:0] runtime_uart_joystick;
+
+`ifdef NEXTTANG_SPEC256_RUNTIME
+    nexttang_spec256_runtime_input runtime_input (
+        .clock(cpu_clock),
+        .reset(!cpu_reset_shift[3]),
+        .enable(loader_ready),
+        .byte_data(loader_byte),
+        .byte_valid(loader_byte_valid),
+        .keys(runtime_uart_keys),
+        .joystick(runtime_uart_joystick)
+    );
+`else
+    assign runtime_uart_keys = 40'b0;
+    assign runtime_uart_joystick = 5'b0;
+`endif
+    wire [4:0] kempston_joystick =
+        usb_kempston_joystick | runtime_uart_joystick;
 
     // The typist still types LOAD "" so a tape image loads on its own; a real
     // keyboard is simply held down alongside it.
-    assign keys = typist_keys | keyboard_keys;
+    assign keys = typist_keys | post_tape_keys |
+                  keyboard_keys | usb_keyboard_keys | runtime_uart_keys;
 
+    wire [39:0] keyboard_keys_async;
+    wire [7:0] keyboard_scancode_async;
+    wire keyboard_scancode_valid_async;
+    wire keyboard_byte_valid_async;
+    wire keyboard_sync_valid_async;
     wire [7:0] keyboard_scancode;
     wire keyboard_scancode_valid;
+    wire keyboard_byte_valid;
+    wire keyboard_sync_valid;
 
+    // The BL616 sends at 2 Mbaud, which the 3.5 MHz CPU clock cannot sample:
+    // a bit is 1.75 clocks and the receiver counts 2, so the sampling point
+    // walks 2.5 bit-times across a frame.  Receive in the 28 MHz domain at 14
+    // clocks per bit instead.  The decoder moves with it because its output is
+    // a key level the CPU domain samples, not a pulse that has to be caught.
     nexttang_bl616_keyboard #(
-        .CLOCK_HZ(3500000),
+        .CLOCK_HZ(28000000),
         .BAUD_RATE(2000000)
     ) bl616_keyboard (
-        .clock(cpu_clock),
+        .clock(clock_28),
         .reset(cpu_reset),
         .receive(bl616_uart_rx),
-        .scancode(keyboard_scancode),
-        .scancode_valid(keyboard_scancode_valid)
+        .scancode(keyboard_scancode_async),
+        .scancode_valid(keyboard_scancode_valid_async),
+        .debug_byte_valid(keyboard_byte_valid_async),
+        .debug_sync_valid(keyboard_sync_valid_async)
     );
 
+    // The decoder shares the receiver's domain, so it takes the receiver's own
+    // signals.  Handing it the CPU-domain copies would sample a 36 ns pulse at
+    // 286 ns and drop nearly every key.
     nexttang_ps2_matrix key_decode (
-        .clock(cpu_clock),
+        .clock(clock_28),
         .reset(cpu_reset),
-        .scancode(keyboard_scancode),
-        .scancode_valid(keyboard_scancode_valid),
-        .keys(keyboard_keys)
+        .scancode(keyboard_scancode_async),
+        .scancode_valid(keyboard_scancode_valid_async),
+        .keys(keyboard_keys_async)
     );
+
+    // The debug flags are single-cycle 28 MHz pulses and the status reporter
+    // samples at 3.5 MHz, so a pulse crossing raw is lost eight times out of
+    // nine and the diagnostic reads "nothing arrived" while bytes are flowing.
+    // Latch each event in the fast domain first; the reporter already holds
+    // its flags from first assertion, so sticky here matches sticky there.
+`ifdef NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
+    // Calibration: the host drives this pin, so a byte sent from the laptop
+    // lights the same latch V14 would.  Without it a clear flag cannot be
+    // told apart from a broken latch, which is the whole difficulty.
+    wire loopback_byte_valid;
+    nexttang_uart_receiver #(
+        .CLOCK_HZ(28000000),
+        .BAUD_RATE(230400)
+    ) loopback_receiver (
+        .clock(clock_28),
+        .reset(cpu_reset),
+        .receive(loopback_uart_rx),
+        .data(),
+        .data_valid(loopback_byte_valid)
+    );
+    reg loopback_byte_seen = 1'b0;
+    always @(posedge clock_28)
+        if (cpu_reset) loopback_byte_seen <= 1'b0;
+        else if (loopback_byte_valid) loopback_byte_seen <= 1'b1;
+`endif
+
+    reg keyboard_byte_seen = 1'b0;
+    reg keyboard_sync_seen = 1'b0;
+    reg keyboard_scancode_seen = 1'b0;
+
+    always @(posedge clock_28) begin
+        if (cpu_reset) begin
+            keyboard_byte_seen <= 1'b0;
+            keyboard_sync_seen <= 1'b0;
+            keyboard_scancode_seen <= 1'b0;
+        end else begin
+            if (keyboard_byte_valid_async) keyboard_byte_seen <= 1'b1;
+            if (keyboard_sync_valid_async) keyboard_sync_seen <= 1'b1;
+            if (keyboard_scancode_valid_async) keyboard_scancode_seen <= 1'b1;
+        end
+    end
+
+    // Levels cross on two flops.  Key bits are independent and change far
+    // slower than a frame, so they need no coherency beyond this.  Without the
+    // synchroniser the tool reports hold violations from key_decode into the
+    // Z80's data register.
+    reg [39:0] keyboard_keys_meta = 40'b0;
+    reg [39:0] keyboard_keys_sync = 40'b0;
+    reg [7:0] keyboard_scancode_meta = 8'b0;
+    reg [7:0] keyboard_scancode_sync = 8'b0;
+    reg [2:0] keyboard_debug_meta = 3'b0;
+    reg [2:0] keyboard_debug_sync = 3'b0;
+
+    always @(posedge cpu_clock) begin
+        keyboard_keys_meta <= keyboard_keys_async;
+        keyboard_keys_sync <= keyboard_keys_meta;
+        keyboard_scancode_meta <= keyboard_scancode_async;
+        keyboard_scancode_sync <= keyboard_scancode_meta;
+        keyboard_debug_meta <= {keyboard_scancode_seen, keyboard_sync_seen,
+                                keyboard_byte_seen};
+        keyboard_debug_sync <= keyboard_debug_meta;
+    end
+
+    assign keyboard_keys = keyboard_keys_sync;
+    assign keyboard_scancode = keyboard_scancode_sync;
+    assign keyboard_scancode_valid = keyboard_debug_sync[2];
+    assign keyboard_sync_valid = keyboard_debug_sync[1];
+    assign keyboard_byte_valid = keyboard_debug_sync[0];
+
+`ifdef NEXTTANG_SPECTRUM48_USB_KEYBOARD
+    wire usb_clock;
+    wire usb_pll_locked;
+    wire [1:0] usb1_type;
+    wire [1:0] usb2_type;
+    wire usb1_report, usb2_report;
+    wire usb1_error, usb2_error;
+    wire [7:0] usb1_modifiers, usb2_modifiers;
+    wire [7:0] usb1_key1, usb1_key2, usb1_key3, usb1_key4, usb1_key5, usb1_key6;
+    wire [7:0] usb2_key1, usb2_key2, usb2_key3, usb2_key4, usb2_key5, usb2_key6;
+    wire [39:0] usb1_keyboard_keys;
+    wire [39:0] usb2_keyboard_keys;
+    wire usb1_dm_out, usb1_dp_out, usb1_output_enable;
+    wire usb2_dm_out, usb2_dp_out, usb2_output_enable;
+    wire [9:0] usb1_rom_address, usb2_rom_address;
+    wire [3:0] usb1_rom_data, usb2_rom_data;
+    wire usb1_rom_enable, usb2_rom_enable;
+    wire [63:0] usb1_raw_report, usb2_raw_report;
+    wire [63:0] usb1_hid_regs, usb2_hid_regs;
+    wire [63:0] usb1_config_snapshot, usb2_config_snapshot;
+    wire usb1_config_snapshot_valid, usb2_config_snapshot_valid;
+    wire usb1_full_speed, usb2_full_speed;
+    wire [15:0] usb1_speed_sample, usb2_speed_sample;
+    wire usb1_byte_strobe, usb2_byte_strobe;
+    wire usb1_packet_valid, usb2_packet_valid;
+    wire usb1_game_left, usb1_game_right, usb1_game_up, usb1_game_down;
+    wire usb1_game_a, usb1_game_b, usb1_game_x, usb1_game_y;
+    wire usb2_game_left, usb2_game_right, usb2_game_up, usb2_game_down;
+    wire usb2_game_a, usb2_game_b, usb2_game_x, usb2_game_y;
+
+    nexttang_console138k_usb_pll usb_pll (
+        .clock_in(sys_clk), .clock_60(usb_clock), .locked(usb_pll_locked)
+    );
+
+    assign usb1_dn = usb1_output_enable ? usb1_dm_out : 1'bz;
+    assign usb1_dp = usb1_output_enable ? usb1_dp_out : 1'bz;
+    assign usb2_dn = usb2_output_enable ? usb2_dm_out : 1'bz;
+    assign usb2_dp = usb2_output_enable ? usb2_dp_out : 1'bz;
+
+    usb_hid_host #(
+        .FULL_SPEED(1), .KEYBOARD_SUPPORT(1),
+        .MOUSE_SUPPORT(0), .GAME_SUPPORT(1)
+    ) usb_host_one (
+        .clk(usb_clock), .reset(!usb_pll_locked), .cs(1'b1),
+        .usb_dm_i(usb1_dn), .usb_dp_i(usb1_dp),
+        .usb_dm_o(usb1_dm_out), .usb_dp_o(usb1_dp_out),
+        .usb_oe(usb1_output_enable),
+        .typ(usb1_type), .full_report(usb1_report), .connerr(usb1_error), .busy(),
+        .key_modifiers(usb1_modifiers),
+        .key_0(usb1_key1), .key_1(usb1_key2), .key_2(usb1_key3),
+        .key_3(usb1_key4), .key_4(usb1_key5), .key_5(usb1_key6),
+        .mouse_btn(), .mouse_dx(), .mouse_dy(),
+        .game_l(usb1_game_left), .game_r(usb1_game_right),
+        .game_u(usb1_game_up), .game_d(usb1_game_down),
+        .game_a(usb1_game_a), .game_b(usb1_game_b),
+        .game_x(usb1_game_x), .game_y(usb1_game_y),
+        .game_sel(), .game_sta(), .game_extra(),
+        .dbg_hid_report(usb1_raw_report), .dbg_hid_regs(usb1_hid_regs),
+        .dbg_byte_strobe(usb1_byte_strobe),
+        .dbg_packet_valid(usb1_packet_valid),
+        .dbg_config_snapshot(usb1_config_snapshot),
+        .dbg_config_snapshot_valid(usb1_config_snapshot_valid),
+        .dbg_full_speed(usb1_full_speed),
+        .dbg_speed_sample(usb1_speed_sample),
+        .rom_addr(usb1_rom_address), .rom_dout(usb1_rom_data),
+        .rom_en(usb1_rom_enable)
+    );
+
+    usb_hid_host #(
+        .FULL_SPEED(1), .KEYBOARD_SUPPORT(1),
+        .MOUSE_SUPPORT(0), .GAME_SUPPORT(1)
+    ) usb_host_two (
+        .clk(usb_clock), .reset(!usb_pll_locked), .cs(1'b1),
+        .usb_dm_i(usb2_dn), .usb_dp_i(usb2_dp),
+        .usb_dm_o(usb2_dm_out), .usb_dp_o(usb2_dp_out),
+        .usb_oe(usb2_output_enable),
+        .typ(usb2_type), .full_report(usb2_report), .connerr(usb2_error), .busy(),
+        .key_modifiers(usb2_modifiers),
+        .key_0(usb2_key1), .key_1(usb2_key2), .key_2(usb2_key3),
+        .key_3(usb2_key4), .key_4(usb2_key5), .key_5(usb2_key6),
+        .mouse_btn(), .mouse_dx(), .mouse_dy(),
+        .game_l(usb2_game_left), .game_r(usb2_game_right),
+        .game_u(usb2_game_up), .game_d(usb2_game_down),
+        .game_a(usb2_game_a), .game_b(usb2_game_b),
+        .game_x(usb2_game_x), .game_y(usb2_game_y),
+        .game_sel(), .game_sta(), .game_extra(),
+        .dbg_hid_report(usb2_raw_report), .dbg_hid_regs(usb2_hid_regs),
+        .dbg_byte_strobe(usb2_byte_strobe),
+        .dbg_packet_valid(usb2_packet_valid),
+        .dbg_config_snapshot(usb2_config_snapshot),
+        .dbg_config_snapshot_valid(usb2_config_snapshot_valid),
+        .dbg_full_speed(usb2_full_speed),
+        .dbg_speed_sample(usb2_speed_sample),
+        .rom_addr(usb2_rom_address), .rom_dout(usb2_rom_data),
+        .rom_en(usb2_rom_enable)
+    );
+
+    usb_hid_host_dual_rom usb_microcode (
+        .clk(usb_clock),
+        .addra(usb1_rom_address), .douta(usb1_rom_data), .ena(usb1_rom_enable),
+        .addrb(usb2_rom_address), .doutb(usb2_rom_data), .enb(usb2_rom_enable)
+    );
+
+    nexttang_usb_keyboard_matrix usb1_key_decode (
+        .device_type(usb1_type), .modifiers(usb1_modifiers),
+        .key1(usb1_key1), .key2(usb1_key2),
+        .key3(usb1_key3), .key4(usb1_key4),
+        .key5(usb1_key5), .key6(usb1_key6), .keys(usb1_keyboard_keys)
+    );
+    nexttang_usb_keyboard_matrix usb2_key_decode (
+        .device_type(usb2_type), .modifiers(usb2_modifiers),
+        .key1(usb2_key1), .key2(usb2_key2),
+        .key3(usb2_key3), .key4(usb2_key4),
+        .key5(usb2_key5), .key6(usb2_key6), .keys(usb2_keyboard_keys)
+    );
+
+    wire [4:0] usb1_kempston_async;
+    wire [4:0] usb2_kempston_async;
+    nexttang_usb_gamepad_kempston usb1_game_decode (
+        .device_type(usb1_type),
+        .left(usb1_game_left), .right(usb1_game_right),
+        .up(usb1_game_up), .down(usb1_game_down),
+        .a(usb1_game_a), .b(usb1_game_b),
+        .x(usb1_game_x), .y(usb1_game_y),
+        .joystick(usb1_kempston_async)
+    );
+    nexttang_usb_gamepad_kempston usb2_game_decode (
+        .device_type(usb2_type),
+        .left(usb2_game_left), .right(usb2_game_right),
+        .up(usb2_game_up), .down(usb2_game_down),
+        .a(usb2_game_a), .b(usb2_game_b),
+        .x(usb2_game_x), .y(usb2_game_y),
+        .joystick(usb2_kempston_async)
+    );
+
+`ifdef NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
+    // The first hardware test deliberately isolates the socket containing the
+    // keyboard. A hub or unsupported device in the other socket must not be
+    // allowed to masquerade as keyboard usages while the host is brought up.
+    wire [39:0] usb_keyboard_keys_async = usb2_keyboard_keys;
+`else
+    wire [39:0] usb_keyboard_keys_async =
+        usb1_keyboard_keys | usb2_keyboard_keys;
+`endif
+    reg [39:0] usb_keyboard_keys_meta = 0;
+    reg [39:0] usb_keyboard_keys_sync = 0;
+    reg [4:0] usb_kempston_meta = 0;
+    reg [4:0] usb_kempston_sync = 0;
+    always @(posedge cpu_clock) begin
+        usb_keyboard_keys_meta <= usb_keyboard_keys_async;
+        usb_keyboard_keys_sync <= usb_keyboard_keys_meta;
+        usb_kempston_meta <= usb1_kempston_async | usb2_kempston_async;
+        usb_kempston_sync <= usb_kempston_meta;
+    end
+    assign usb_keyboard_keys = usb_keyboard_keys_sync;
+    assign usb_kempston_joystick = usb_kempston_sync;
+`ifdef NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
+    wire usb_keyboard_connected = usb2_type == 2'd1;
+    wire usb_keyboard_report = usb2_report;
+`else
+    wire usb_keyboard_connected = usb1_type == 2'd1 || usb2_type == 2'd1;
+    wire usb_keyboard_report = usb1_report | usb2_report;
+`endif
+    wire usb1_keycode_present = |usb1_key1 | |usb1_key2 | |usb1_key3 |
+                                |usb1_key4 | |usb1_key5 | |usb1_key6;
+    wire usb2_keycode_present = |usb2_key1 | |usb2_key2 | |usb2_key3 |
+                                |usb2_key4 | |usb2_key5 | |usb2_key6;
+`ifdef NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
+    wire usb_keycode_present = usb2_keycode_present;
+`else
+    wire usb_keycode_present = usb1_keycode_present | usb2_keycode_present;
+`endif
+    reg usb_report_seen = 1'b0;
+    always @(posedge usb_clock) begin
+        if (!usb_pll_locked)
+            usb_report_seen <= 1'b0;
+        else if (usb_keyboard_report)
+            usb_report_seen <= 1'b1;
+    end
+`else
+    assign usb_keyboard_keys = 40'b0;
+    assign usb_kempston_joystick = 5'b00000;
+`endif
     wire [4:0] key_columns;
     wire typing_finished;
 
-`ifdef NEXTTANG_SPECTRUM48_USE_TAPE
+`ifdef NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
+    assign typist_keys = 40'b0;
+    assign post_tape_keys = 40'b0;
+    assign typing_finished = 1'b1;
+    wire tape_ear = 1'b0;
+`elsif NEXTTANG_SPECTRUM48_USE_SNAPSHOT
+    assign typist_keys = 40'b0;
+    assign typing_finished = 1'b1;
+    wire snapshot_menu_finished;
+
+`ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
+`ifdef NEXTTANG_SPEC256_RUNTIME
+    nexttang_spec256_runtime_key_sequencer #(
+        .CLOCK_HZ(3500000)
+    ) snapshot_menu_key (
+        .clock(cpu_clock),
+        .reset(cpu_reset),
+        .start(!snapshot_boot_active),
+        .key_count(loader_launch_key_count),
+        .key_0(loader_launch_key_0),
+        .key_1(loader_launch_key_1),
+        .key_2(loader_launch_key_2),
+        .key_3(loader_launch_key_3),
+        .start_delay_ms(loader_launch_start_delay_ms),
+        .hold_ms(loader_launch_hold_ms),
+        .gap_ms(loader_launch_gap_ms),
+        .keys(post_tape_keys),
+        .finished(snapshot_menu_finished)
+    );
+`elsif NEXTTANG_SPEC256_AUTOSTART_CHUCKIE
+    // Chuckie Egg leaves the snapshot at its title screen: S enters the game
+    // menu, then 1 selects a single player after that prompt has been drawn.
+    nexttang_post_tape_key_sequencer #(
+        .CLOCK_HZ(3500000),
+        .START_DELAY_MS(2000),
+        .HOLD_MS(140),
+        .GAP_MS(4000),
+        .KEY_ROW(1),
+        .KEY_COLUMN(1),
+        .SECOND_KEY_ENABLE(1),
+        .SECOND_KEY_ROW(3),
+        .SECOND_KEY_COLUMN(0)
+    ) snapshot_menu_key (
+        .clock(cpu_clock),
+        .reset(cpu_reset),
+        .start(!snapshot_boot_active),
+        .keys(post_tape_keys),
+        .finished(snapshot_menu_finished)
+    );
+`else
+    // Select Kempston joystick, then start the supplied Jetpac snapshot.  A
+    // physical USB gamepad can then drive the original port 0x1f interface.
+    nexttang_post_tape_key_sequencer #(
+        .CLOCK_HZ(3500000),
+        .START_DELAY_MS(2000),
+        .HOLD_MS(140),
+        .GAP_MS(300),
+        .KEY_ROW(3),
+        .KEY_COLUMN(3),
+        .SECOND_KEY_ENABLE(1),
+        .SECOND_KEY_ROW(3),
+        .SECOND_KEY_COLUMN(4)
+    ) snapshot_menu_key (
+        .clock(cpu_clock),
+        .reset(cpu_reset),
+        .start(!snapshot_boot_active),
+        .keys(post_tape_keys),
+        .finished(snapshot_menu_finished)
+    );
+`endif
+`else
+    // The ordinary snapshot target keeps the existing keyboard-selected
+    // behaviour and only presses 5 to start.
+    nexttang_post_tape_key_sequencer #(
+        .CLOCK_HZ(3500000),
+        .START_DELAY_MS(2000),
+        .HOLD_MS(140),
+        .KEY_ROW(3),
+        .KEY_COLUMN(4)
+    ) snapshot_menu_key (
+        .clock(cpu_clock),
+        .reset(cpu_reset),
+        .start(!snapshot_boot_active),
+        .keys(post_tape_keys),
+        .finished(snapshot_menu_finished)
+    );
+`endif
+    wire tape_ear = 1'b0;
+`elsif NEXTTANG_SPECTRUM48_USE_TAPE
     // The capture card takes about forty seconds to relock after the FPGA is
     // reconfigured, so a tape that starts at the ROM's own pace is already
     // past its header blocks before anything can be recorded or watched. Wait
@@ -472,6 +1402,30 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .current_block(tape_block),
         .byte_position(tape_byte_position)
     );
+`ifdef NEXTTANG_SPECTRUM48_POST_TAPE_S1
+    wire post_tape_finished;
+    nexttang_post_tape_key_sequencer #(
+        .CLOCK_HZ(3500000),
+        .START_DELAY_MS(2000),
+        .HOLD_MS(140),
+        // Chuckie Egg spends roughly three seconds leaving its title screen
+        // after S. Wait until the player-count prompt is listening before 1.
+        .GAP_MS(4000),
+        .KEY_ROW(1),
+        .KEY_COLUMN(1),
+        .SECOND_KEY_ENABLE(1),
+        .SECOND_KEY_ROW(3),
+        .SECOND_KEY_COLUMN(0)
+    ) post_tape_key (
+        .clock(cpu_clock),
+        .reset(cpu_reset),
+        .start(tape_finished && !tape_fault),
+        .keys(post_tape_keys),
+        .finished(post_tape_finished)
+    );
+`else
+    assign post_tape_keys = 40'b0;
+`endif
 `else
     nexttang_key_sequencer #(.CLOCK_HZ(3500000)) typist (
         .clock(cpu_clock),
@@ -480,6 +1434,7 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .finished(typing_finished)
     );
 
+    assign post_tape_keys = 40'b0;
     wire tape_ear = 1'b0;
 `endif
 
@@ -489,6 +1444,17 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .columns(key_columns)
     );
     reg [2:0] border_colour = 3'd0;
+    wire beeper;
+
+    nexttang_spectrum_beeper beeper_latch (
+        .clock(cpu_clock),
+        .reset(cpu_reset),
+        .iorq_n(iorq_n),
+        .wr_n(wr_n),
+        .address(cpu_address),
+        .data(cpu_data_out),
+        .beeper(beeper)
+    );
 
     always @(posedge cpu_clock) begin
         if (cpu_reset)
@@ -500,12 +1466,34 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     always @(*) begin
         if (!iorq_n)
             cpu_data_in = port_fe
-                ? {1'b1, tape_ear, 1'b1, key_columns} : 8'hff;
+                ? {1'b1, tape_ear, 1'b1, key_columns} :
+                port_kempston ? {3'b000, kempston_joystick} : 8'hff;
         else if (in_rom)
             cpu_data_in = rom_data;
         else
             cpu_data_in = ram_data;
     end
+
+`ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
+    genvar spec256_lane;
+    generate
+        for (spec256_lane = 0; spec256_lane < 8; spec256_lane = spec256_lane + 1) begin : spec256_inputs
+            wire [15:0] lane_address =
+                spec256_graphics_address[spec256_lane * 16 +: 16];
+
+            nexttang_spec256_input_mux lane_input (
+                .address(lane_address),
+                .io_request(spec256_graphics_iorq[spec256_lane]),
+                .keys(keys),
+                .joystick(kempston_joystick),
+                .tape_ear(tape_ear),
+                .rom_data(spec256_graphics_rom_data[spec256_lane * 8 +: 8]),
+                .ram_data(spec256_graphics_ram_data[spec256_lane * 8 +: 8]),
+                .data(spec256_graphics_data_in[spec256_lane * 8 +: 8])
+            );
+        end
+    endgenerate
+`endif
 
     reg [2:0] border_meta = 3'd0;
     reg [2:0] border_pixel = 3'd0;
@@ -695,6 +1683,148 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .green(green),
         .blue(blue)
     );
+`elsif NEXTTANG_SPECTRUM48_USE_SPEC256
+    wire [7:0] spec256_palette_index;
+    wire spec256_passthrough;
+    wire [15:0] spec256_background_address;
+    wire [7:0] spec256_background_data;
+`ifdef NEXTTANG_SPEC256_RUNTIME
+    wire spec256_background_valid = loader_background_valid;
+`else
+    wire spec256_background_valid = SPEC256_BACKGROUND_IMAGE != "";
+`endif
+    reg [7:0] spec256_palette_index_q = 8'b0;
+    reg spec256_passthrough_q = 1'b0;
+    reg spec256_hsync_q = 1'b0;
+    reg spec256_vsync_q = 1'b0;
+    reg spec256_data_enable_q = 1'b0;
+
+    // Graphical colour and the ordinary Spectrum colour are produced by two
+    // renderers reading the same coordinates, each one registered stage from
+    // its own shift register, so their outputs land on the same pixel.
+    wire [7:0] spec256_red;
+    wire [7:0] spec256_green;
+    wire [7:0] spec256_blue;
+    wire [7:0] ordinary_red;
+    wire [7:0] ordinary_green;
+    wire [7:0] ordinary_blue;
+
+    reg spec256_previous_vsync = 1'b0;
+    reg [4:0] spec256_flash_counter = 5'b0;
+
+    always @(posedge pixel_clock) begin
+        if (pixel_reset) begin
+            spec256_previous_vsync <= 1'b0;
+            spec256_flash_counter <= 5'b0;
+        end else begin
+            spec256_previous_vsync <= vsync;
+            if (vsync && !spec256_previous_vsync)
+                spec256_flash_counter <= spec256_flash_counter + 1'b1;
+        end
+    end
+
+    assign hsync = spec256_hsync_q;
+    assign vsync = spec256_vsync_q;
+    assign data_enable = spec256_data_enable_q;
+
+    always @(posedge pixel_clock) begin
+        if (pixel_reset) begin
+            spec256_palette_index_q <= 8'b0;
+            spec256_passthrough_q <= 1'b0;
+            spec256_hsync_q <= 1'b0;
+            spec256_vsync_q <= 1'b0;
+            spec256_data_enable_q <= 1'b0;
+        end else begin
+            // Break the coordinate -> palette -> TMDS path at the pixel
+            // boundary and delay the accompanying timing signals equally.
+            spec256_palette_index_q <= spec256_palette_index;
+            spec256_passthrough_q <= spec256_passthrough;
+            spec256_hsync_q <= timing_hsync;
+            spec256_vsync_q <= timing_vsync;
+            spec256_data_enable_q <= timing_data_enable;
+        end
+    end
+
+    nexttang_spec256_display display (
+        .pixel_clock(pixel_clock),
+        .reset(pixel_reset),
+        .horizontal_position(horizontal_position),
+        .vertical_position(vertical_position),
+        .data_enable(data_enable),
+        .memory_address(spec256_display_address),
+        .memory_data(spec256_display_data),
+        .background_address(spec256_background_address),
+        .background_data(spec256_background_data),
+        .background_valid(spec256_background_valid),
+        .palette_index(spec256_palette_index),
+        .passthrough(spec256_passthrough)
+    );
+
+    // One 320x200 background.  Block RAM holds exactly one on this device;
+    // a pack may carry up to eight and the loader stores the first.
+    nexttang_block_ram #(
+        .ADDRESS_BITS(16),
+        .IMAGE(SPEC256_BACKGROUND_IMAGE)
+    ) spec256_background (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .write_enable(loader_background_write),
+        .write_address(loader_background_address),
+`else
+        .write_enable(1'b0),
+        .write_address(16'b0),
+`endif
+        .write_data(loader_write_data),
+        .read_data(),
+        .port_b_clock(pixel_clock),
+        .port_b_address(spec256_background_address),
+        .port_b_data(spec256_background_data)
+    );
+
+    // The ordinary renderer supplies the colour for pixels the artist left
+    // unrecoloured.  Reusing it keeps one owner for attribute, bright and
+    // flash handling instead of a second copy that can drift.
+    nexttang_spectrum_display #(.SCALE(3)) ordinary_display (
+        .pixel_clk(pixel_clock),
+        .reset(pixel_reset),
+        .horizontal_position(horizontal_position),
+        .vertical_position(vertical_position),
+        .data_enable(data_enable),
+        .border_colour(border_pixel),
+        .flash_phase(spec256_flash_counter[4]),
+        .screen_address(display_address),
+        .screen_data(display_data),
+        .red(ordinary_red),
+        .green(ordinary_green),
+        .blue(ordinary_blue)
+    );
+
+    assign red = spec256_passthrough_q ? ordinary_red : spec256_red;
+    assign green = spec256_passthrough_q ? ordinary_green : spec256_green;
+    assign blue = spec256_passthrough_q ? ordinary_blue : spec256_blue;
+
+    nexttang_spec256_palette #(
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .IMAGE("")
+`else
+        .IMAGE(SPEC256_PALETTE_IMAGE)
+`endif
+    ) palette (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .write_enable(loader_palette_write),
+        .write_index(loader_palette_index),
+        .write_data(loader_palette_data),
+`else
+        .write_enable(1'b0),
+        .write_index(8'b0),
+        .write_data(24'b0),
+`endif
+        .index(spec256_palette_index_q),
+        .red(spec256_red),
+        .green(spec256_green),
+        .blue(spec256_blue)
+    );
 `else
     assign hsync = timing_hsync;
     assign vsync = timing_vsync;
@@ -730,10 +1860,61 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     );
 `endif
 
+    wire [2:0] serial_data;
+    wire output_clock;
+
+`ifdef NEXTTANG_HDMI_AUDIO
+    wire audio_ce;
+    wire signed [15:0] audio_sample;
+    wire [15:0] audio_sample_words [1:0];
+    wire hdmi_serial_clock;
+    wire [10:0] hdmi_x;
+    wire [9:0] hdmi_y;
+    wire [10:0] hdmi_frame_width;
+    wire [9:0] hdmi_frame_height;
+    wire [10:0] hdmi_screen_width;
+    wire [9:0] hdmi_screen_height;
+
+    nexttang_beeper_pcm beeper_pcm (
+        .clock(pixel_clock),
+        .reset(cpu_reset),
+        .beeper(beeper),
+        .audio_ce(audio_ce),
+        .sample(audio_sample)
+    );
+
+    assign audio_sample_words[0] = audio_sample;
+    assign audio_sample_words[1] = audio_sample;
+
+    hdmi #(
+        .VIDEO_ID_CODE(4),
+        .VIDEO_REFRESH_RATE(60.0),
+        .AUDIO_RATE(48000),
+        .AUDIO_BIT_WIDTH(16),
+        .VENDOR_NAME({"NextTang"}),
+        .PRODUCT_DESCRIPTION({"Spectrum beeper", 8'd0})
+    ) hdmi_transmitter (
+        .clk_pixel_x5(serial_clock),
+        .clk_pixel(pixel_clock),
+        .audio_ce(audio_ce),
+        .reset(pixel_reset),
+        .rgb({red, green, blue}),
+        .audio_sample_word(audio_sample_words),
+        .tmds(serial_data),
+        .tmds_clock(hdmi_serial_clock),
+        .cx(hdmi_x),
+        .cy(hdmi_y),
+        .frame_width(hdmi_frame_width),
+        .frame_height(hdmi_frame_height),
+        .screen_width(hdmi_screen_width),
+        .screen_height(hdmi_screen_height)
+    );
+
+    assign output_clock = hdmi_serial_clock;
+`else
     wire [9:0] red_symbol;
     wire [9:0] green_symbol;
     wire [9:0] blue_symbol;
-    wire [2:0] serial_data;
 
     nexttang_tmds_encoder blue_encoder (
         .pixel_clk(pixel_clock), .reset(pixel_reset),
@@ -779,8 +1960,11 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .RESET(1'b0), .Q(serial_data[2])
     );
 
+    assign output_clock = pixel_clock;
+`endif
+
     ELVDS_OBUF clock_output (
-        .I(pixel_clock), .O(tmds_clk_p), .OB(tmds_clk_n));
+        .I(output_clock), .O(tmds_clk_p), .OB(tmds_clk_n));
     ELVDS_OBUF data_output_zero (
         .I(serial_data[0]), .O(tmds_d_p[0]), .OB(tmds_d_n[0]));
     ELVDS_OBUF data_output_one (
@@ -828,9 +2012,73 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     // Slow enough for a 24 MHz analyser and chosen to show the machine's
     // rhythm: opcode fetches, memory against IO, writes, and the 50 Hz frame
     // interrupt the ROM runs on.
-    assign probe = {interrupt_n, wr_n, iorq_n, mreq_n, m1_n, cpu_clock};
+`ifdef NEXTTANG_SPEC256_RUNTIME
+    // PMOD1 IO2 is the runtime pack input.  The remaining five pins retain a
+    // useful passive bus trace; IO2 is tri-stated so the FT232RL owns it.
+    assign probe = {
+        interrupt_n, wr_n, iorq_n, mreq_n, m1_n, 1'bz
+    };
+`elsif NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
+    wire any_matrix_key = |keys;
 
-`ifdef NEXTTANG_SPECTRUM48_USE_TAPE
+`ifdef NEXTTANG_SPECTRUM48_USB_KEYBOARD
+    // Both physical root-port pairs plus the two keyboard-source boundaries.
+    // D2 is the legacy BL616 matrix and D5 is the direct USB2 matrix; this
+    // distinguishes source contamination from a bad direct-HID report.
+    assign probe = {
+        |usb2_keyboard_keys, usb2_dn, usb2_dp,
+        |keyboard_keys, usb1_dn, usb1_dp
+    };
+`else
+    // MCU-side keyboard diagnostic. D1 is the raw 2 Mbit/s TangCore UART;
+    // D2-D5 progressively show matrix, byte, frame-sync and scan-code events.
+    assign probe = {
+        keyboard_scancode_valid, keyboard_sync_valid,
+        keyboard_byte_valid, |keyboard_keys,
+        bl616_uart_rx, cpu_clock
+    };
+`endif
+`else
+    assign probe = {interrupt_n, wr_n, iorq_n, mreq_n, m1_n, cpu_clock};
+`endif
+
+`ifdef NEXTTANG_SPEC256_RUNTIME
+    // V/M/R/C/P/Y: video PLL, machine PLL, payload byte seen, CPUs held,
+    // complete pack accepted, and pack fault.  The value is payload progress.
+    wire [5:0] status_flags = {
+        loader_fault, loader_ready, loader_hold_reset, loader_byte_valid,
+        machine_pll_locked, video_pll_locked
+    };
+    wire [31:0] status_value = {11'b0, loader_background_valid,
+                                loader_received_bytes};
+`elsif NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
+`ifdef NEXTTANG_SPECTRUM48_USB_KEYBOARD
+    // UART labels V/M/R/C/P/Y mean video lock, USB PLL lock, keyboard
+    // enumerated, HID report, key usage present, and Spectrum matrix asserted.
+    wire [5:0] status_flags = {
+        any_matrix_key, usb_keycode_present, usb_report_seen,
+        usb_keyboard_connected, usb_pll_locked, video_pll_locked
+    };
+    // Show the descriptor classification bytes followed by the first decoded
+    // key usage. This distinguishes a bad interface descriptor from a bad
+    // interrupt report without changing the host or the keyboard matrix.
+    wire [31:0] status_value = {
+        usb2_hid_regs[39:32], usb2_hid_regs[47:40],
+        usb2_hid_regs[55:48], usb2_key1
+    };
+`else
+    // V/M/R/C/P/Y mean video lock, machine released, any UART byte,
+    // TangCore sync, scan-code event and resulting matrix key.
+    // M carries the loopback result during bring-up rather than a flag that is
+    // always set: V loopback-independent video lock, M host byte on G21,
+    // R BL616 byte on V14, then sync, scan code and matrix key.
+    wire [5:0] status_flags = {
+        any_matrix_key, keyboard_scancode_valid, keyboard_sync_valid,
+        keyboard_byte_valid, loopback_byte_seen, video_pll_locked
+    };
+    wire [31:0] status_value = {24'b0, keyboard_scancode};
+`endif
+`elsif NEXTTANG_SPECTRUM48_USE_TAPE
 `ifdef NEXTTANG_SPECTRUM48_USE_DDR3
     // For this profile C/P are tape active/finished. Y combines tape and
     // memory-service faults. The trailing UART value is the next tape byte.
@@ -883,15 +2131,69 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     wire [31:0] status_value = opcode_count;
 `endif
 
+`ifdef NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
+`ifdef NEXTTANG_SPECTRUM48_USB_KEYBOARD
+    wire usb_snapshot_port_two = usb2_config_snapshot_valid;
+    wire usb_snapshot_valid = usb1_config_snapshot_valid |
+                              usb2_config_snapshot_valid;
+    wire usb_snapshot_full_speed = usb_snapshot_port_two ?
+                                   usb2_full_speed : usb1_full_speed;
+    wire [15:0] usb_snapshot_speed_sample = usb_snapshot_port_two ?
+                                            usb2_speed_sample :
+                                            usb1_speed_sample;
+    wire [63:0] usb_snapshot = usb_snapshot_port_two ?
+                               usb2_config_snapshot : usb1_config_snapshot;
+
+    nexttang_usb_snapshot_uart #(
+        .CLOCK_HZ(60000000)
+    ) usb_snapshot_uart (
+        .clock(usb_clock),
+        .reset(!usb_pll_locked),
+        .snapshot_valid(usb_snapshot_valid),
+        .port_two(usb_snapshot_port_two),
+        .full_speed(usb_snapshot_full_speed),
+        .speed_sample(usb_snapshot_speed_sample),
+        .snapshot(usb_snapshot),
+        .transmit(debug_uart_tx)
+    );
+`else
     nexttang_debug_status_uart #(
         .CLOCK_HZ(3500000)
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        , .BAUD_RATE(RUNTIME_UART_BAUD)
+`endif
     ) status_uart (
         .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .reset(!cpu_reset_shift[3] ||
+               (loader_hold_reset && !loader_fault)),
+`else
         .reset(cpu_reset),
+`endif
         .flags(status_flags),
         .value(status_value),
         .transmit(debug_uart_tx)
     );
+`endif
+`else
+    nexttang_debug_status_uart #(
+        .CLOCK_HZ(3500000)
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        , .BAUD_RATE(RUNTIME_UART_BAUD)
+`endif
+    ) status_uart (
+        .clock(cpu_clock),
+`ifdef NEXTTANG_SPEC256_RUNTIME
+        .reset(!cpu_reset_shift[3] ||
+               (loader_hold_reset && !loader_fault)),
+`else
+        .reset(cpu_reset),
+`endif
+        .flags(status_flags),
+        .value(status_value),
+        .transmit(debug_uart_tx)
+    );
+`endif
 
 `ifdef NEXTTANG_SPECTRUM48_USE_DDR3
     assign debug_uart_tx_alt = debug_uart_tx;

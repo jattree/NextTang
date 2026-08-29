@@ -40,19 +40,28 @@ module nexttang_debug_status_uart #(
 );
     localparam integer MESSAGE_BYTES = 40;
 
+    // Flags may originate in the video, memory or observer clock domains. The
+    // reporter owns that boundary, so sticky state only consumes the second
+    // stage. Target constraints cut timing to flags_meta, never flags_sync.
+    (* async_reg = "true" *) reg [5:0] flags_meta = 0;
+    (* async_reg = "true" *) reg [5:0] flags_sync = 0;
     reg [5:0] seen = 0;
     reg [5:0] lost = 0;
     reg [31:0] tick = 0;
 
     always @(posedge clock) begin
         if (reset) begin
+            flags_meta <= 0;
+            flags_sync <= 0;
             seen <= 0;
             lost <= 0;
             tick <= 0;
         end else begin
+            flags_meta <= flags;
+            flags_sync <= flags_meta;
             tick <= tick + 1'b1;
-            seen <= seen | flags;
-            lost <= lost | (seen & ~flags);
+            seen <= seen | flags_sync;
+            lost <= lost | (seen & ~flags_sync);
         end
     end
 

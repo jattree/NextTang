@@ -127,6 +127,33 @@ entity T80N is
       IntCycle_n  : out std_logic;
       IntE     : out std_logic;
       Stop     : out std_logic;
+      Spec256_sync_load : in std_logic := '0';
+      Spec256_sync_pc : in std_logic_vector(15 downto 0) := (others => '0');
+      Spec256_sync_sp : in std_logic_vector(15 downto 0) := (others => '0');
+      Spec256_sync_i : in std_logic_vector(7 downto 0) := (others => '0');
+      Spec256_sync_r : in std_logic_vector(7 downto 0) := (others => '0');
+      Spec256_sync_f : in std_logic_vector(7 downto 0) := (others => '0');
+      Spec256_sync_iff1 : in std_logic := '0';
+      Spec256_sync_iff2 : in std_logic := '0';
+       Spec256_sync_halted : in std_logic := '0';
+       Spec256_sync_imode : in std_logic_vector(1 downto 0) := (others => '0');
+       Spec256_sync_xy : in std_logic_vector(1 downto 0) := (others => '0');
+       Spec256_sync_int_cycle : in std_logic := '0';
+       Spec256_sync_nmi_cycle : in std_logic := '0';
+      Spec256_state_pc : out std_logic_vector(15 downto 0);
+      Spec256_state_sp : out std_logic_vector(15 downto 0);
+      Spec256_state_i : out std_logic_vector(7 downto 0);
+      Spec256_state_r : out std_logic_vector(7 downto 0);
+      Spec256_state_f : out std_logic_vector(7 downto 0);
+      Spec256_state_regs : out std_logic_vector(159 downto 0);
+      Spec256_state_iff1 : out std_logic;
+      Spec256_state_iff2 : out std_logic;
+      Spec256_state_halted : out std_logic;
+       Spec256_state_imode : out std_logic_vector(1 downto 0);
+       Spec256_state_xy : out std_logic_vector(1 downto 0);
+       Spec256_state_int_cycle : out std_logic;
+       Spec256_state_nmi_cycle : out std_logic;
+       Spec256_state_instruction_boundary : out std_logic;
       -- extended functions
       Z80N_dout_o       : out std_logic := '0';
       Z80N_data_o       : out std_logic_vector(15 downto 0);
@@ -193,6 +220,8 @@ architecture rtl of T80N is
    signal DI_Reg        : std_logic_vector(7 downto 0);
    signal T_Res         : std_logic;
    signal XY_State         : std_logic_vector(1 downto 0);
+   signal Spec256_XY_pending : std_logic_vector(1 downto 0) := "00";
+   signal Spec256_XY_pending_valid : std_logic := '0';
    signal Pre_XY_F_M    : std_logic_vector(2 downto 0);
    signal NextIs_XY_Fetch  : std_logic;
    signal XY_Ind        : std_logic;
@@ -465,8 +494,31 @@ begin
             PreserveC_r <= '0';
             XY_Ind <= '0';
             I_RXDD <= '0';
+            Spec256_XY_pending <= "00";
+            Spec256_XY_pending_valid <= '0';
 
             
+         elsif Spec256_sync_load = '1' then
+            PC <= unsigned(Spec256_sync_pc);
+            A <= Spec256_sync_pc;
+            SP <= unsigned(Spec256_sync_sp);
+            I <= Spec256_sync_i;
+            R <= unsigned(Spec256_sync_r);
+            IStatus <= Spec256_sync_imode;
+            -- The synchronized DD/FD state must be live before the next
+            -- opcode fetch is decoded.  Keeping it only in the pending latch
+            -- applies it at the end of that fetch, one instruction phase too
+            -- late, so an indexed load is executed as its unprefixed form.
+            XY_State <= Spec256_sync_xy;
+            XY_Ind <= '0';
+            Spec256_XY_pending <= Spec256_sync_xy;
+            Spec256_XY_pending_valid <= '1';
+            for flag_index in 0 to 7 loop
+               if flag_index /= Flag_C then
+                  F(flag_index) <= Spec256_sync_f(flag_index);
+               end if;
+            end loop;
+
          elsif ClkEn = '1' then
 
 
@@ -521,7 +573,10 @@ begin
                end if;
 
                ISet <= "00";
-               if Prefix /= "00" then
+               if Spec256_XY_pending_valid = '1' then
+                  XY_State <= Spec256_XY_pending;
+                  Spec256_XY_pending_valid <= '0';
+               elsif Prefix /= "00" then
                   if Prefix = "11" then
                      if IR(5) = '1' then
                         XY_State <= "10";
@@ -1700,6 +1755,42 @@ begin
    IntE <= IntE_FF1;
    IORQ <= IORQ_i;
    Stop <= I_DJNZ;
+   Spec256_state_pc <= std_logic_vector(PC);
+   Spec256_state_sp <= std_logic_vector(SP);
+   Spec256_state_i <= I;
+   Spec256_state_r <= std_logic_vector(R);
+   Spec256_state_f <= F;
+   Spec256_state_regs(7 downto 0) <= ACC;
+   Spec256_state_regs(15 downto 8) <= F;
+   Spec256_state_regs(23 downto 16) <= RegsH(0) when Alternate = '0' else RegsH(4);
+   Spec256_state_regs(31 downto 24) <= RegsL(0) when Alternate = '0' else RegsL(4);
+   Spec256_state_regs(39 downto 32) <= RegsH(1) when Alternate = '0' else RegsH(5);
+   Spec256_state_regs(47 downto 40) <= RegsL(1) when Alternate = '0' else RegsL(5);
+   Spec256_state_regs(55 downto 48) <= RegsH(2) when Alternate = '0' else RegsH(6);
+   Spec256_state_regs(63 downto 56) <= RegsL(2) when Alternate = '0' else RegsL(6);
+   Spec256_state_regs(71 downto 64) <= Ap;
+   Spec256_state_regs(79 downto 72) <= Fp;
+   Spec256_state_regs(87 downto 80) <= RegsH(4) when Alternate = '0' else RegsH(0);
+   Spec256_state_regs(95 downto 88) <= RegsL(4) when Alternate = '0' else RegsL(0);
+   Spec256_state_regs(103 downto 96) <= RegsH(5) when Alternate = '0' else RegsH(1);
+   Spec256_state_regs(111 downto 104) <= RegsL(5) when Alternate = '0' else RegsL(1);
+   Spec256_state_regs(119 downto 112) <= RegsH(6) when Alternate = '0' else RegsH(2);
+   Spec256_state_regs(127 downto 120) <= RegsL(6) when Alternate = '0' else RegsL(2);
+   Spec256_state_regs(135 downto 128) <= RegsH(3);
+   Spec256_state_regs(143 downto 136) <= RegsL(3);
+   Spec256_state_regs(151 downto 144) <= RegsH(7);
+   Spec256_state_regs(159 downto 152) <= RegsL(7);
+   Spec256_state_iff1 <= IntE_FF1;
+   Spec256_state_iff2 <= IntE_FF2;
+   Spec256_state_halted <= Halt_FF;
+   Spec256_state_imode <= IStatus;
+   Spec256_state_xy <= "10" when Prefix = "11" and IR(5) = '1' else
+                        "01" when Prefix = "11" else
+                        "00";
+   Spec256_state_int_cycle <= IntCycle;
+   Spec256_state_nmi_cycle <= NMICycle;
+   Spec256_state_instruction_boundary <= '1' when
+      Prefix = "00" or Prefix = "11" else '0';
    
 -------------------------------------------------------------------------
 --
@@ -1754,7 +1845,14 @@ begin
             Auto_Wait_t1 <= '0';
             Auto_Wait_t2 <= '0';
             M1_n <= '1';
-         
+
+         elsif Spec256_sync_load = '1' then
+            Halt_FF <= Spec256_sync_halted;
+            IntE_FF1 <= Spec256_sync_iff1;
+            IntE_FF2 <= Spec256_sync_iff2;
+            IntCycle <= Spec256_sync_int_cycle;
+            NMICycle <= Spec256_sync_nmi_cycle;
+
          elsif CEN = '1' then
             Auto_Wait_t2 <= Auto_Wait_t1;
             if T_Res = '1' then

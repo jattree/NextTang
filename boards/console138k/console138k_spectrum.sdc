@@ -25,3 +25,11 @@ set_false_path -to [get_regs {border_meta*}]
 set_false_path -from [get_regs {pixel_reset_shift*}]
 set_false_path -from [get_regs {cpu_reset_shift*}]
 set_false_path -from [get_regs {cpu/Reset_s*}]
+
+# The BL616 link receives at 2 Mbaud, which needs the 28 MHz domain: 3.5 MHz
+# gives 1.75 clocks per bit and decodes nothing. Its key vector, scancode and
+# debug flags therefore cross into the CPU domain on two flops each, and the
+# first stage of a synchroniser is unconstrained by construction.
+set_false_path -to [get_regs {keyboard_keys_meta*}]
+set_false_path -to [get_regs {keyboard_scancode_meta*}]
+set_false_path -to [get_regs {keyboard_debug_meta*}]

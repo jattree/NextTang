@@ -57,3 +57,9 @@ IO_PORT "probe[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
 // the debugger drives it while a bitstream is loaded.
 IO_LOC "bl616_uart_rx" V14;
 IO_PORT "bl616_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// Calibration input for the keyboard diagnostic: the host FT232R already
+// drives PMOD0 IO2, so a byte sent from the laptop proves the "byte seen"
+// latch and its crossing work before any conclusion is drawn from V14.
+IO_LOC "loopback_uart_rx" G21;
+IO_PORT "loopback_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;

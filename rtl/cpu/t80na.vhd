@@ -102,6 +102,35 @@ entity T80Na is
       D_i      : in    std_logic_vector( 7 downto 0);
       D_o      : out   std_logic_vector( 7 downto 0);
 
+      Spec256_cen : in std_logic := '1';
+      Spec256_sync_load : in std_logic := '0';
+      Spec256_sync_pc : in std_logic_vector(15 downto 0) := (others => '0');
+      Spec256_sync_sp : in std_logic_vector(15 downto 0) := (others => '0');
+      Spec256_sync_i : in std_logic_vector(7 downto 0) := (others => '0');
+      Spec256_sync_r : in std_logic_vector(7 downto 0) := (others => '0');
+      Spec256_sync_f : in std_logic_vector(7 downto 0) := (others => '0');
+      Spec256_sync_iff1 : in std_logic := '0';
+      Spec256_sync_iff2 : in std_logic := '0';
+       Spec256_sync_halted : in std_logic := '0';
+       Spec256_sync_imode : in std_logic_vector(1 downto 0) := (others => '0');
+       Spec256_sync_xy : in std_logic_vector(1 downto 0) := (others => '0');
+       Spec256_sync_int_cycle : in std_logic := '0';
+       Spec256_sync_nmi_cycle : in std_logic := '0';
+      Spec256_state_pc : out std_logic_vector(15 downto 0);
+      Spec256_state_sp : out std_logic_vector(15 downto 0);
+      Spec256_state_i : out std_logic_vector(7 downto 0);
+      Spec256_state_r : out std_logic_vector(7 downto 0);
+      Spec256_state_f : out std_logic_vector(7 downto 0);
+      Spec256_state_regs : out std_logic_vector(159 downto 0);
+      Spec256_state_iff1 : out std_logic;
+      Spec256_state_iff2 : out std_logic;
+      Spec256_state_halted : out std_logic;
+       Spec256_state_imode : out std_logic_vector(1 downto 0);
+       Spec256_state_xy : out std_logic_vector(1 downto 0);
+       Spec256_state_int_cycle : out std_logic;
+       Spec256_state_nmi_cycle : out std_logic;
+       Spec256_state_instruction_boundary : out std_logic;
+
       -- extended functions
       Z80N_dout_o       : out std_logic := '0';
       Z80N_data_o       : out std_logic_vector(15 downto 0);
@@ -143,7 +172,7 @@ architecture rtl of T80Na is
 
 begin
 
-   CEN <= '1';
+   CEN <= Spec256_cen;
 
    BUSAK_n <= BUSAK_n_i;                                    -- 30/10/19 Charlie Ingley - IORQ/RD/WR changes
    MREQ_rw <= MREQ and (Req_Inhibit or MReq_Inhibit);             --          added MREQ timing control
@@ -205,6 +234,33 @@ begin
          MC => MCycle,
          TS => TState,
          IntCycle_n => IntCycle_n,
+         Spec256_sync_load => Spec256_sync_load,
+         Spec256_sync_pc => Spec256_sync_pc,
+         Spec256_sync_sp => Spec256_sync_sp,
+         Spec256_sync_i => Spec256_sync_i,
+         Spec256_sync_r => Spec256_sync_r,
+         Spec256_sync_f => Spec256_sync_f,
+         Spec256_sync_iff1 => Spec256_sync_iff1,
+         Spec256_sync_iff2 => Spec256_sync_iff2,
+         Spec256_sync_halted => Spec256_sync_halted,
+          Spec256_sync_imode => Spec256_sync_imode,
+          Spec256_sync_xy => Spec256_sync_xy,
+          Spec256_sync_int_cycle => Spec256_sync_int_cycle,
+          Spec256_sync_nmi_cycle => Spec256_sync_nmi_cycle,
+         Spec256_state_pc => Spec256_state_pc,
+         Spec256_state_sp => Spec256_state_sp,
+         Spec256_state_i => Spec256_state_i,
+         Spec256_state_r => Spec256_state_r,
+         Spec256_state_f => Spec256_state_f,
+         Spec256_state_regs => Spec256_state_regs,
+         Spec256_state_iff1 => Spec256_state_iff1,
+         Spec256_state_iff2 => Spec256_state_iff2,
+         Spec256_state_halted => Spec256_state_halted,
+          Spec256_state_imode => Spec256_state_imode,
+          Spec256_state_xy => Spec256_state_xy,
+          Spec256_state_int_cycle => Spec256_state_int_cycle,
+          Spec256_state_nmi_cycle => Spec256_state_nmi_cycle,
+          Spec256_state_instruction_boundary => Spec256_state_instruction_boundary,
          
          Z80N_dout_o       => Z80N_dout_o,      
          Z80N_data_o       => Z80N_data_o,      

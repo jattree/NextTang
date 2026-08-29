@@ -2,7 +2,8 @@
 # Build the machine CPU bring-up image for the Console 138K.  The `ula`
 # profile is a separate target that replaces only the ad-hoc display path with
 # the imported ULA and frame-safe 720p scaler. The tape profile also accepts a
-# user-supplied TZX or single-member TZX ZIP outside Git.
+# user-supplied TZX or single-member TZX ZIP outside Git. The snapshot profile
+# similarly resumes a private 48K SNA without copying it into the repository.
 #
 # This path mixes the imported VHDL T80 and, in the `ula` profile, the imported
 # VHDL raster with the original Verilog platform shell.
@@ -15,21 +16,29 @@ toolchain=
 profile=
 vendor_source=
 tape_file=
+snapshot_file=
+gfx_file=
+rom_gfx_file=
+palette_file=
 output_dir=
 
 usage() {
-    printf '%s\n' 'usage: boards/console138k/build_spectrum48.sh --toolchain vendor --profile release|ula|ula-tape|ula-ddr-upper|ula-ddr-upper-tape [--vendor-source ABSOLUTE_DIRECTORY] [--tape ABSOLUTE_TZX_OR_ZIP] --output ABSOLUTE_DIRECTORY'
+    printf '%s\n' 'usage: boards/console138k/build_spectrum48.sh --toolchain vendor --profile release|ula|ula-tape|ula-tape-start-s1|ula-snapshot|spec256-snapshot|spec256-snapshot-audio|spec256-snapshot-audio-chuckie|spec256-runtime-audio|bl616-keyboard-test|keyboard-test|ula-ddr-upper|ula-ddr-upper-tape [--vendor-source ABSOLUTE_DIRECTORY] [--tape ABSOLUTE_TZX_OR_ZIP] [--snapshot ABSOLUTE_SNA] [--gfx ABSOLUTE_GFX] [--rom-gfx ABSOLUTE_ROM_GFX] [--palette ABSOLUTE_PALETTE] --output ABSOLUTE_DIRECTORY'
 }
 
 while (($#)); do
     case "$1" in
-        --toolchain|--profile|--vendor-source|--tape|--output)
+        --toolchain|--profile|--vendor-source|--tape|--snapshot|--gfx|--rom-gfx|--palette|--output)
             [[ $# -ge 2 ]] || { usage >&2; exit 2; }
             case "$1" in
                 --toolchain) toolchain=$2 ;;
                 --profile) profile=$2 ;;
                 --vendor-source) vendor_source=$2 ;;
                 --tape) tape_file=$2 ;;
+                --snapshot) snapshot_file=$2 ;;
+                --gfx) gfx_file=$2 ;;
+                --rom-gfx) rom_gfx_file=$2 ;;
+                --palette) palette_file=$2 ;;
                 --output) output_dir=$2 ;;
             esac
             shift 2
@@ -45,9 +54,32 @@ if [[ "$toolchain" != vendor ]]; then
 fi
 if [[ "$profile" != release && "$profile" != ula && \
       "$profile" != ula-tape && \
+      "$profile" != ula-tape-start-s1 && \
+      "$profile" != ula-snapshot && \
+      "$profile" != spec256-snapshot && \
+      "$profile" != spec256-snapshot-audio && \
+      "$profile" != spec256-snapshot-audio-chuckie && \
+      "$profile" != spec256-runtime-audio && \
+      "$profile" != bl616-keyboard-test && \
+      "$profile" != keyboard-test && \
       "$profile" != ula-ddr-upper && \
       "$profile" != ula-ddr-upper-tape ]]; then
     printf 'console138k spectrum build: profile not implemented: %s\n' "$profile" >&2
+    exit 2
+fi
+if [[ ("$profile" == ula-snapshot || "$profile" == spec256-snapshot || \
+       "$profile" == spec256-snapshot-audio || \
+       "$profile" == spec256-snapshot-audio-chuckie) && \
+      ("$snapshot_file" != /* || ! -f "$snapshot_file") ]]; then
+    printf '%s\n' 'console138k spectrum build: snapshot profile requires --snapshot ABSOLUTE_SNA' >&2
+    exit 2
+fi
+if [[ ("$profile" == spec256-snapshot || "$profile" == spec256-snapshot-audio || \
+       "$profile" == spec256-snapshot-audio-chuckie) && \
+      ("$gfx_file" != /* || ! -f "$gfx_file" || \
+       "$rom_gfx_file" != /* || ! -f "$rom_gfx_file" || \
+       "$palette_file" != /* || ! -f "$palette_file") ]]; then
+    printf '%s\n' 'console138k spectrum build: spec256 profile requires --gfx ABSOLUTE_GFX, --rom-gfx ABSOLUTE_ROM_GFX and --palette ABSOLUTE_PALETTE' >&2
     exit 2
 fi
 
@@ -71,7 +103,8 @@ if [[ "$profile" == ula-ddr-upper || \
         fi
     done
 fi
-if [[ ("$profile" == ula-ddr-upper-tape || "$profile" == ula-tape) && \
+if [[ ("$profile" == ula-ddr-upper-tape || "$profile" == ula-tape || \
+       "$profile" == ula-tape-start-s1) && \
       ("$tape_file" != /* || ! -f "$tape_file") ]]; then
     printf '%s\n' 'console138k spectrum build: tape profile requires --tape ABSOLUTE_TZX_OR_ZIP' >&2
     exit 2
@@ -99,11 +132,51 @@ elif [[ "$profile" == ula-ddr-upper ]]; then
     pin_constraints_base="$repo_root/boards/console138k/console138k_ddr3.cst"
     pin_constraints_extra="$repo_root/boards/console138k/console138k_spectrum48_ula_ddr3_extra.cst"
     timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_ula_ddr3.sdc"
+elif [[ "$profile" == ula-tape-start-s1 ]]; then
+    base_name=nexttang_console138k_spectrum48_ula_tape_s1
+    pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
+    pin_constraints_extra=
+    timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_ula.sdc"
 elif [[ "$profile" == ula-tape ]]; then
     base_name=nexttang_console138k_spectrum48_ula_tape
     pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
     pin_constraints_extra=
     timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_ula.sdc"
+elif [[ "$profile" == spec256-runtime-audio ]]; then
+    base_name=nexttang_console138k_spectrum48_spec256_runtime_audio
+    pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
+    pin_constraints_extra="$repo_root/boards/console138k/console138k_spectrum48_spec256_runtime_extra.cst"
+    timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_spec256_runtime.sdc"
+elif [[ "$profile" == spec256-snapshot-audio || \
+        "$profile" == spec256-snapshot-audio-chuckie ]]; then
+    if [[ "$profile" == spec256-snapshot-audio-chuckie ]]; then
+        base_name=nexttang_console138k_spectrum48_spec256_snapshot_audio_chuckie
+    else
+        base_name=nexttang_console138k_spectrum48_spec256_snapshot_audio
+    fi
+    pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
+    pin_constraints_extra="$repo_root/boards/console138k/console138k_spectrum48_keyboard_extra.cst"
+    timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_spec256.sdc"
+elif [[ "$profile" == spec256-snapshot ]]; then
+    base_name=nexttang_console138k_spectrum48_spec256_snapshot
+    pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
+    pin_constraints_extra="$repo_root/boards/console138k/console138k_spectrum48_keyboard_extra.cst"
+    timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_spec256.sdc"
+elif [[ "$profile" == ula-snapshot ]]; then
+    base_name=nexttang_console138k_spectrum48_ula_snapshot
+    pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
+    pin_constraints_extra=
+    timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_ula.sdc"
+elif [[ "$profile" == bl616-keyboard-test ]]; then
+    base_name=nexttang_console138k_spectrum48_bl616_keyboard_test
+    pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
+    pin_constraints_extra=
+    timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_ula.sdc"
+elif [[ "$profile" == keyboard-test ]]; then
+    base_name=nexttang_console138k_spectrum48_keyboard_test
+    pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
+    pin_constraints_extra="$repo_root/boards/console138k/console138k_spectrum48_keyboard_extra.cst"
+    timing_constraints="$repo_root/boards/console138k/console138k_spectrum48_keyboard.sdc"
 elif [[ "$profile" == ula ]]; then
     base_name=nexttang_console138k_spectrum48_ula
     pin_constraints_base="$repo_root/boards/console138k/console138k_spectrum48.cst"
@@ -116,18 +189,55 @@ else
     timing_constraints="$repo_root/boards/console138k/console138k_spectrum48.sdc"
 fi
 
-if [[ "$profile" == ula-ddr-upper-tape || "$profile" == ula-tape ]]; then
+if [[ "$profile" == ula-ddr-upper-tape || "$profile" == ula-tape || \
+      "$profile" == ula-tape-start-s1 ]]; then
     python3 "$repo_root/scripts/tzx_to_mem.py" \
         "$tape_file" "$output_dir/tape.mem" \
         --manifest "$output_dir/tape-input-sha256.txt" || exit 1
+fi
+if [[ "$profile" == keyboard-test || "$profile" == spec256-snapshot || \
+      "$profile" == spec256-snapshot-audio || \
+      "$profile" == spec256-snapshot-audio-chuckie ]]; then
+    cp "$repo_root/rtl/input/usb_hid_host_rom.mem" \
+        "$output_dir/usb_hid_host_rom.mem"
+fi
+if [[ "$profile" == ula-snapshot || "$profile" == spec256-snapshot || \
+      "$profile" == spec256-snapshot-audio || \
+      "$profile" == spec256-snapshot-audio-chuckie ]]; then
+    python3 "$repo_root/tools/spec256/snapshot.py" \
+        "$snapshot_file" \
+        "$output_dir/snapshot-ram.mem" \
+        "$output_dir/snapshot-boot.mem" \
+        --manifest "$output_dir/snapshot-input-sha256.txt" || exit 1
+fi
+if [[ "$profile" == spec256-snapshot || "$profile" == spec256-snapshot-audio || \
+      "$profile" == spec256-snapshot-audio-chuckie ]]; then
+    python3 "$repo_root/tools/spec256/hardware.py" \
+        "$snapshot_file" "$gfx_file" "$output_dir/spec256-ram.mem" \
+        --rom-gfx "$rom_gfx_file" \
+        --palette-source "$palette_file" \
+        --palette-destination "$output_dir/spec256-palette.mem" \
+        --manifest "$output_dir/spec256-input-sha256.txt" || exit 1
 fi
 
 if [[ -n "$pin_constraints_extra" ]]; then
     pin_constraints="$output_dir/$base_name.cst"
     {
         printf '%s\n' '// Generated from the two repository constraint sources below.'
-        awk 'FNR == 1 && NR != 1 { print "" } { print }' \
-            "$pin_constraints_base" "$pin_constraints_extra"
+        if [[ "$profile" == spec256-runtime-audio ]]; then
+            # G21 is the runtime game-pack input for this profile.  The base
+            # constraints use it for the diagnostic-only loopback input, which
+            # is not a port on the runtime top and cannot share the package pin.
+            awk '
+                /IO_LOC "loopback_uart_rx"/ { next }
+                /IO_PORT "loopback_uart_rx"/ { next }
+                FNR == 1 && NR != 1 { print "" }
+                { print }
+            ' "$pin_constraints_base" "$pin_constraints_extra"
+        else
+            awk 'FNR == 1 && NR != 1 { print "" } { print }' \
+                "$pin_constraints_base" "$pin_constraints_extra"
+        fi
     } >"$pin_constraints"
 else
     pin_constraints=$pin_constraints_base
@@ -146,7 +256,9 @@ source_files=(
     "$repo_root/rtl/cpu/t80n.vhd"
     "$repo_root/rtl/cpu/t80na.vhd"
     "$repo_root/rtl/memory/nexttang_block_ram.v"
+    "$repo_root/rtl/memory/nexttang_spectrum_ram.v"
     "$repo_root/rtl/memory/nexttang_rom.v"
+    "$repo_root/rtl/audio/nexttang_spectrum_beeper.v"
     "$repo_root/rtl/input/nexttang_keyboard_matrix.v"
     "$repo_root/rtl/input/nexttang_key_sequencer.v"
     "$repo_root/rtl/input/nexttang_uart_receiver.v"
@@ -159,7 +271,65 @@ source_files=(
     "$repo_root/rtl/video/nexttang_tmds_encoder.v"
 )
 
-if [[ "$profile" == ula || "$profile" == ula-tape || \
+if [[ "$profile" == spec256-snapshot || "$profile" == spec256-snapshot-audio || \
+      "$profile" == spec256-runtime-audio || \
+      "$profile" == spec256-snapshot-audio-chuckie ]]; then
+    source_files+=(
+        "$repo_root/rtl/cpu/nexttang_spec256_cpu_cluster.vhd"
+        "$repo_root/rtl/input/nexttang_post_tape_key_sequencer.v"
+        "$repo_root/rtl/input/nexttang_spec256_input_mux.v"
+        "$repo_root/rtl/input/usb_hid_host.v"
+        "$repo_root/rtl/input/usb_hid_host_dual_rom.v"
+        "$repo_root/rtl/input/nexttang_usb_keyboard_matrix.v"
+        "$repo_root/rtl/input/nexttang_usb_gamepad_kempston.v"
+        "$repo_root/boards/console138k/nexttang_console138k_usb_pll.v"
+        "$repo_root/rtl/video/nexttang_spec256_display.v"
+        "$repo_root/rtl/video/nexttang_spec256_palette.v"
+        # Resolves 0xFF passthrough pixels to the ordinary Spectrum colour.
+        "$repo_root/rtl/video/nexttang_spectrum_display.v"
+    )
+    if [[ "$profile" == spec256-snapshot-audio || \
+          "$profile" == spec256-runtime-audio || \
+          "$profile" == spec256-snapshot-audio-chuckie ]]; then
+        source_files+=(
+            "$repo_root/rtl/audio/nexttang_beeper_pcm.v"
+            "$repo_root/rtl/video/hdmi/audio_clock_regeneration_packet.sv"
+            "$repo_root/rtl/video/hdmi/audio_info_frame.sv"
+            "$repo_root/rtl/video/hdmi/audio_sample_packet.sv"
+            "$repo_root/rtl/video/hdmi/auxiliary_video_information_info_frame.sv"
+            "$repo_root/rtl/video/hdmi/packet_assembler.sv"
+            "$repo_root/rtl/video/hdmi/packet_picker.sv"
+            "$repo_root/rtl/video/hdmi/source_product_description_info_frame.sv"
+            "$repo_root/rtl/video/hdmi/tmds_channel.sv"
+            "$repo_root/rtl/video/nexttang_gowin_hdmi_serializer.sv"
+            "$repo_root/rtl/video/hdmi/hdmi.sv"
+        )
+        if [[ "$profile" == spec256-runtime-audio ]]; then
+            source_files+=(
+                "$repo_root/rtl/input/nexttang_spec256_game_loader.v"
+                "$repo_root/rtl/input/nexttang_spec256_runtime_key_sequencer.v"
+                "$repo_root/rtl/input/nexttang_spec256_runtime_input.v"
+                "$repo_root/boards/console138k/nexttang_console138k_spectrum48_spec256_runtime_audio.sv"
+            )
+        elif [[ "$profile" == spec256-snapshot-audio-chuckie ]]; then
+            source_files+=(
+                "$repo_root/boards/console138k/nexttang_console138k_spectrum48_spec256_snapshot_audio_chuckie.sv"
+            )
+        else
+            source_files+=(
+                "$repo_root/boards/console138k/nexttang_console138k_spectrum48_spec256_snapshot_audio.sv"
+            )
+        fi
+    else
+        source_files+=(
+            "$repo_root/boards/console138k/nexttang_console138k_spectrum48_spec256_snapshot.v"
+        )
+    fi
+elif [[ "$profile" == ula || "$profile" == ula-tape || \
+      "$profile" == ula-tape-start-s1 || \
+      "$profile" == ula-snapshot || \
+      "$profile" == bl616-keyboard-test || \
+      "$profile" == keyboard-test || \
       "$profile" == ula-ddr-upper || \
       "$profile" == ula-ddr-upper-tape ]]; then
     source_files+=(
@@ -191,11 +361,36 @@ if [[ "$profile" == ula || "$profile" == ula-tape || \
                 "$repo_root/boards/console138k/nexttang_console138k_spectrum48_ula_ddr3.v"
             )
         fi
+    elif [[ "$profile" == ula-tape-start-s1 ]]; then
+        source_files+=(
+            "$repo_root/rtl/input/nexttang_load_key_sequencer.v"
+            "$repo_root/rtl/input/nexttang_post_tape_key_sequencer.v"
+            "$repo_root/rtl/input/nexttang_tzx_player.v"
+            "$repo_root/boards/console138k/nexttang_console138k_spectrum48_ula_tape_s1.v"
+        )
     elif [[ "$profile" == ula-tape ]]; then
         source_files+=(
             "$repo_root/rtl/input/nexttang_load_key_sequencer.v"
             "$repo_root/rtl/input/nexttang_tzx_player.v"
             "$repo_root/boards/console138k/nexttang_console138k_spectrum48_ula_tape.v"
+        )
+    elif [[ "$profile" == ula-snapshot ]]; then
+        source_files+=(
+            "$repo_root/rtl/input/nexttang_post_tape_key_sequencer.v"
+            "$repo_root/boards/console138k/nexttang_console138k_spectrum48_ula_snapshot.v"
+        )
+    elif [[ "$profile" == bl616-keyboard-test ]]; then
+        source_files+=(
+            "$repo_root/boards/console138k/nexttang_console138k_spectrum48_bl616_keyboard_test.v"
+        )
+    elif [[ "$profile" == keyboard-test ]]; then
+        source_files+=(
+            "$repo_root/rtl/input/usb_hid_host.v"
+            "$repo_root/rtl/input/usb_hid_host_dual_rom.v"
+            "$repo_root/rtl/input/nexttang_usb_keyboard_matrix.v"
+            "$repo_root/rtl/input/nexttang_usb_snapshot_uart.v"
+            "$repo_root/boards/console138k/nexttang_console138k_usb_pll.v"
+            "$repo_root/boards/console138k/nexttang_console138k_spectrum48_keyboard_test.v"
         )
     else
         source_files+=(
@@ -217,15 +412,41 @@ hash_files+=("$pin_constraints_base" "$timing_constraints")
 if [[ -n "$pin_constraints_extra" ]]; then
     hash_files+=("$pin_constraints_extra")
 fi
-if [[ "$profile" == ula || "$profile" == ula-tape || \
+if [[ "$profile" == spec256-snapshot || "$profile" == spec256-snapshot-audio || \
+      "$profile" == spec256-runtime-audio || \
+      "$profile" == spec256-snapshot-audio-chuckie || \
+      "$profile" == ula || "$profile" == ula-tape || \
+      "$profile" == ula-tape-start-s1 || \
+      "$profile" == ula-snapshot || \
+      "$profile" == bl616-keyboard-test || \
+      "$profile" == keyboard-test || \
       "$profile" == ula-ddr-upper || \
       "$profile" == ula-ddr-upper-tape ]]; then
     hash_files+=(
         "$repo_root/boards/console138k/nexttang_console138k_spectrum48.v"
     )
 fi
-if [[ "$profile" == ula-ddr-upper-tape || "$profile" == ula-tape ]]; then
+if [[ "$profile" == keyboard-test || "$profile" == spec256-snapshot || \
+      "$profile" == spec256-snapshot-audio || \
+      "$profile" == spec256-snapshot-audio-chuckie ]]; then
+    hash_files+=("$repo_root/rtl/input/usb_hid_host_rom.mem")
+fi
+if [[ "$profile" == ula-ddr-upper-tape || "$profile" == ula-tape || \
+      "$profile" == ula-tape-start-s1 ]]; then
     hash_files+=("$repo_root/scripts/tzx_to_mem.py")
+fi
+if [[ "$profile" == ula-snapshot || "$profile" == spec256-snapshot || \
+      "$profile" == spec256-snapshot-audio || \
+      "$profile" == spec256-snapshot-audio-chuckie ]]; then
+    hash_files+=("$repo_root/tools/spec256/snapshot.py")
+fi
+if [[ "$profile" == spec256-snapshot || "$profile" == spec256-snapshot-audio || \
+      "$profile" == spec256-snapshot-audio-chuckie ]]; then
+    hash_files+=(
+        "$repo_root/tools/spec256/gfx.py"
+        "$repo_root/tools/spec256/render.py"
+        "$repo_root/tools/spec256/hardware.py"
+    )
 fi
 
 if [[ -z "${NEXTTANG_48K_ROM:-}" || ! -f "${NEXTTANG_48K_ROM}" ]]; then
