@@ -81,6 +81,50 @@ support claims.
 issue 4's acceptance criteria across every Layer 2 layout under declared refresh and latency
 injection. This evidence remains simulated, not synthesized or hardware-verified.
 
+## Spec256 compatibility track
+
+> [!CAUTION]
+> This section records local pre-reveal work. Do not commit or publish it until
+> Jon approves the Spec256 reveal. Private game data, packs, bitstreams and
+> captures remain outside Git.
+
+This standalone 48K track gives the project a shorter compatibility loop before
+the full Next core is ready. Its reusable parts can later feed the NextTang 48K
+and 128K personalities.
+
+- [x] Run the exact private Jetpac snapshot in the standalone 48K machine.
+- [x] Reproduce the established Spec256 file mapping and static reference paper.
+- [x] Run one master and eight graphical T80 lanes with clean moving enhanced
+  Jetpac on the Console 138K.
+- [x] Run enhanced Chuckie Egg gameplay and hardware-verify the later `0xFF`
+  passthrough correction on its title.
+- [x] Replace game-specific bitstreams with a bounded runtime pack loader.
+- [x] Load Jetpac and Chuckie Egg into one fixed core without reloading the FPGA.
+- [x] Send live Kempston direction/fire states over the FT232RL and verify
+  visible Jetpac control.
+- [x] Carry version-two background sets and unconditional `0xFF` passthrough;
+  hardware-verify exact Jetpac, Chuckie Egg and Knight Lore packs.
+- [x] Build valid 48K packs for all 22 games the current format can express;
+  keep this collection-wide result software-only until each pack is run.
+- [ ] Regression-test and hardware-verify the existing evdev-to-UART keyboard
+  bridge, then add a gamepad mapping for normal play.
+- [ ] Test more independent 48K packs and configuration-dependent presentation.
+- [ ] Verify audible 48K beeper output through HDMI; an audio build and PCM
+  capture container exist, but preserved evidence does not establish sound.
+- [ ] Expand the instruction and game conformance suite before claiming general
+  Spec256 compatibility.
+- [ ] Reproduce the later 128K extensions.
+- [ ] Fold the proven mode into NextTang's 48K/128K personalities without
+  weakening ordinary Spectrum compatibility.
+
+**Current evidence:** exact-C vendor builds, including local checkpoint
+`27bca1c3d98f` of the game-neutral runtime profile at `+0.836 ns` setup and
+`+0.211 ns` hold slack; fail-first processor-state and
+runtime-input regressions, two runtime-loaded gameplay packs, three exact packs
+with hardware display evidence, an Elgato two-game switch capture and a
+separate live-control capture. The latest full repository gate passes 458 tests
+with one skip. This track remains private until Jon approves the reveal.
+
 ## Milestone 0: Project baseline
 
 - [x] Create the public repository and choose the GPLv3 license foundation.
@@ -90,8 +134,9 @@ injection. This evidence remains simulated, not synthesized or hardware-verified
 - [x] Audit licenses and per-file notices before importing upstream source.
 - [x] Add a provenance document distinguishing upstream, modified, generated,
   and original files.
-- [ ] Record supported board, package, and B/C silicon revisions after the
-  purchased 138K hardware arrives and can be inspected.
+- [x] Record the received Console `32001C` carrier, `30354` 1 GB SOM,
+  `GW5AST-LV138PG484AC1/I0` package and C-silicon target. Other revisions still
+  require their own evidence.
 - [x] Document contributor workflow, formatting, review, and evidence rules.
 
 The [provenance audit](docs/provenance.md) pins the selected upstream tree and
@@ -118,8 +163,10 @@ as board references.
 - [x] Add fail-closed build entry points, environment diagnostics, repository
   checks, and provisional version references without claiming synthesis support.
 - [ ] Reproduce LED/reset and UART operation on the exact 138K board revision.
-- [ ] Reproduce HDMI color bars and stable video clocks.
-- [ ] Reproduce DDR3 initialization, bounded memory testing, and UART results.
+- [x] Reproduce HDMI colour bars and stable video clocks on the exact received
+  Console 138K configuration.
+- [x] Reproduce DDR3 initialisation, bounded 1 GiB address-line testing and
+  independent FT232RL UART status on that configuration.
 - [ ] Reproduce SD access, I2S audio, and USB HID independently.
 - [ ] Capture utilization, timing slack, clock definitions, and all generated-IP
   provenance.
