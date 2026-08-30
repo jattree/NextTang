@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Direct USB and read-only SD pins for classic loader targets.
+
+IO_LOC "tmds_psv" K14;
+IO_PORT "tmds_psv" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "probe[5]" F19;
+IO_PORT "probe[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "usb1_dp" H13;
+IO_PORT "usb1_dp" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb1_dn" G13;
+IO_PORT "usb1_dn" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb2_dp" M15;
+IO_PORT "usb2_dp" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb2_dn" M16;
+IO_PORT "usb2_dn" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "sd_miso" AA15;
+IO_PORT "sd_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "sd_clk" V15;
+IO_PORT "sd_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "sd_cs" W15;
+IO_PORT "sd_cs" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "sd_mosi" Y16;
+IO_PORT "sd_mosi" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;

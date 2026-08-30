@@ -442,6 +442,35 @@ class UsbKeyboardMatrixTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("USB_FULL_SPEED_KEYBOARD_PASS", result.stdout)
 
+    def test_by_tech_prefixed_report_preserves_modifier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            simulation = Path(directory) / "usb-host-prefixed-modifier-sim"
+            build = subprocess.run(
+                [
+                    "iverilog", "-g2012", "-DNEXTTANG_USB_SIM_FAST",
+                    "-Ptestbench.CHECK_PREFIXED_MODIFIER=1",
+                    "-o", str(simulation),
+                    str(USB_HOST_TESTBENCH), str(USB_DEVICE_MODEL),
+                    str(USB_HOST_RTL), str(USB_HOST_ROM_RTL),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            result = subprocess.run(
+                [str(simulation)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("USB_FULL_SPEED_KEYBOARD_PASS", result.stdout)
+
     def test_hid_report_maps_digits_letters_and_shift(self) -> None:
         testbench = r"""
 module testbench;

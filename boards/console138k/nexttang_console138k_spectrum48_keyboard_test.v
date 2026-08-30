@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 NextTang contributors
 
-// Hardware diagnostic for the factory BL616 USB-keyboard forwarding path.
-// It keeps the normal ULA picture but replaces the automatic typist and tape
-// with milestone counters on the debug UART and PMOD probes.
+// Hardware diagnostic for direct FPGA ownership of both front USB-A roots.
+// It retains the real ULA/CPU/ROM machine while exposing USB milestones on the
+// debug UART and PMOD probes.
 
 `define NEXTTANG_SPECTRUM48_TOP nexttang_console138k_spectrum48_keyboard_test
 `define NEXTTANG_SPECTRUM48_USE_ULA

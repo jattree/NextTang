@@ -3,3 +3,13 @@
 // plus a shared ground on pin 3 or 4.
 IO_LOC "game_pack_uart_rx" G21;
 IO_PORT "game_pack_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF;
+
+// Console USB-A root ports, hosted directly by the FPGA.
+IO_LOC "usb1_dp" H13;
+IO_PORT "usb1_dp" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb1_dn" G13;
+IO_PORT "usb1_dn" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb2_dp" M15;
+IO_PORT "usb2_dp" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb2_dn" M16;
+IO_PORT "usb2_dn" IO_TYPE=LVCMOS33 DRIVE=8;

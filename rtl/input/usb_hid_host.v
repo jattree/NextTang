@@ -344,7 +344,11 @@ always @(*) begin
   typ_next = 0;
   x_input  = 0;
 
-  casez ({regs[4], regs[5], regs[6], vid, pid})  // INTERFACE_CLASS, INTERFACE_SUBCLASS, INTERFACE_PROTOCOL, VID, PID
+  if (KEYBOARD_SUPPORT &&
+      ((vid == 16'h258a && pid == 16'h0049) ||
+       (vid == 16'hc0f4 && pid == 16'h05c0))) begin
+    typ_next = 1;
+  end else casez ({regs[4], regs[5], regs[6], vid, pid})  // INTERFACE_CLASS, INTERFACE_SUBCLASS, INTERFACE_PROTOCOL, VID, PID
     {8'h03, 8'h01, 8'h01, 16'hzzzz, 16'hzzzz}: if (KEYBOARD_SUPPORT) typ_next = 1;  // keyboard
     {8'h03, 8'h01, 8'hzz, 16'hzzzz, 16'hzzzz}: if (MOUSE_SUPPORT)    typ_next = 2;  // mouse
     {8'h03, 8'hzz, 8'hzz, 16'hzzzz, 16'hzzzz}: if (GAME_SUPPORT)     typ_next = 3;  // other (incl. 8BitDo, D-Input)
@@ -405,6 +409,7 @@ end
 reg [2:0] hat;
 
 always @(*) begin
+  hat = 3'b000;
   {key_modifiers, key_0, key_1, key_2, key_3, key_4, key_5} = {8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00};
   {mouse_btn, mouse_dx, mouse_dy} = {3'b000, 8'h00, 8'h00};
   {game_l, game_r, game_u, game_d} = {1'b0, 1'b0, 1'b0, 1'b0};
@@ -412,8 +417,19 @@ always @(*) begin
   {game_sel, game_sta} = {1'b0, 1'b0};
   game_extra = 4'b0;
 
-  if (KEYBOARD_SUPPORT && typ == 1) begin
-    {key_modifiers, key_0, key_1, key_2, key_3, key_4, key_5} = {dat[0], dat[2], dat[3], dat[4], dat[5], dat[6], dat[7]};
+  if (KEYBOARD_SUPPORT &&
+      (typ == 1 || (vid == 16'hc0f4 && pid == 16'h05c0))) begin
+    if (((vid == 16'h258a && pid == 16'h0049) ||
+         (vid == 16'hc0f4 && pid == 16'h05c0)) && dat[2] == 8'h26) begin
+      // BY Tech composite gaming keyboard. Its interrupt endpoint retains
+      // report protocol and prefixes the boot-like key usages with report ID
+      // 0x26. Treating that byte as key slot zero produces a stuck Spectrum 9.
+      {key_modifiers, key_0, key_1, key_2, key_3, key_4, key_5} =
+          {dat[0], dat[3], dat[4], dat[5], dat[6], dat[7], 8'h00};
+    end else begin
+      {key_modifiers, key_0, key_1, key_2, key_3, key_4, key_5} =
+          {dat[0], dat[2], dat[3], dat[4], dat[5], dat[6], dat[7]};
+    end
 
   end else if (MOUSE_SUPPORT && typ == 2) begin
     {mouse_btn, mouse_dx, mouse_dy} = {dat[0][2:0], dat[1], dat[2]};
@@ -593,11 +609,15 @@ always @(*) begin
 end
 
 always @(posedge clk) begin
-  dpi <= {dpi[RX_FILTER-2:0], usb_dp_i};
-  dmi <= {dmi[RX_FILTER-2:0], usb_dm_i};
-
+  if (reset) begin
+    dpi <= 0;
+    dmi <= 0;
+  end else begin
+    dpi <= {dpi[RX_FILTER-2:0], usb_dp_i};
+    dmi <= {dmi[RX_FILTER-2:0], usb_dm_i};
+  end
   dsum <= sum;
-  eop  <= dpi[EOP_FILTER-1:0] == dmi[EOP_FILTER-1:0];
+  eop <= dpi[EOP_FILTER-1:0] == dmi[EOP_FILTER-1:0];
 end
 
 assign di   = (dsum < 0) ^ polarity;

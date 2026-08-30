@@ -11,6 +11,7 @@
 
 module nexttang_tzx_player #(
     parameter integer CLOCK_HZ = 3500000,
+    parameter integer EXTERNAL_STREAM = 0,
     parameter integer TZX_BYTES = 0,
     parameter IMAGE = "",
     parameter integer STANDARD_PILOT_LENGTH = 2168,
@@ -24,6 +25,10 @@ module nexttang_tzx_player #(
     input  wire        clock,
     input  wire        reset,
     input  wire        start,
+    input  wire [7:0]  stream_data,
+    input  wire        stream_valid,
+    input  wire        stream_end,
+    output wire        stream_ready,
     output reg         ear,
     output reg         active,
     output reg         finished,
@@ -96,21 +101,29 @@ module nexttang_tzx_player #(
 
     assign byte_position = next_byte_position;
 
-    nexttang_rom #(
-        .ADDRESS_BITS(TAPE_ADDRESS_BITS),
-        .IMAGE(IMAGE)
-    ) tape_rom (
-        .clock(clock),
-        .address(rom_address),
-        .data(rom_data)
-    );
+    generate
+        if (!EXTERNAL_STREAM) begin : rom_source
+            nexttang_rom #(
+                .ADDRESS_BITS(TAPE_ADDRESS_BITS),
+                .IMAGE(IMAGE)
+            ) tape_rom (
+                .clock(clock), .address(rom_address), .data(rom_data)
+            );
+        end else begin : no_rom_source
+            assign rom_data = 8'b0;
+        end
+    endgenerate
 
     wire state_needs_byte =
         state == STATE_HEADER || state == STATE_NEW_BLOCK ||
         state == STATE_TEXT_LENGTH || state == STATE_SKIP ||
         state == STATE_STANDARD_HEADER || state == STATE_TURBO_HEADER ||
         state == STATE_FIRST_DATA || state == STATE_NEXT_DATA;
-    wire consume_byte = state_needs_byte && byte_valid;
+    wire [7:0] source_byte = EXTERNAL_STREAM ? stream_data : fetched_byte;
+    wire source_valid = EXTERNAL_STREAM ? stream_valid : byte_valid;
+    wire source_end = EXTERNAL_STREAM ? stream_end : end_of_input;
+    wire consume_byte = state_needs_byte && source_valid;
+    assign stream_ready = EXTERNAL_STREAM && consume_byte;
 
     // The tape ROM is synchronous. Fetching therefore has an explicit wait
     // cycle before capture; the parser never consumes speculative data.
@@ -123,12 +136,12 @@ module nexttang_tzx_player #(
             byte_valid <= 1'b0;
             end_of_input <= 1'b0;
         end else begin
-            if (consume_byte)
+            if (consume_byte && !EXTERNAL_STREAM)
                 byte_valid <= 1'b0;
 
             case (fetch_state)
                 FETCH_IDLE: begin
-                    if (state_needs_byte && !byte_valid) begin
+                    if (!EXTERNAL_STREAM && state_needs_byte && !byte_valid) begin
                         if (next_byte_position >= TZX_BYTES) begin
                             end_of_input <= 1'b1;
                         end else begin
@@ -200,7 +213,7 @@ module nexttang_tzx_player #(
             skip_remaining <= 0;
             turbo_block <= 1'b0;
         end else begin
-            if (end_of_input && state_needs_byte && !byte_valid) begin
+            if (source_end && state_needs_byte && !source_valid) begin
                 if (state == STATE_NEW_BLOCK) begin
                     state <= STATE_DONE;
                     active <= 1'b0;
@@ -224,9 +237,9 @@ module nexttang_tzx_player #(
                     end
 
                     STATE_HEADER: begin
-                        if (byte_valid) begin
+                        if (source_valid) begin
                             if (field_index < 9 &&
-                                fetched_byte != expected_header_byte(
+                                source_byte != expected_header_byte(
                                     field_index[3:0]
                                 )) begin
                                 fault <= 1'b1;
@@ -243,17 +256,17 @@ module nexttang_tzx_player #(
                     end
 
                     STATE_NEW_BLOCK: begin
-                        if (byte_valid) begin
-                            current_block <= fetched_byte;
+                        if (source_valid) begin
+                            current_block <= source_byte;
                             field_index <= 0;
-                            if (fetched_byte == 8'h00) begin
+                            if (source_byte == 8'h00) begin
                                 active <= 1'b0;
                                 finished <= 1'b1;
                                 ear <= 1'b0;
                                 state <= STATE_DONE;
-                            end else if (fetched_byte == 8'h30) begin
+                            end else if (source_byte == 8'h30) begin
                                 state <= STATE_TEXT_LENGTH;
-                            end else if (fetched_byte == 8'h10) begin
+                            end else if (source_byte == 8'h10) begin
                                 turbo_block <= 1'b0;
                                 pilot_length <= STANDARD_PILOT_LENGTH;
                                 sync1_length <= STANDARD_SYNC1_LENGTH;
@@ -262,7 +275,7 @@ module nexttang_tzx_player #(
                                 one_length <= STANDARD_ONE_LENGTH;
                                 final_byte_bits <= 8;
                                 state <= STATE_STANDARD_HEADER;
-                            end else if (fetched_byte == 8'h11) begin
+                            end else if (source_byte == 8'h11) begin
                                 turbo_block <= 1'b1;
                                 state <= STATE_TURBO_HEADER;
                             end else begin
@@ -276,15 +289,15 @@ module nexttang_tzx_player #(
                     end
 
                     STATE_TEXT_LENGTH: begin
-                        if (byte_valid) begin
-                            skip_remaining <= fetched_byte;
-                            state <= fetched_byte == 0
+                        if (source_valid) begin
+                            skip_remaining <= source_byte;
+                            state <= source_byte == 0
                                 ? STATE_NEW_BLOCK : STATE_SKIP;
                         end
                     end
 
                     STATE_SKIP: begin
-                        if (byte_valid) begin
+                        if (source_valid) begin
                             if (skip_remaining == 1) begin
                                 skip_remaining <= 0;
                                 state <= STATE_NEW_BLOCK;
@@ -295,13 +308,13 @@ module nexttang_tzx_player #(
                     end
 
                     STATE_STANDARD_HEADER: begin
-                        if (byte_valid) begin
+                        if (source_valid) begin
                             case (field_index)
-                                0: pause_ms[7:0] <= fetched_byte;
-                                1: pause_ms[15:8] <= fetched_byte;
-                                2: data_length[7:0] <= fetched_byte;
+                                0: pause_ms[7:0] <= source_byte;
+                                1: pause_ms[15:8] <= source_byte;
+                                2: data_length[7:0] <= source_byte;
                                 default: begin
-                                    data_length[15:8] <= fetched_byte;
+                                    data_length[15:8] <= source_byte;
                                     data_length[23:16] <= 0;
                                     state <= STATE_FIRST_DATA;
                                 end
@@ -311,27 +324,27 @@ module nexttang_tzx_player #(
                     end
 
                     STATE_TURBO_HEADER: begin
-                        if (byte_valid) begin
+                        if (source_valid) begin
                             case (field_index)
-                                0: pilot_length[7:0] <= fetched_byte;
-                                1: pilot_length[15:8] <= fetched_byte;
-                                2: sync1_length[7:0] <= fetched_byte;
-                                3: sync1_length[15:8] <= fetched_byte;
-                                4: sync2_length[7:0] <= fetched_byte;
-                                5: sync2_length[15:8] <= fetched_byte;
-                                6: zero_length[7:0] <= fetched_byte;
-                                7: zero_length[15:8] <= fetched_byte;
-                                8: one_length[7:0] <= fetched_byte;
-                                9: one_length[15:8] <= fetched_byte;
-                                10: pilot_remaining[7:0] <= fetched_byte;
-                                11: pilot_remaining[15:8] <= fetched_byte;
-                                12: final_byte_bits <= fetched_byte[3:0];
-                                13: pause_ms[7:0] <= fetched_byte;
-                                14: pause_ms[15:8] <= fetched_byte;
-                                15: data_length[7:0] <= fetched_byte;
-                                16: data_length[15:8] <= fetched_byte;
+                                0: pilot_length[7:0] <= source_byte;
+                                1: pilot_length[15:8] <= source_byte;
+                                2: sync1_length[7:0] <= source_byte;
+                                3: sync1_length[15:8] <= source_byte;
+                                4: sync2_length[7:0] <= source_byte;
+                                5: sync2_length[15:8] <= source_byte;
+                                6: zero_length[7:0] <= source_byte;
+                                7: zero_length[15:8] <= source_byte;
+                                8: one_length[7:0] <= source_byte;
+                                9: one_length[15:8] <= source_byte;
+                                10: pilot_remaining[7:0] <= source_byte;
+                                11: pilot_remaining[15:8] <= source_byte;
+                                12: final_byte_bits <= source_byte[3:0];
+                                13: pause_ms[7:0] <= source_byte;
+                                14: pause_ms[15:8] <= source_byte;
+                                15: data_length[7:0] <= source_byte;
+                                16: data_length[15:8] <= source_byte;
                                 default: begin
-                                    data_length[23:16] <= fetched_byte;
+                                    data_length[23:16] <= source_byte;
                                     state <= STATE_FIRST_DATA;
                                 end
                             endcase
@@ -340,18 +353,18 @@ module nexttang_tzx_player #(
                     end
 
                     STATE_FIRST_DATA: begin
-                        if (byte_valid) begin
-                            data_byte <= fetched_byte;
+                        if (source_valid) begin
+                            data_byte <= source_byte;
                             if (first_data_seen != 3'd4) begin
                                 first_data_bytes <=
-                                    {first_data_bytes[23:0], fetched_byte};
+                                    {first_data_bytes[23:0], source_byte};
                                 first_data_seen <= first_data_seen + 1'b1;
                             end
                             bits_remaining <= data_length == 1
                                 ? final_byte_bits : 8;
                             bytes_after_current <= data_length - 1'b1;
                             if (!turbo_block)
-                                pilot_remaining <= fetched_byte[7]
+                                pilot_remaining <= source_byte[7]
                                     ? DATA_PILOT_PULSES
                                     : HEADER_PILOT_PULSES;
                             state <= STATE_PILOT;
@@ -412,11 +425,11 @@ module nexttang_tzx_player #(
                     end
 
                     STATE_NEXT_DATA: begin
-                        if (byte_valid) begin
-                            data_byte <= fetched_byte;
+                        if (source_valid) begin
+                            data_byte <= source_byte;
                             if (first_data_seen != 3'd4) begin
                                 first_data_bytes <=
-                                    {first_data_bytes[23:0], fetched_byte};
+                                    {first_data_bytes[23:0], source_byte};
                                 first_data_seen <= first_data_seen + 1'b1;
                             end
                             bits_remaining <= bytes_after_current == 1

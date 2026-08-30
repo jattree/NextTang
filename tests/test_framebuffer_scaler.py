@@ -134,7 +134,7 @@ module testbench;
             output_x = x;
             output_y = y;
             output_data_enable = 1;
-            @(posedge output_clock); #1;
+            repeat (2) @(posedge output_clock); #1;
             if (scaled_pixel !== expected)
                 $fatal(1, "pixel (%0d,%0d) was %02x, expected %02x", x, y,
                        scaled_pixel, expected);
@@ -169,11 +169,11 @@ module testbench;
         expect_pixel(2, 1, 8'h40);
         expect_pixel(9, 6, 8'h4b);
 
-        // Control information is registered on the same edge as its pixel.
+        // Control information follows the same two-stage address/read pipeline.
         @(negedge output_clock);
         output_x = 2; output_y = 1;
         output_hsync = 1; output_vsync = 1; output_data_enable = 0;
-        @(posedge output_clock); #1;
+        repeat (2) @(posedge output_clock); #1;
         if (!scaled_hsync || !scaled_vsync || scaled_data_enable)
             $fatal(1, "HDMI control signals were not aligned with scaled output");
         if (scaled_pixel !== 8'h00)

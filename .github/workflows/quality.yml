@@ -27,7 +27,7 @@ jobs:
       - name: Install the simulators and assembler the tests invoke
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends iverilog ghdl
+          sudo apt-get install -y --no-install-recommends iverilog ghdl verilator
       - name: Build sjasmplus
         run: |
           version=$(grep -oP '(?<=^NEXTTANG_SJASMPLUS_VERSION=).*' toolchain/versions.env)
@@ -39,6 +39,14 @@ jobs:
         run: |
           iverilog -V | head -1
           ghdl --version | head -1
+          verilator --version
           sjasmplus --version | head -1
+
+      # hdl-lint skips silently when Verilator is absent, which is right for a
+      # developer machine and wrong for CI: a gate that is installed to be
+      # skipped is not a gate. Fail the job here if the runner has no Verilator
+      # rather than letting `make ci` report a pass it did not earn.
+      - name: Require Verilator so the HDL gate cannot silently skip
+        run: command -v verilator
       - name: Run deterministic quality gate
         run: make ci

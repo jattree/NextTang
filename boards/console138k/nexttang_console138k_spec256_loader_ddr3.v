@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 NextTang contributors
+
+// Build-verification target: common SD pack loader plus DDR3-backed ordinary
+// Spec256 upper main RAM. The proven non-DDR UART and SD profiles remain
+// separate until this exact combination passes hardware testing.
+`define NEXTTANG_SPECTRUM48_TOP nexttang_console138k_spec256_loader_ddr3
+`define NEXTTANG_SPECTRUM48_USE_SNAPSHOT
+`define NEXTTANG_SPECTRUM48_USE_SPEC256
+`define NEXTTANG_SPEC256_RUNTIME
+`define NEXTTANG_SPEC256_SD_PACK
+`define NEXTTANG_SPEC256_DISTRIBUTED_PALETTE
+`define NEXTTANG_SPECTRUM48_USE_DDR3
+`define NEXTTANG_SPECTRUM48_USB_KEYBOARD
+`define NEXTTANG_USB_PORT_TWO_ONLY
+`define NEXTTANG_HDMI_AUDIO
+`define NEXTTANG_CLASSIC_SD_LOADER
+`include "nexttang_console138k_spectrum48.v"
+`undef NEXTTANG_CLASSIC_SD_LOADER
+`undef NEXTTANG_HDMI_AUDIO
+`undef NEXTTANG_USB_PORT_TWO_ONLY
+`undef NEXTTANG_SPECTRUM48_USB_KEYBOARD
+`undef NEXTTANG_SPECTRUM48_USE_DDR3
+`undef NEXTTANG_SPEC256_SD_PACK
+`undef NEXTTANG_SPEC256_DISTRIBUTED_PALETTE
+`undef NEXTTANG_SPEC256_RUNTIME
+`undef NEXTTANG_SPECTRUM48_USE_SPEC256
+`undef NEXTTANG_SPECTRUM48_USE_SNAPSHOT
+`undef NEXTTANG_SPECTRUM48_TOP

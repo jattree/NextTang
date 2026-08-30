@@ -24,7 +24,7 @@ class Spectrum48BuildDriverTests(unittest.TestCase):
         result = self.run_driver("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(
-            "--profile release|ula|ula-tape|ula-tape-start-s1|ula-snapshot|spec256-snapshot|spec256-snapshot-audio|spec256-snapshot-audio-chuckie|spec256-runtime-audio|bl616-keyboard-test|keyboard-test|ula-ddr-upper|ula-ddr-upper-tape",
+            "--profile release|ula|ula-tape|ula-usb-tape|ula-tape-start-s1|ula-snapshot|spec256-snapshot|spec256-snapshot-audio|spec256-snapshot-audio-chuckie|spec256-runtime-audio|bl616-keyboard-test|keyboard-test|ula-ddr-upper|ula-ddr-upper-tape",
             result.stdout,
         )
 
@@ -90,6 +90,14 @@ class Spectrum48BuildDriverTests(unittest.TestCase):
             "nexttang_spec256_runtime_input runtime_input",
             top.read_text(encoding="utf-8"),
         )
+        self.assertIn(
+            "NEXTTANG_SPECTRUM48_USB_KEYBOARD",
+            wrapper_source,
+        )
+        self.assertIn('IO_LOC "usb2_dp" M15;', runtime_pins.read_text(encoding="utf-8"))
+        self.assertIn("usb_keyboard_keys_meta*", timing_source)
+        self.assertIn("NEXTTANG_USB_PORT_TWO_ONLY", wrapper_source)
+        self.assertIn("usb_hid_host_rom.v", source)
 
     def test_spec256_runtime_uses_one_margin_safe_full_duplex_baud(self) -> None:
         top_source = (
@@ -299,6 +307,51 @@ class Spectrum48BuildDriverTests(unittest.TestCase):
         self.assertIn('printf \'add_file {%s}\\n\' "$pin_constraints"', source)
         self.assertIn("vendor-source-sha256.txt", source)
 
+    def test_spec256_ddr_profile_enables_high_fanout_replication(self) -> None:
+        source = BUILD_DRIVER.read_text(encoding="utf-8")
+        self.assertIn('if [[ "$profile" == spec256-loader-ddr3 ]]', source)
+        self.assertIn("set_option -replicate_resources 1", source)
+        self.assertIn("nexttang_spec256_bootstrap_overlay.v", source)
+
+    def test_128k_profile_combines_paging_ddr_and_direct_usb(self) -> None:
+        source = BUILD_DRIVER.read_text(encoding="utf-8")
+        wrapper = (
+            REPO_ROOT / "boards" / "console138k" /
+            "nexttang_console138k_spectrum128_usb_ddr3.v"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('"$profile" != 128k-usb-ddr', source)
+        self.assertIn("nexttang_spectrum_paging.v", source)
+        self.assertIn("nexttang_spectrum128_memory.v", source)
+        self.assertIn("usb_hid_host_dual_rom.v", source)
+        self.assertIn("NEXTTANG_128K_ROM_0", source)
+        self.assertIn("NEXTTANG_128K_ROM_1", source)
+        self.assertIn("NEXTTANG_SPECTRUM128", wrapper)
+        self.assertIn("NEXTTANG_SPECTRUM48_USE_DDR3", wrapper)
+        self.assertIn("NEXTTANG_SPECTRUM48_USB_KEYBOARD", wrapper)
+        top = (
+            REPO_ROOT / "boards" / "console138k" /
+            "nexttang_console138k_spectrum48.v"
+        ).read_text(encoding="utf-8")
+        self.assertIn("`elsif NEXTTANG_SPECTRUM128", top)
+        self.assertIn("assign typist_keys = 40'b0;", top)
+
+    def test_48k_combined_profile_has_ddr_usb_kempston_and_beeper_audio(self) -> None:
+        source = BUILD_DRIVER.read_text(encoding="utf-8")
+        wrapper = (
+            REPO_ROOT / "boards" / "console138k" /
+            "nexttang_console138k_spectrum48_usb_ddr3_audio.v"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"$profile" != 48k-usb-ddr-audio', source)
+        self.assertIn("nexttang_spectrum48_split_memory.v", source)
+        self.assertIn("nexttang_usb_gamepad_kempston.v", source)
+        self.assertIn("nexttang_classic_audio_pcm.v", source)
+        self.assertIn("NEXTTANG_SPECTRUM48_USE_ULA", wrapper)
+        self.assertIn("NEXTTANG_SPECTRUM48_USE_DDR3", wrapper)
+        self.assertIn("NEXTTANG_SPECTRUM48_USB_KEYBOARD", wrapper)
+        self.assertIn("NEXTTANG_HDMI_AUDIO", wrapper)
+        self.assertNotIn("NEXTTANG_SPECTRUM128", wrapper)
+
     def test_tape_profile_requires_absolute_user_supplied_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -358,6 +411,18 @@ class Spectrum48BuildDriverTests(unittest.TestCase):
             "nexttang_console138k_spectrum48_ula_ddr3_tape.v",
             source,
         )
+
+    def test_usb_tape_profile_combines_external_input_services(self) -> None:
+        source = BUILD_DRIVER.read_text(encoding="utf-8")
+        wrapper = (
+            REPO_ROOT / "boards" / "console138k" /
+            "nexttang_console138k_spectrum48_ula_usb_tape.v"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"$profile" == ula-usb-tape', source)
+        self.assertIn("nexttang_tzx_player.v", source)
+        self.assertIn("usb_hid_host_dual_rom.v", source)
+        self.assertIn("NEXTTANG_SPECTRUM48_USE_TAPE", wrapper)
+        self.assertIn("NEXTTANG_SPECTRUM48_USB_KEYBOARD", wrapper)
 
     def test_driver_pins_exact_console_device_and_checks_timing(self) -> None:
         source = BUILD_DRIVER.read_text(encoding="utf-8")

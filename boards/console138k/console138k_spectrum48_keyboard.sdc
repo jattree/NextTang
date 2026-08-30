@@ -39,6 +39,7 @@ create_clock -name usb_clock -period 16.667 [get_pins {usb_pll/pll/CLKOUT0}]
 set_clock_groups -asynchronous -group [get_clocks {usb_clock}] -group [get_clocks {sys_clk serial_clock pixel_clock clock_28 clock_14 clock_7 cpu_clock}]
 set_false_path -to [get_regs {usb_keyboard_keys_meta*}]
 
-# BL616 keyboard synchroniser first stages, unconstrained by construction.
-set_false_path -to [get_regs {keyboard_scancode_meta*}]
-set_false_path -to [get_regs {keyboard_debug_meta*}]
+# The legacy BL616 matrix remains a second keyboard source in this diagnostic
+# profile. Its first-stage level synchronizer is asynchronous by construction;
+# the event synchronizers are swept and must not be named here.
+set_false_path -to [get_regs {keyboard_keys_meta*}]

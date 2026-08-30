@@ -10,19 +10,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class UsbGamepadKempstonTests(unittest.TestCase):
-    def test_directions_and_any_face_button_map_to_port_1f(self) -> None:
+    def test_directions_and_any_button_map_to_port_1f(self) -> None:
         testbench = r"""
 `timescale 1ns/1ps
 module testbench;
     reg [1:0] device_type = 0;
     reg left = 0, right = 0, up = 0, down = 0;
     reg a = 0, b = 0, x = 0, y = 0;
+    reg select_button = 0, start_button = 0;
+    reg [3:0] extra_buttons = 0;
     wire [4:0] joystick;
 
     nexttang_usb_gamepad_kempston dut (
         .device_type(device_type),
         .left(left), .right(right), .up(up), .down(down),
-        .a(a), .b(b), .x(x), .y(y), .joystick(joystick)
+        .a(a), .b(b), .x(x), .y(y),
+        .select_button(select_button), .start_button(start_button),
+        .extra_buttons(extra_buttons), .joystick(joystick)
     );
 
     initial begin
@@ -37,6 +41,13 @@ module testbench;
         right = 0; up = 0; b = 0; left = 1; down = 1; y = 1; #1;
         if (joystick !== 5'b10110)
             $fatal(1, "left/down/fire mapping was %05b", joystick);
+
+        left = 0; down = 0; y = 0; start_button = 1; #1;
+        if (joystick !== 5'b10000)
+            $fatal(1, "start did not map to fire: %05b", joystick);
+        start_button = 0; extra_buttons = 4'b0100; #1;
+        if (joystick !== 5'b10000)
+            $fatal(1, "extra button did not map to fire: %05b", joystick);
     end
 endmodule
 """

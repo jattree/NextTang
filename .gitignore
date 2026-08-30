@@ -57,6 +57,7 @@ venv/
 /artifacts/
 /release/
 /tmp/
+/.mnemosyne-pilot/
 
 # Host-tool build products and downloaded dependencies
 /target/

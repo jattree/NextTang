@@ -16,11 +16,18 @@ module nexttang_usb_gamepad_kempston (
     input  wire       b,
     input  wire       x,
     input  wire       y,
+    input  wire       select_button,
+    input  wire       start_button,
+    input  wire [3:0] extra_buttons,
     output wire [4:0] joystick
 );
     localparam [1:0] TYPE_GAMEPAD = 2'd3;
 
-    wire fire = a | b | x | y;
+    // Kempston exposes one fire line. HID controllers distribute their
+    // physical buttons differently, so accept every normalized button rather
+    // than requiring the device to call one of them A/B/X/Y.
+    wire fire = a | b | x | y | select_button | start_button |
+                |extra_buttons;
     assign joystick = device_type == TYPE_GAMEPAD
         ? {fire, up, down, left, right} : 5'b00000;
 endmodule

@@ -160,6 +160,11 @@ module nexttang_framebuffer_scaler #(
         read_bank * SOURCE_PIXELS + mapped_y * SOURCE_WIDTH + mapped_x;
     wire [ADDRESS_BITS-1:0] output_address =
         output_address_wide[ADDRESS_BITS-1:0];
+    // Break coordinate multiplication before the BSRAM address register.  At
+    // 74.25 MHz the direct output_y*360 path is placement-sensitive once the
+    // full loader is present.  Delay timing qualification by the same stage.
+    reg [ADDRESS_BITS-1:0] output_address_q;
+    reg inside_picture_q,output_hsync_q,output_vsync_q,output_data_enable_q;
 
     always @(posedge output_clock) begin
         if (output_reset) begin
@@ -184,6 +189,9 @@ module nexttang_framebuffer_scaler #(
             scaled_vsync <= 1'b0;
             scaled_data_enable <= 1'b0;
             scaled_pixel <= {PIXEL_BITS{1'b0}};
+            output_address_q <= {ADDRESS_BITS{1'b0}};
+            inside_picture_q <= 1'b0;output_hsync_q <= 1'b0;
+            output_vsync_q <= 1'b0;output_data_enable_q <= 1'b0;
         end else begin
             if (output_frame_start && publish_sync != acknowledge_toggle) begin
                 read_bank <= published_bank_sync;
@@ -191,11 +199,14 @@ module nexttang_framebuffer_scaler #(
                 output_frame_valid <= 1'b1;
             end
 
-            scaled_hsync <= output_hsync;
-            scaled_vsync <= output_vsync;
-            scaled_data_enable <= output_data_enable;
-            if (inside_picture && output_frame_valid)
-                scaled_pixel <= frame_memory[output_address];
+            output_address_q <= output_address;inside_picture_q <= inside_picture;
+            output_hsync_q <= output_hsync;output_vsync_q <= output_vsync;
+            output_data_enable_q <= output_data_enable;
+            scaled_hsync <= output_hsync_q;
+            scaled_vsync <= output_vsync_q;
+            scaled_data_enable <= output_data_enable_q;
+            if (inside_picture_q && output_frame_valid)
+                scaled_pixel <= frame_memory[output_address_q];
             else
                 scaled_pixel <= {PIXEL_BITS{1'b0}};
         end

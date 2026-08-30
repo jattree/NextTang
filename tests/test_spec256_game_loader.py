@@ -98,6 +98,10 @@ module testbench;
     integer graphics_rom_count = 0;
     integer palette_count = 0;
 
+    function [7:0] pattern_byte(input integer offset);
+        pattern_byte = offset[7:0];
+    endfunction
+
     always #5 clock = !clock;
 
     nexttang_spec256_game_loader dut (
@@ -128,16 +132,22 @@ module testbench;
             if (background_address !== background_count[15:0])
                 $fatal(1, "background address %h at count %0d",
                        background_address, background_count);
+            if (write_data !== pattern_byte(590592 + (background_count % 64000)))
+                $fatal(1, "background data %h at count %0d", write_data, background_count);
             background_count <= background_count + 1;
         end
         if (boot_we) begin
             if (boot_address !== boot_count[13:0])
                 $fatal(1, "boot address %h at count %0d", boot_address, boot_count);
+            if (write_data !== pattern_byte(boot_count))
+                $fatal(1, "boot data %h at count %0d", write_data, boot_count);
             boot_count <= boot_count + 1;
         end
         if (main_we) begin
             if (main_address !== (16'h4000 + (main_count % 49152)))
                 $fatal(1, "main address %h at count %0d", main_address, main_count);
+            if (write_data !== pattern_byte(16384 + (main_count % 49152)))
+                $fatal(1, "main data %h at count %0d", write_data, main_count);
             main_count <= main_count + 1;
         end
         if (|graphics_ram_we) begin
@@ -146,6 +156,8 @@ module testbench;
                 $fatal(1, "graphics RAM lane %b at count %0d", graphics_ram_we, graphics_ram_count);
             if (graphics_ram_address !== (16'h4000 + (graphics_ram_count % 49152)))
                 $fatal(1, "graphics RAM address %h at count %0d", graphics_ram_address, graphics_ram_count);
+            if (write_data !== pattern_byte(65536 + (graphics_ram_count % 393216)))
+                $fatal(1, "graphics RAM data %h at count %0d", write_data, graphics_ram_count);
             graphics_ram_count <= graphics_ram_count + 1;
         end
         if (|graphics_rom_we) begin
@@ -154,11 +166,17 @@ module testbench;
                 $fatal(1, "graphics ROM lane %b at count %0d", graphics_rom_we, graphics_rom_count);
             if (graphics_rom_address !== (graphics_rom_count % 16384))
                 $fatal(1, "graphics ROM address %h at count %0d", graphics_rom_address, graphics_rom_count);
+            if (write_data !== pattern_byte(458752 + (graphics_rom_count % 131072)))
+                $fatal(1, "graphics ROM data %h at count %0d", write_data, graphics_rom_count);
             graphics_rom_count <= graphics_rom_count + 1;
         end
         if (palette_we) begin
             if (palette_index !== palette_count[7:0])
                 $fatal(1, "palette index %h at count %0d", palette_index, palette_count);
+            if (palette_data !== {pattern_byte(589824 + palette_count*3),
+                                  pattern_byte(589825 + palette_count*3),
+                                  pattern_byte(589826 + palette_count*3)})
+                $fatal(1, "palette data %h at count %0d", palette_data, palette_count);
             palette_count <= palette_count + 1;
         end
     end

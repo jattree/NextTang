@@ -176,8 +176,14 @@ def find_keyboard(explicit: str | None) -> str:
         name = next((line.split('"')[1] for line in block.splitlines()
                      if line.startswith("N: Name=")), "")
         bus_usb = "Bus=0003" in block
-        # Skip lid switches and power buttons, which also claim kbd.
-        if any(w in name.lower() for w in ("power", "sleep", "video", "lid")):
+        # Linux exposes consumer-control interfaces, cameras and even some
+        # mice as `kbd` devices.  They cannot produce the ordinary keycodes the
+        # bridge needs and otherwise tend to precede the real USB keyboard.
+        non_keyboard_names = (
+            "consumer control", "system control", "camera", "mouse",
+            "power", "sleep", "video", "lid",
+        )
+        if any(word in name.lower() for word in non_keyboard_names):
             continue
         candidates.append((bus_usb, f"/dev/input/{handlers[0]}", name))
     if not candidates:

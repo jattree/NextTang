@@ -1,5 +1,5 @@
-# Direct 720p Spec256 runtime-loader target.  It has no fabric USB clock; a
-# 500 kbit/s asynchronous PMOD UART is synchronized into the CPU domain.
+# Direct 720p Spec256 runtime-loader target.  Its game-pack UART and FPGA USB
+# host are separate asynchronous platform-input domains.
 
 create_clock -name sys_clk -period 20.000 [get_ports {sys_clk}]
 create_clock -name serial_clock -period 2.6891 [get_nets {serial_clock}]
@@ -23,3 +23,8 @@ set_false_path -to [get_regs {game_pack_uart/receive_meta*}]
 # synchroniser is unconstrained by construction. The diagnostic-only scancode
 # and debug synchronisers are swept from this runtime profile.
 set_false_path -to [get_regs {keyboard_keys_meta*}]
+
+# Direct USB host and its 40-bit first-stage matrix synchronizer.
+create_clock -name usb_clock -period 16.667 [get_pins {usb_pll/pll/CLKOUT0}]
+set_clock_groups -asynchronous -group [get_clocks {usb_clock}] -group [get_clocks {sys_clk serial_clock pixel_clock clock_28 clock_7 cpu_clock}]
+set_false_path -to [get_regs {usb_keyboard_keys_meta*}]

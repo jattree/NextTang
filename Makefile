@@ -13,7 +13,7 @@ PROFILE ?= $(or $(NEXTTANG_PROFILE),release)
 export NEXTTANG_GOWIN_HOME
 export NEXTTANG_OSS_CAD_SUITE
 
-.PHONY: help show-config doctor doctor-strict repo-check shell-lint test check ci synth diagnostic-bootrom clean
+.PHONY: help show-config doctor doctor-strict repo-check shell-lint hdl-lint hdl-lint-strict test check ci synth diagnostic-bootrom clean
 
 help: ## Show the supported development commands.
 	@awk 'BEGIN {FS = ":.*## "; printf "NextTang development commands:\n\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -42,11 +42,17 @@ shell-lint: ## Parse shell scripts and run ShellCheck when it is installed.
 		printf '%s\n' 'shellcheck: SKIP (not installed)'; \
 	fi
 
+hdl-lint: ## Elaborate every board profile and lint its Verilog when Verilator is installed.
+	@$(REPO_ROOT)/scripts/hdl_lint.sh
+
+hdl-lint-strict: ## As hdl-lint, but fail on width and unconnected-pin warnings too.
+	@$(REPO_ROOT)/scripts/hdl_lint.sh --strict
+
 test: ## Run unit and shell regression tests.
 	@python3 -m unittest discover -s $(REPO_ROOT)/tests -p 'test_*.py'
 	@$(REPO_ROOT)/tests/doctor_test.sh
 
-check: repo-check shell-lint test ## Run every local non-synthesis quality gate.
+check: repo-check shell-lint hdl-lint test ## Run every local non-synthesis quality gate.
 
 ci: check ## Run the deterministic CI gate.
 

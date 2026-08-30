@@ -6,6 +6,7 @@ parameter INJECT_IDLE_DIP = 0;
 parameter INJECT_UNDECIDED_SPEED = 0;
 parameter DEVICE_LOW_SPEED = 0;
 parameter CONFIG_LEADING_SHORT = 0;
+parameter CHECK_PREFIXED_MODIFIER = 0;
 
 reg host_clock = 0;
 always #8.3333 host_clock = ~host_clock;
@@ -170,6 +171,19 @@ initial begin
   if (key0 != 8'h04 || key1 != 8'h00 || modifiers != 8'h00)
     $fatal(1, "wrong boot report: modifiers=%02x key0=%02x key1=%02x",
            modifiers, key0, key1);
+  if (CHECK_PREFIXED_MODIFIER) begin
+    // Hardware-observed BY Tech layout: modifier, reserved, report ID 0x26,
+    // followed by boot-like key usages. Left Ctrl + P must survive decoding.
+    @(negedge host_clock);
+    dut.dat[0] = 8'h01;
+    dut.dat[1] = 8'h00;
+    dut.dat[2] = 8'h26;
+    dut.dat[3] = 8'h13;
+    #1;
+    if (modifiers != 8'h01 || key0 != 8'h13)
+      $fatal(1, "prefixed modifier lost: modifiers=%02x key0=%02x",
+             modifiers, key0);
+  end
   if (setup_seen < 5 || endpoint_zero_reads < 4 ||
       endpoint_one_reads < 1 || report_count < 1)
     $fatal(1, "enumeration was incomplete: setup=%0d ep0=%0d ep1=%0d reports=%0d",

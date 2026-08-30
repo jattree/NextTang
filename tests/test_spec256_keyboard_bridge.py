@@ -93,6 +93,31 @@ class Spec256KeyboardBridgeTests(unittest.TestCase):
             [key_frame("A", True), key_frame("A", False), b"J\x00"],
         )
 
+    def test_autodetect_skips_usb_consumer_control_pseudo_keyboard(self) -> None:
+        devices = """\
+I: Bus=0003 Vendor=046d Product=085e Version=0111
+N: Name="Logitech BRIO Consumer Control"
+H: Handlers=kbd event4
+
+I: Bus=0003 Vendor=258a Product=0049 Version=0111
+N: Name="BY Tech Gaming Keyboard"
+H: Handlers=sysrq kbd leds event8
+
+I: Bus=0011 Vendor=0001 Product=0001 Version=ab83
+N: Name="AT Translated Set 2 keyboard"
+H: Handlers=sysrq kbd leds event3
+"""
+        with (
+            mock.patch.object(
+                keyboard_bridge.Path,
+                "read_text",
+                return_value=devices,
+            ),
+            mock.patch.object(keyboard_bridge.os, "access", return_value=True),
+            mock.patch("builtins.print"),
+        ):
+            self.assertEqual(keyboard_bridge.find_keyboard(None), "/dev/input/event8")
+
 
 if __name__ == "__main__":
     unittest.main()
