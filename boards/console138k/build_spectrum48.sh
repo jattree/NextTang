@@ -724,12 +724,11 @@ fi
     # A plain-text timing report. The HTML one has to be tag-stripped before it
     # can be read, which is how a broken check went unnoticed for so long.
     printf 'set_option -gen_text_timing_rpt 1\n'
-    if [[ "$profile" == spec256-loader-ddr3 ]]; then
-        # This dense target contains one distributed 16 KiB graphical-ROM
-        # lane. Let Arora V replicate its high-fanout address/decode resources
-        # before routing rather than relying only on route-time fanout repair.
-        printf 'set_option -replicate_resources 1\n'
-    fi
+    # Do not enable Arora V's optional resource-replication pass for the dense
+    # Spec256 DDR3 target. After master-address CPU semantics were added, the
+    # replicated netlist remained CPU-active in routing phase zero for more
+    # than twenty minutes. The otherwise identical unreplicated netlist routed
+    # normally and passed setup/hold timing.
     for vendor_file in "${vendor_files[@]}"; do
         printf 'add_file {%s}\n' "$vendor_file"
     done
