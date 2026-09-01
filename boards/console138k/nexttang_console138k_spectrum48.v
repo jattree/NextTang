@@ -2631,6 +2631,18 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .clock(pixel_clock),
         .reset(cpu_reset),
         .beeper(beeper),
+        .tape(tape_ear),
+`ifdef NEXTTANG_CLASSIC_SD_LOADER
+`ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
+        .tape_enable(1'b0),
+`else
+        .tape_enable(tape_active),
+`endif
+`elsif NEXTTANG_SPECTRUM48_USE_TAPE
+        .tape_enable(tape_active),
+`else
+        .tape_enable(1'b0),
+`endif
 `ifdef NEXTTANG_SPECTRUM128
         .ay_enable(1'b1),
 `else

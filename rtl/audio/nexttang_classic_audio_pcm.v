@@ -11,6 +11,8 @@ module nexttang_classic_audio_pcm #(
     input  wire              clock,
     input  wire              reset,
     input  wire              beeper,
+    input  wire              tape,
+    input  wire              tape_enable,
     input  wire              ay_enable,
     input  wire [7:0]        ay_a,
     input  wire [7:0]        ay_b,
@@ -20,6 +22,7 @@ module nexttang_classic_audio_pcm #(
 );
     reg [31:0] phase = 0;
     reg beeper_meta = 0, beeper_sync = 0;
+    reg tape_meta = 0, tape_sync = 0;
     reg [7:0] ay_a_meta = 0, ay_b_meta = 0, ay_c_meta = 0;
     reg [7:0] ay_a_sync = 0, ay_b_sync = 0, ay_c_sync = 0;
     reg signed [31:0] baseline_q = 0;
@@ -27,7 +30,10 @@ module nexttang_classic_audio_pcm #(
     wire signed [18:0] ay_sum = ay_enable ?
         ($signed({1'b0, ay_a_sync}) + $signed({1'b0, ay_b_sync}) +
          $signed({1'b0, ay_c_sync})) * 19'sd16 : 19'sd0;
-    wire signed [18:0] target = (beeper_sync ? 19'sd4096 : -19'sd4096) + ay_sum;
+    wire signed [18:0] tape_sample = tape_enable ?
+        (tape_sync ? 19'sd2048 : -19'sd2048) : 19'sd0;
+    wire signed [18:0] target =
+        (beeper_sync ? 19'sd4096 : -19'sd4096) + ay_sum + tape_sample;
     wire signed [31:0] target_q = target <<< 16;
     wire signed [31:0] ac_q = target_q - baseline_q;
 
@@ -35,6 +41,7 @@ module nexttang_classic_audio_pcm #(
         if (reset) begin
             phase <= 0; audio_ce <= 0; sample <= 0;
             beeper_meta <= 0; beeper_sync <= 0;
+            tape_meta <= 0; tape_sync <= 0;
             ay_a_meta <= 0; ay_b_meta <= 0; ay_c_meta <= 0;
             ay_a_sync <= 0; ay_b_sync <= 0; ay_c_sync <= 0;
             baseline_q <= -(32'sd4096 <<< 16);
@@ -42,6 +49,7 @@ module nexttang_classic_audio_pcm #(
             phase <= phase_sum[31:0];
             audio_ce <= phase_sum[32];
             beeper_meta <= beeper; beeper_sync <= beeper_meta;
+            tape_meta <= tape; tape_sync <= tape_meta;
             ay_a_meta <= ay_a; ay_b_meta <= ay_b; ay_c_meta <= ay_c;
             ay_a_sync <= ay_a_meta; ay_b_sync <= ay_b_meta; ay_c_sync <= ay_c_meta;
             if (phase_sum[32]) begin
