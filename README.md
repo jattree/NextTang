@@ -58,6 +58,8 @@ these bounded tests do not establish complete-game, general Spec256 or 128K
 Spec256 compatibility. A separate local-memory SD profile has also mounted the
 physical `/games/Spec256` catalogue, streamed and accepted an exact Jetpac pack
 and sustained enhanced gameplay. Its combined DDR3 variant remains unverified.
+The combined variant now places and routes with both fixed-role USB hosts and
+the bounded POKE loader, but remains build-verified rather than hardware-tested.
 
 Generated bitstreams, vendor work products, ROMs, games, packs and captures
 remain outside Git. Source, constraints and regressions are under
@@ -77,8 +79,9 @@ factory TangCore baseline:
 | DDR3 | Hardware-verified on the 30354 1 GB Hynix SOM: calibration, paired writes, read-back, every usable address-line position, the 512 MB boundary and the final aligned 32-byte beat pass with distinct retained patterns. The first integrated machine workload also boots the 48K ROM with CPU addresses `0x8000`-`0xffff` served from DDR3 while the ULA-visible lower 16 KiB remains local. The Console input is 50 MHz and the working path retains Gowin's generated dynamic PLL and `PLL_INIT`. Exhaustive every-cell, sustained-load and banked-Next testing remain open ([resolved issue #5](https://github.com/jattree/NextTang/issues/5)) |
 | Tape | Hardware-verified. A user-supplied TZX is played into the EAR input for the ROM's own loader. Manic Miner loads and runs; Cobra loads through its own turbo speed loader to its credits. The tape and every generated memory image stay outside Git |
 | SD | The NextTang-owned read-only SDHC/FAT32/LFN path has bounded hardware passes for 48K Finders Keepers, standard-speed 128K Spellbound and one local-memory Spec256 Jetpac pack. Three Weeks in Paradise's turbo loader, TAP, broader cards/filesystems, the combined Spec256/DDR3 profile and persistent boot remain unverified |
-| Audio | Audible Jetpac audio is hardware-verified through the Spec256 HDMI path. The reusable AY-3-8912 plus beeper mixer is simulated and exact-device build-verified for the classic profiles |
-| USB HID | Direct FPGA-hosted keyboard input is hardware-verified in 48K, 128K and Spec256 profiles with one exact keyboard. One direct-attached controller is hardware-verified through Kempston input. Hubs, the other root port and broad device compatibility remain open |
+| Audio | Audible Jetpac audio is hardware-verified through the Spec256 HDMI path. The reusable AY-3-8912 plus beeper mixer and tape-EAR mix are simulated and exact-device build-verified for the classic profiles; tape sound has not yet been heard on hardware |
+| USB HID | Direct FPGA-hosted keyboard input is hardware-verified in 48K, 128K and Spec256 profiles with one exact keyboard. One direct-attached controller is hardware-verified through Kempston input. The combined Spec256 build now retains both with fixed roles (USB1 gamepad, USB2 keyboard), but that simultaneous arrangement, hubs and broad device compatibility remain unverified |
+| POKE | Versioned CRC-protected packs support up to eight atomic writes to 48K logical RAM, 128K logical/physical banks, or Spec256 main/graphical memory. Simulation and exact-device builds pass; no POKE pack has yet been applied on hardware |
 
 The first DDR-to-video integration is also hardware-verified. An exact-C demo
 stores the 16 KiB RGB332 logo in onboard DDR3, repeatedly refills alternating
@@ -88,10 +91,10 @@ memory service or a full-screen DDR framebuffer.
 
 The platform groundwork now covers machine clocks, DDR3, 48K and 128K memory,
 video, direct USB input, runtime loading, bounded SD paths for all three current
-profiles and an HDMI audio path. Before beginning the wider ZX Spectrum Next
-core, the remaining sound, shared-control, POKE, reset/menu and compatibility
-gates will be closed or documented. The [starter roadmap](ROADMAP.md) defines
-the required evidence.
+profiles, atomic bank-aware POKE packs, and HDMI game/tape audio paths. The
+remaining gaps are explicitly hardware-level compatibility checks rather than
+missing platform interfaces. The [starter roadmap](ROADMAP.md) defines the
+required evidence before those build-only paths are promoted.
 
 The one part of the project not waiting on that board is the
 [host tooling track](ROADMAP.md#host-tooling-track), which builds the DZRP client and
