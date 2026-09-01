@@ -28,7 +28,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            iverilog ghdl autoconf flex bison help2man
+            iverilog ghdl autoconf flex libfl-dev bison help2man
       - name: Build the pinned Verilator lint tool
         run: |
           version=$(grep -oP '(?<=^NEXTTANG_VERILATOR_REFERENCE_VERSION=).*' toolchain/versions.env)
