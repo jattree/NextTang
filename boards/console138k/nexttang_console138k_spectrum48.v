@@ -1511,11 +1511,16 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     assign {usb1_game_select, usb1_game_start, usb1_game_extra} = 6'b0;
 `else
     usb_hid_host #(
+`ifdef NEXTTANG_USB_SPLIT_HID_PORTS
+        .FULL_SPEED(1), .KEYBOARD_SUPPORT(0),
+        .MOUSE_SUPPORT(0), .GAME_SUPPORT(1)
+`else
         .FULL_SPEED(1), .KEYBOARD_SUPPORT(1),
 `ifdef NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
         .MOUSE_SUPPORT(0), .GAME_SUPPORT(0)
 `else
         .MOUSE_SUPPORT(0), .GAME_SUPPORT(1)
+`endif
 `endif
     ) usb_host_one (
         .clk(usb_clock), .reset(!usb_pll_locked), .cs(1'b1),
@@ -1546,11 +1551,16 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 `endif
 
     usb_hid_host #(
+`ifdef NEXTTANG_USB_SPLIT_HID_PORTS
+        .FULL_SPEED(1), .KEYBOARD_SUPPORT(1),
+        .MOUSE_SUPPORT(0), .GAME_SUPPORT(0)
+`else
         .FULL_SPEED(1), .KEYBOARD_SUPPORT(1),
 `ifdef NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
         .MOUSE_SUPPORT(0), .GAME_SUPPORT(0)
 `else
         .MOUSE_SUPPORT(0), .GAME_SUPPORT(1)
+`endif
 `endif
     ) usb_host_two (
         .clk(usb_clock), .reset(!usb_pll_locked), .cs(1'b1),
@@ -1585,11 +1595,20 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .dout(usb2_rom_data), .en(usb2_rom_enable)
     );
 `else
+`ifdef NEXTTANG_USB_DUPLICATE_MICROCODE
+    usb_hid_host_rom usb1_microcode (
+        .clk(usb_clock),.addr(usb1_rom_address),
+        .dout(usb1_rom_data),.en(usb1_rom_enable));
+    usb_hid_host_rom usb2_microcode (
+        .clk(usb_clock),.addr(usb2_rom_address),
+        .dout(usb2_rom_data),.en(usb2_rom_enable));
+`else
     usb_hid_host_dual_rom usb_microcode (
         .clk(usb_clock),
         .addra(usb1_rom_address), .douta(usb1_rom_data), .ena(usb1_rom_enable),
         .addrb(usb2_rom_address), .doutb(usb2_rom_data), .enb(usb2_rom_enable)
     );
+`endif
 `endif
 
     nexttang_usb_keyboard_matrix usb1_key_decode (
