@@ -135,6 +135,26 @@ endmodule
         output = self.run_player(tape, expected_toggles=10, expect_fault=0)
         self.assertIn("PASS toggles=10", output)
 
+    def test_three_weeks_turbo_loader_pulse_profile(self) -> None:
+        """Pin the custom-loader timings observed in Three Weeks in Paradise."""
+        turbo_header = (
+            (2165).to_bytes(2, "little")
+            + (714).to_bytes(2, "little")
+            + (714).to_bytes(2, "little")
+            + (583).to_bytes(2, "little")
+            + (1166).to_bytes(2, "little")
+            + (3).to_bytes(2, "little")
+            + b"\x08"
+            + (0).to_bytes(2, "little")
+            + b"\x01\x00\x00"
+        )
+        tape = b"ZXTape!\x1a\x01\x14\x11" + turbo_header + b"\xa0"
+        widths = self.measure_widths(tape)
+        pulses = widths[1:]
+        self.assertTrue(any(abs(width - 714) <= 4 for width in pulses))
+        self.assertTrue(any(abs(width - 583) <= 4 for width in pulses))
+        self.assertTrue(any(abs(width - 1166) <= 4 for width in pulses))
+
     def test_standard_pulses_are_the_lengths_the_rom_decodes(self) -> None:
         # The other tests count edges. The ROM decodes the interval between
         # them, so run at the shipped pulse lengths and measure. Only the pilot
