@@ -61,6 +61,9 @@ class Spec256SnapshotTests(unittest.TestCase):
         self.assertEqual(ram[:RAM_BASE], bytes(RAM_BASE))
         self.assertEqual(ram[RAM_BASE : RAM_BASE + 2], bytes((0xA5, 0x5A)))
         self.assertEqual(ram[0xFF38 : 0xFF3A], bytes((0x9C, 0x9C)))
+        # The FPGA ROM mux watches the final RET fetch at 0x0044 so it can
+        # switch from the overlay before a snapshot resumes in Spectrum ROM.
+        self.assertEqual(len(bootstrap), 0x45)
         self.assertEqual(bootstrap[-1], 0xC9)  # RET through the saved PC
         self.assertIn(bytes((0x31, 0x38, 0xFF)), bootstrap)
         self.assertIn(bytes((0x36, 0xA5, 0x23, 0x36, 0x5A)), bootstrap)

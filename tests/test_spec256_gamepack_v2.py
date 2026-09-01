@@ -59,6 +59,7 @@ class GamePackV2Tests(unittest.TestCase):
         self.snapshot = write(root, "game.sna", minimal_snapshot())
         self.gfx = write(root, "game.gfx", bytes(GFX_SIZE))
         self.rom_gfx = write(root, "rom0.gfx", bytes(ROM_GFX_SIZE))
+        self.rom = write(root, "48.rom", bytes(index & 0xff for index in range(ROM_SIZE)))
         self.palette = write(root, "sp256.pal", palette_text())
         self.root = root
 
@@ -91,15 +92,22 @@ class GamePackV2Tests(unittest.TestCase):
             self.assertEqual(set(background), {0x10 + index})
 
     def test_missing_graphical_rom_leaves_the_rom_in_ordinary_colours(self) -> None:
-        """Nineteen games ship none, and 0xFF means "not recoloured"."""
-        image = build_gamepack(self.snapshot, self.gfx, None, self.palette)
+        """Nineteen games ship none; their execution planes clone the ROM."""
+        image = build_gamepack(
+            self.snapshot, self.gfx, None, self.palette, rom_source=self.rom
+        )
 
         pack = parse_gamepack(image)
         start = 16 * 1024 + RAM_SIZE + 8 * RAM_SIZE
         rom_region = pack.payload[start : start + 8 * ROM_SIZE]
-        self.assertEqual(set(rom_region), {0xFF})
-        self.assertEqual(default_graphical_rom_planes(),
-                         tuple(b"\xff" * ROM_SIZE for _ in range(8)))
+        expected = self.rom.read_bytes() * 8
+        self.assertEqual(rom_region, expected)
+        self.assertEqual(default_graphical_rom_planes(self.rom.read_bytes()),
+                         tuple(self.rom.read_bytes() for _ in range(8)))
+
+    def test_missing_graphical_rom_requires_the_ordinary_rom(self) -> None:
+        with self.assertRaisesRegex(ValueError, "48K ROM is required"):
+            build_gamepack(self.snapshot, self.gfx, None, self.palette)
 
     def test_a_supplied_graphical_rom_is_not_replaced_by_the_default(self) -> None:
         image = build_gamepack(self.snapshot, self.gfx, self.rom_gfx, self.palette)

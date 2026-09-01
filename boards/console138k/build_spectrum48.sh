@@ -373,6 +373,7 @@ if [[ "$profile" == spec256-snapshot || "$profile" == spec256-snapshot-audio || 
         "$repo_root/boards/console138k/nexttang_console138k_usb_pll.v"
         "$repo_root/rtl/video/nexttang_spec256_display.v"
         "$repo_root/rtl/video/nexttang_spec256_palette.v"
+        "$repo_root/rtl/video/nexttang_spec256_palette_distributed.v"
         # Resolves 0xFF passthrough pixels to the ordinary Spectrum colour.
         "$repo_root/rtl/video/nexttang_spectrum_display.v"
     )
@@ -418,7 +419,6 @@ if [[ "$profile" == spec256-snapshot || "$profile" == spec256-snapshot-audio || 
                 "$repo_root/rtl/loader/nexttang_loader_catalog.v"
                 "$repo_root/rtl/loader/nexttang_loader_font.v"
                 "$repo_root/rtl/loader/nexttang_loader_overlay.v"
-                "$repo_root/rtl/video/nexttang_spec256_palette_distributed.v"
             )
             if [[ "$profile" == spec256-loader-ddr3 ]]; then
                 source_files+=(

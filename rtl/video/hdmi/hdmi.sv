@@ -265,10 +265,11 @@ generate
         always_comb
         begin
             max_num_packets_alongside = (frame_width - screen_width  /* VD period */ - 2 /* V guard */ - 8 /* V preamble */ - 4 /* Min V control period */ - 2 /* DI trailing guard */ - 2 /* DI leading guard */ - 8 /* DI premable */ - 4 /* Min DI control period */) / 32;
-            if (max_num_packets_alongside > 18)
-                num_packets_alongside = 5'd18;
-            else
-                num_packets_alongside = 5'(max_num_packets_alongside);
+            // Keep each data island to one packet. At 720p this still offers
+            // 720 packet slots per frame, comfortably above the capacity
+            // needed for 48 kHz stereo, while avoiding receiver instability
+            // observed with long runs of adjacent packets on the Gowin path.
+            num_packets_alongside = max_num_packets_alongside > 0 ? 5'd1 : 5'd0;
         end
 
         logic data_island_period_instantaneous;

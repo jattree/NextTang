@@ -429,7 +429,7 @@ class Spec256CpuClusterTests(unittest.TestCase):
                 check=False, capture_output=True, text=True, cwd=work,
             )
 
-    def test_graphical_lanes_use_independent_memory_addresses(self) -> None:
+    def test_graphical_lanes_use_independent_memory_data(self) -> None:
         source = harness(
             {
                 0x00: 0x3A, 0x01: 0x10, 0x02: 0x00,
@@ -439,6 +439,44 @@ class Spec256CpuClusterTests(unittest.TestCase):
             graphics_values=(0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80),
             expected=(0x80, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80),
             message="spec256 independent graphical memory",
+        )
+        result = self.run_harness(source)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_graphical_lanes_store_through_master_effective_address(self) -> None:
+        assertions = "\n".join(
+            f'''        assert graphics_memory({lane}, 16#50#) = x"5a"
+            report "spec256 master effective address: lane {lane}" severity failure;'''
+            for lane in range(8)
+        )
+        source = harness(
+            {
+                0x00: 0x2A, 0x01: 0x10, 0x02: 0x00,  # LD HL,(0010)
+                0x03: 0x36, 0x04: 0x5A,              # LD (HL),5A
+                0x05: 0x76,
+            },
+            main_value=0x50,
+            graphics_values=tuple(0x50 + lane for lane in range(8)),
+            expected=(0x00,) * 9,
+            message="spec256 master effective address",
+            extra_assertions=assertions,
+        )
+        result = self.run_harness(source)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_graphical_lanes_fetch_master_opcode_after_jump(self) -> None:
+        source = harness(
+            {
+                0x00: 0xC3, 0x01: 0x08, 0x02: 0x00,  # JP 0008
+                0x08: 0x3A, 0x09: 0x10, 0x0A: 0x00,  # LD A,(0010)
+                0x0B: 0x32, 0x0C: 0x20, 0x0D: 0x00,  # LD (0020),A
+                0x0E: 0x76,
+            },
+            main_value=0x31,
+            graphics_values=(0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47),
+            expected=(0x31, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47),
+            message="spec256 master opcode after jump",
+            graphics_program={0x08: 0x00},
         )
         result = self.run_harness(source)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

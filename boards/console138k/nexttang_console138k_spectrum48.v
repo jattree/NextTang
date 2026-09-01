@@ -542,6 +542,10 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 `ifdef NEXTTANG_SPECTRUM48_USE_SNAPSHOT
     wire [7:0] snapshot_boot_data;
     reg snapshot_boot_active = 1'b1;
+    reg snapshot_boot_rom_active = 1'b1;
+    reg snapshot_boot_ret_seen = 1'b0;
+    reg snapshot_boot_previous_m1_n = 1'b1;
+    localparam [13:0] SNAPSHOT_BOOT_RET_ADDRESS = 14'h0044;
 
 `ifdef NEXTTANG_SPEC256_RUNTIME
 `ifdef NEXTTANG_SPECTRUM48_USE_DDR3
@@ -587,10 +591,31 @@ module `NEXTTANG_SPECTRUM48_TOP #(
                             !m1_n && !mreq_n && !in_rom;
 
     always @(posedge cpu_clock) begin
-        if (cpu_reset)
+        if (cpu_reset) begin
             snapshot_boot_active <= 1'b1;
-        else if (snapshot_handoff)
-            snapshot_boot_active <= 1'b0;
+            snapshot_boot_rom_active <= 1'b1;
+            snapshot_boot_ret_seen <= 1'b0;
+            snapshot_boot_previous_m1_n <= 1'b1;
+        end else begin
+            snapshot_boot_previous_m1_n <= m1_n;
+            if (snapshot_handoff)
+                snapshot_boot_active <= 1'b0;
+
+            // The generated bootstrap is a fixed 69-byte straight-line
+            // program whose final byte at 0x0044 is RET.  A snapshot may
+            // resume in ROM (notably inside the IM1 handler at 0x0038), so
+            // selecting the overlay until the first RAM fetch would execute
+            // bootstrap bytes in place of the Spectrum ROM.  Switch the ROM
+            // mux on the first opcode fetch after that RET, while leaving the
+            // graphical contexts cloned until execution actually reaches RAM.
+            if (snapshot_boot_previous_m1_n && !m1_n && !mreq_n) begin
+                if (snapshot_boot_ret_seen)
+                    snapshot_boot_rom_active <= 1'b0;
+                else if (snapshot_boot_rom_active &&
+                         cpu_address[13:0] == SNAPSHOT_BOOT_RET_ADDRESS)
+                    snapshot_boot_ret_seen <= 1'b1;
+            end
+        end
     end
 
 `ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
@@ -601,7 +626,7 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     assign spec256_bootstrap = snapshot_boot_active;
 `endif
 
-    assign rom_data = snapshot_boot_active
+    assign rom_data = snapshot_boot_rom_active
         ? snapshot_boot_data : machine_rom_data;
 `else
     assign rom_data = machine_rom_data;

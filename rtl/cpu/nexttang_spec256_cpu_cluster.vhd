@@ -84,6 +84,7 @@ architecture rtl of nexttang_spec256_cpu_cluster is
     signal gpu_done : std_logic_vector(7 downto 0) := (others => '0');
     signal gpu_previous_m1_n : std_logic_vector(7 downto 0) := (others => '1');
     signal gpu_instruction_boundary : std_logic_vector(7 downto 0);
+    signal gpu_instruction_access : std_logic_vector(7 downto 0);
     signal gpu_regs : register_array;
     signal gpu_sync_load : std_logic := '0';
 begin
@@ -151,7 +152,8 @@ begin
         graphics_address(lane * 16 + 15 downto lane * 16) <= gpu_address(lane);
         debug_graphics_pc(lane * 16 + 15 downto lane * 16) <= graphical_pc;
         debug_graphics_regs(lane * 160 + 159 downto lane * 160) <= gpu_regs(lane);
-        graphical_data_input <= data_in when bootstrap = '1' else
+        graphical_data_input <= data_in when bootstrap = '1' or
+                                            gpu_instruction_access(lane) = '1' else
             graphics_data_in(lane * 8 + 7 downto lane * 8);
 
         graphical_cpu : entity work.T80Na
@@ -188,6 +190,8 @@ begin
                 Spec256_sync_xy => master_xy,
                 Spec256_sync_int_cycle => master_int_cycle,
                 Spec256_sync_nmi_cycle => master_nmi_cycle,
+                Spec256_master_addressing => '1',
+                Spec256_master_regs => master_regs,
                 Spec256_state_pc => graphical_pc,
                 Spec256_state_sp => open,
                 Spec256_state_i => open,
@@ -202,6 +206,7 @@ begin
                 Spec256_state_int_cycle => open,
                 Spec256_state_nmi_cycle => open,
                 Spec256_state_instruction_boundary => gpu_instruction_boundary(lane),
+                Spec256_instruction_access => gpu_instruction_access(lane),
                 Z80N_dout_o => open,
                 Z80N_data_o => open,
                 Z80N_command_o => open

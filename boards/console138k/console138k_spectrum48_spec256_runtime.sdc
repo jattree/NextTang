@@ -2,8 +2,8 @@
 # host are separate asynchronous platform-input domains.
 
 create_clock -name sys_clk -period 20.000 [get_ports {sys_clk}]
-create_clock -name serial_clock -period 2.6891 [get_nets {serial_clock}]
-create_clock -name pixel_clock -period 13.4454 [get_pins {video_pll/pll/CLKOUT1}]
+create_clock -name serial_clock -period 2.6667 [get_nets {serial_clock}]
+create_clock -name pixel_clock -period 13.3333 [get_pins {video_pll/pll/CLKOUT1}]
 
 create_clock -name clock_28 -period 35.714 [get_pins {machine_pll/pll/CLKOUT0}]
 create_generated_clock -name clock_7 -source [get_pins {machine_pll/pll/CLKOUT0}] -divide_by 4 [get_pins {machine_pll/divider_7/CLKOUT}]

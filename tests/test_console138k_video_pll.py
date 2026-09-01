@@ -64,8 +64,8 @@ module PLL #(
     assign LOCK = testbench.source_lock;
 
     // Assert the requirement, not the numbers: whatever dividers are chosen,
-    // the PFD and VCO must be legal for this device and the pixel clock that
-    // comes out after CLKDIV / 5 must be close enough to 74.25 MHz for 720p60.
+    // the PFD and VCO must be legal for this device and the PLL's pixel output
+    // must remain close enough to 74.25 MHz for a sink to accept 720p60.
     real input_mhz, pfd_mhz, vco_mhz, serial_mhz, pixel_mhz, error_percent;
 
     initial begin
@@ -89,20 +89,19 @@ module PLL #(
         if (pfd_mhz < 19.0 || pfd_mhz > 81.25)
             $fatal(1, "PFD %f MHz is outside the 19 to 81.25 MHz range", pfd_mhz);
 
-        // This bound comes from the board, not the datasheet. The 650 to 1300
-        // MHz figure this test used to assert is what put the design at a VCO
-        // of 743.75, which produced no video at all while every other signal
-        // was correct. Measured on hardware: no video at 743.75, 750 or
-        // 928.125, and a picture at 2750 and 2975. The true lower limit is
-        // somewhere between 928 and 2750 and is not known, so the bound is set
-        // conservatively inside that gap. Anything above 2975 is untested.
-        if (vco_mhz < 2000.0 || vco_mhz > 3000.0)
-            $fatal(1, "VCO %f MHz is outside the range this board locks at. Measured: no video at 743.75, 750 and 928.125, picture at 2750 and 2975",
+        // Current GW5A documentation gives 650 to 1300 MHz for this 138K
+        // device.  A former 2975 MHz configuration asserted LOCK but caused
+        // content-dependent receiver loss on Cybernoid; 1125 MHz displayed
+        // the same game without that failure in the bounded hardware test.
+        if (vco_mhz < 650.0 || vco_mhz > 1300.0)
+            $fatal(1, "VCO %f MHz is outside the documented 650 to 1300 MHz range",
                    vco_mhz);
 
         error_percent = ((pixel_mhz - 74.25) / 74.25) * 100.0;
         if (error_percent < 0.0) error_percent = -error_percent;
-        if (error_percent > 1.0)
+        // 75 MHz is 1.0101% high and is the integer-divider operating point
+        // whose 1125 MHz VCO removed the Cybernoid link loss on hardware.
+        if (error_percent > 1.1)
             $fatal(1, "pixel clock %f MHz is %f%% from 74.25 MHz, too far for 720p60",
                    pixel_mhz, error_percent);
 

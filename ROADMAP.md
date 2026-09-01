@@ -83,10 +83,10 @@ injection. This evidence remains simulated, not synthesized or hardware-verified
 
 ## Spec256 compatibility track
 
-> [!CAUTION]
-> This section records local pre-reveal work. Do not commit or publish it until
-> Jon approves the Spec256 reveal. Private game data, packs, bitstreams and
-> captures remain outside Git.
+> [!NOTE]
+> Spec256 support is now public. Private game data, packs, bitstreams and
+> captures remain outside Git; only project-owned source, tests and bounded
+> compatibility results belong in this repository.
 
 This standalone 48K track gives the project a shorter compatibility loop before
 the full Next core is ready. Its reusable parts can later feed the NextTang 48K
@@ -106,24 +106,26 @@ and 128K personalities.
   hardware-verify exact Jetpac, Chuckie Egg and Knight Lore packs.
 - [x] Build valid 48K packs for all 22 games the current format can express;
   keep this collection-wide result software-only until each pack is run.
-- [ ] Regression-test and hardware-verify the existing evdev-to-UART keyboard
-  bridge, then add a gamepad mapping for normal play.
-- [ ] Test more independent 48K packs and configuration-dependent presentation.
-- [ ] Verify audible 48K beeper output through HDMI; an audio build and PCM
-  capture container exist, but preserved evidence does not establish sound.
+- [x] Hardware-verify normal Spec256 play through a direct FPGA-hosted USB
+  keyboard; exact Jetpac play reached level three.
+- [x] Run the complete set of 22 buildable collection packs on hardware and
+  retain per-pack pass, needs-work or gameplay-unverified results.
+- [x] Verify audible Spec256 game output through HDMI for the exact Jetpac
+  runtime image.
+- [ ] Add and hardware-verify a normal gamepad mapping for Spec256 play.
 - [ ] Expand the instruction and game conformance suite before claiming general
   Spec256 compatibility.
 - [ ] Reproduce the later 128K extensions.
 - [ ] Fold the proven mode into NextTang's 48K/128K personalities without
   weakening ordinary Spectrum compatibility.
 
-**Current evidence:** exact-C vendor builds, including local checkpoint
-`27bca1c3d98f` of the game-neutral runtime profile at `+0.836 ns` setup and
-`+0.211 ns` hold slack; fail-first processor-state and
-runtime-input regressions, two runtime-loaded gameplay packs, three exact packs
-with hardware display evidence, an Elgato two-game switch capture and a
-separate live-control capture. The latest full repository gate passes 458 tests
-with one skip. This track remains private until Jon approves the reveal.
+**Current evidence:** timing-clean exact-C vendor builds; fail-first processor,
+master-address, graphical-ROM, snapshot-resume and runtime-input regressions;
+runtime-loaded gameplay packs; a 22-pack hardware screening sweep; direct USB
+keyboard play; audible HDMI game audio; and retained gameplay captures. Several
+exact packs now run cleanly, while Into the Eagle's Nest remains an explicit
+failure. These are bounded per-pack observations, not general Spec256 or 128K
+Spec256 compatibility.
 
 ## Milestone 0: Project baseline
 

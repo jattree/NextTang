@@ -140,6 +140,8 @@ entity T80N is
        Spec256_sync_xy : in std_logic_vector(1 downto 0) := (others => '0');
        Spec256_sync_int_cycle : in std_logic := '0';
        Spec256_sync_nmi_cycle : in std_logic := '0';
+       Spec256_master_addressing : in std_logic := '0';
+       Spec256_master_regs : in std_logic_vector(159 downto 0) := (others => '0');
       Spec256_state_pc : out std_logic_vector(15 downto 0);
       Spec256_state_sp : out std_logic_vector(15 downto 0);
       Spec256_state_i : out std_logic_vector(7 downto 0);
@@ -154,6 +156,7 @@ entity T80N is
        Spec256_state_int_cycle : out std_logic;
        Spec256_state_nmi_cycle : out std_logic;
        Spec256_state_instruction_boundary : out std_logic;
+       Spec256_instruction_access : out std_logic := '0';
       -- extended functions
       Z80N_dout_o       : out std_logic := '0';
       Z80N_data_o       : out std_logic_vector(15 downto 0);
@@ -220,6 +223,10 @@ architecture rtl of T80N is
    signal DI_Reg        : std_logic_vector(7 downto 0);
    signal T_Res         : std_logic;
    signal XY_State         : std_logic_vector(1 downto 0);
+   signal Spec256_address_regs : std_logic_vector(159 downto 0) := (others => '0');
+   signal Spec256_master_bc, Spec256_master_de, Spec256_master_hl : std_logic_vector(15 downto 0);
+   signal Spec256_master_ix, Spec256_master_iy, Spec256_master_xy : std_logic_vector(15 downto 0);
+   signal Spec256_instruction_access_r : std_logic := '1';
    signal Spec256_XY_pending : std_logic_vector(1 downto 0) := "00";
    signal Spec256_XY_pending_valid : std_logic := '0';
    signal Pre_XY_F_M    : std_logic_vector(2 downto 0);
@@ -457,6 +464,21 @@ begin
       DI_Reg when Save_ALU_r = '0' else
       ALU_Q;
 
+   Spec256_master_bc <= Spec256_address_regs(23 downto 16) &
+                        Spec256_address_regs(31 downto 24);
+   Spec256_master_de <= Spec256_address_regs(39 downto 32) &
+                        Spec256_address_regs(47 downto 40);
+   Spec256_master_hl <= Spec256_address_regs(55 downto 48) &
+                        Spec256_address_regs(63 downto 56);
+   Spec256_master_ix <= Spec256_address_regs(135 downto 128) &
+                        Spec256_address_regs(143 downto 136);
+   Spec256_master_iy <= Spec256_address_regs(151 downto 144) &
+                        Spec256_address_regs(159 downto 152);
+   Spec256_master_xy <= Spec256_master_hl when XY_State = "00" else
+                        Spec256_master_ix when XY_State = "01" else
+                        Spec256_master_iy;
+   Spec256_instruction_access <= Spec256_instruction_access_r;
+
    process (RESET_n, CLK_n)
    variable reg_temp_t : std_logic_vector(31 downto 0);
    variable n : std_logic_vector(7 downto 0);
@@ -496,6 +518,8 @@ begin
             I_RXDD <= '0';
             Spec256_XY_pending <= "00";
             Spec256_XY_pending_valid <= '0';
+            Spec256_address_regs <= (others => '0');
+            Spec256_instruction_access_r <= '1';
 
             
          elsif Spec256_sync_load = '1' then
@@ -513,6 +537,8 @@ begin
             XY_Ind <= '0';
             Spec256_XY_pending <= Spec256_sync_xy;
             Spec256_XY_pending_valid <= '1';
+            Spec256_address_regs <= Spec256_master_regs;
+            Spec256_instruction_access_r <= '1';
             for flag_index in 0 to 7 loop
                if flag_index /= Flag_C then
                   F(flag_index) <= Spec256_sync_f(flag_index);
@@ -609,20 +635,30 @@ begin
             if T_Res = '1' then
                BTR_r <= (I_BT or I_BC or I_BTR) and not No_BTR;
                if Jump = '1' then
+                  Spec256_instruction_access_r <= '0';
                   A(15 downto 8) <= DI_Reg;
                   A(7 downto 0) <= TmpAddr(7 downto 0);
                   PC(15 downto 8) <= unsigned(DI_Reg);
                   PC(7 downto 0) <= unsigned(TmpAddr(7 downto 0));
                elsif JumpXY = '1' then
-                  A <= RegBusC;
-                  PC <= unsigned(RegBusC);
+                  Spec256_instruction_access_r <= '0';
+                  if Spec256_master_addressing = '1' then
+                     A <= Spec256_master_xy;
+                     PC <= unsigned(Spec256_master_xy);
+                  else
+                     A <= RegBusC;
+                     PC <= unsigned(RegBusC);
+                  end if;
                elsif Call = '1' or RstP = '1' then
+                  Spec256_instruction_access_r <= '0';
                   A <= TmpAddr;
                   PC <= unsigned(TmpAddr);
                elsif MCycle = MCycles and NMICycle = '1' then
+                  Spec256_instruction_access_r <= '0';
                   A <= "0000000001100110";
                   PC <= "0000000001100110";
                elsif MCycle = "011" and IntCycle = '1' and IStatus = "10" then
+                  Spec256_instruction_access_r <= '0';
                   A(15 downto 8) <= I;
                   A(7 downto 0) <= TmpAddr(7 downto 0);
                   PC(15 downto 8) <= unsigned(I);
@@ -631,15 +667,19 @@ begin
                   case Set_Addr_To is
                   when aXY =>
                      if XY_State = "00" then
-                        A <= RegBusC;
+                        Spec256_instruction_access_r <= '0';
+                        A <= Spec256_master_xy when Spec256_master_addressing = '1' else RegBusC;
                      else
                         if NextIs_XY_Fetch = '1' then
+                           Spec256_instruction_access_r <= '1';
                            A <= std_logic_vector(PC);
                         else
+                           Spec256_instruction_access_r <= '0';
                            A <= TmpAddr;
                         end if;
                      end if;
                   when aIOA =>
+                     Spec256_instruction_access_r <= '0';
                      if Mode = 3 then
                         -- Memory map I/O on GBZ80
                         A(15 downto 8) <= (others => '1');
@@ -653,16 +693,22 @@ begin
                      reg_temp_t(15 downto 0) := ACC & DI_reg;
                      TmpAddr <= std_logic_vector(unsigned(reg_temp_t(15 downto 0)) + 1);
                   when aSP =>
+                     Spec256_instruction_access_r <= '0';
                      A <= std_logic_vector(SP);
                   when aBC =>
+                     Spec256_instruction_access_r <= '0';
                      if Mode = 3 and IORQ_i = '1' then
                         -- Memory map I/O on GBZ80
                         A(15 downto 8) <= (others => '1');
                         A(7 downto 0) <= RegBusC(7 downto 0);
                      else
-                        A <= RegBusC;
+                        A <= Spec256_master_bc when Spec256_master_addressing = '1' else RegBusC;
                         if SetWZ = "01" then
-                           TmpAddr <= std_logic_vector(unsigned(RegBusC) + 1);
+                           if Spec256_master_addressing = '1' then
+                              TmpAddr <= std_logic_vector(unsigned(Spec256_master_bc) + 1);
+                           else
+                              TmpAddr <= std_logic_vector(unsigned(RegBusC) + 1);
+                           end if;
                         end if;
                         if SetWZ = "10" then
                            TmpAddr(7 downto 0) <= std_logic_vector(unsigned(RegBusC(7 downto 0)) + 1);
@@ -670,12 +716,14 @@ begin
                         end if;
                      end if;
                   when aDE =>
-                     A <= RegBusC;
+                     Spec256_instruction_access_r <= '0';
+                     A <= Spec256_master_de when Spec256_master_addressing = '1' else RegBusC;
                      if SetWZ = "10" then
                         TmpAddr(7 downto 0) <= std_logic_vector(unsigned(RegBusC(7 downto 0)) + 1);
                         TmpAddr(15 downto 8) <= ACC;
                      end if;
                   when aZI =>
+                     Spec256_instruction_access_r <= '0';
                      if Inc_WZ = '1' then
                         A <= std_logic_vector(unsigned(TmpAddr) + 1);
                      else
@@ -691,6 +739,7 @@ begin
                         -- INIR, INDR, OTIR, OTDR
                         A <= RegBusA_r;
                      elsif No_PC = '0' or No_BTR = '1' or (I_DJNZ = '1' and IncDecZ = '1') or Mode > 1 then
+                        Spec256_instruction_access_r <= '1';
                         A <= std_logic_vector(PC);
                      end if;
                   end case;
@@ -757,7 +806,11 @@ begin
                end if;
             end if;
             if TState = 3 and MCycle = "110" then
-               TmpAddr <= std_logic_vector(signed(RegBusC) + signed(DI_Reg));
+               if Spec256_master_addressing = '1' then
+                  TmpAddr <= std_logic_vector(signed(Spec256_master_xy) + signed(DI_Reg));
+               else
+                  TmpAddr <= std_logic_vector(signed(RegBusC) + signed(DI_Reg));
+               end if;
             end if;
 
             if MCycle = "011" and TState = 4 and No_BTR = '0' then

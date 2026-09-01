@@ -56,3 +56,26 @@ gives the source byte a different value in each graphical plane. A compatible
 graphical processor should leave paper pixels with palette indices 1, 2, 4, 8,
 16, 32, 64 and 128. Generated SNA and GFX files are test artifacts and must not
 be committed.
+
+The RTL follows the pinned GZX execution model: graphical lanes use the
+master's instruction stream and effective addresses while retaining their own
+plane data and data-register values. `build_master_address_fixture()` provides
+the focused `LD HL,(nn)` / `LD (HL),n` discriminator used by the regression
+suite.
+
+Build a private runtime pack from user-supplied assets:
+
+```sh
+python3 tools/spec256/gamepack.py \
+  --snapshot /absolute/path/to/GAME.SNA \
+  --gfx /absolute/path/to/GAME.GFX \
+  --rom-gfx /absolute/path/to/GAME.GFB \
+  --palette /absolute/path/to/sp256.pal \
+  --output /tmp/GAME.ntsp
+```
+
+When a conversion has no graphical ROM, omit `--rom-gfx` and pass the ordinary
+16 KiB Spectrum ROM with `--rom`. The pack builder clones that ROM into all
+eight graphical execution planes, matching GZX initialization. It never embeds
+a ROM unless the user explicitly supplies it, and generated packs remain
+private build artifacts.

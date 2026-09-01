@@ -133,6 +133,8 @@ package T80N_Pack is
       Spec256_sync_xy : in std_logic_vector(1 downto 0) := (others => '0');
       Spec256_sync_int_cycle : in std_logic := '0';
       Spec256_sync_nmi_cycle : in std_logic := '0';
+      Spec256_master_addressing : in std_logic := '0';
+      Spec256_master_regs : in std_logic_vector(159 downto 0) := (others => '0');
       Spec256_state_pc : out std_logic_vector(15 downto 0);
       Spec256_state_sp : out std_logic_vector(15 downto 0);
       Spec256_state_i : out std_logic_vector(7 downto 0);
@@ -147,6 +149,7 @@ package T80N_Pack is
       Spec256_state_int_cycle : out std_logic;
       Spec256_state_nmi_cycle : out std_logic;
       Spec256_state_instruction_boundary : out std_logic;
+      Spec256_instruction_access : out std_logic := '0';
       -- extended functions
       Z80N_dout_o       : out std_logic := '0';
       Z80N_data_o       : out std_logic_vector(15 downto 0);

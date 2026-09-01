@@ -96,8 +96,10 @@ class Spectrum48BuildDriverTests(unittest.TestCase):
         )
         self.assertIn('IO_LOC "usb2_dp" M15;', runtime_pins.read_text(encoding="utf-8"))
         self.assertIn("usb_keyboard_keys_meta*", timing_source)
-        self.assertIn("NEXTTANG_USB_PORT_TWO_ONLY", wrapper_source)
-        self.assertIn("usb_hid_host_rom.v", source)
+        self.assertNotIn("NEXTTANG_USB_PORT_TWO_ONLY", wrapper_source)
+        self.assertIn("NEXTTANG_SPEC256_DISTRIBUTED_PALETTE", wrapper_source)
+        self.assertIn("usb_hid_host_dual_rom.v", source)
+        self.assertIn("nexttang_spec256_palette_distributed.v", source)
 
     def test_spec256_runtime_uses_one_margin_safe_full_duplex_baud(self) -> None:
         top_source = (
@@ -211,6 +213,17 @@ class Spectrum48BuildDriverTests(unittest.TestCase):
         wrapper_source = wrapper.read_text(encoding="utf-8")
         self.assertIn("NEXTTANG_HDMI_AUDIO", wrapper_source)
         self.assertIn("NEXTTANG_SPECTRUM48_USE_SPEC256", wrapper_source)
+
+    def test_hdmi_audio_limits_each_data_island_to_one_packet(self) -> None:
+        hdmi_source = (
+            REPO_ROOT / "rtl" / "video" / "hdmi" / "hdmi.sv"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "num_packets_alongside = max_num_packets_alongside > 0 ? 5'd1 : 5'd0",
+            hdmi_source,
+            "long adjacent packet runs caused intermittent sink reacquisition",
+        )
 
     def test_spec256_chuckie_profile_uses_s_then_one_autostart(self) -> None:
         source = BUILD_DRIVER.read_text(encoding="utf-8")

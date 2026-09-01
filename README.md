@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL v3" src="https://img.shields.io/github/license/jattree/NextTang?style=flat-square&amp;color=0ea5e9"></a>
   <a href="https://github.com/jattree/NextTang/actions/workflows/quality.yml"><img alt="Quality checks" src="https://img.shields.io/github/actions/workflow/status/jattree/NextTang/quality.yml?branch=main&amp;style=flat-square&amp;label=quality"></a>
-  <a href="#current-status"><img alt="Status: standard ULA on hardware" src="https://img.shields.io/badge/status-standard_ULA_on_hardware-f97316?style=flat-square"></a>
+  <a href="#current-status"><img alt="Status: 48K, 128K, and Spec256 on hardware" src="https://img.shields.io/badge/status-48K_%7C_128K_%7C_Spec256_on_hardware-f97316?style=flat-square"></a>
   <a href="#hardware-targets"><img alt="Targets: Tang Nano 20K, Console 60K, and Console 138K" src="https://img.shields.io/badge/targets-Nano_20K_%7C_Console_60K_%7C_138K-334155?style=flat-square"></a>
   <a href="https://t.me/NextTang"><img alt="Telegram: NextTang" src="https://img.shields.io/badge/Telegram-NextTang-26A5E4?style=flat-square&amp;logo=telegram&amp;logoColor=white"></a>
   <a href="https://www.youtube.com/@NextTangFPGA"><img alt="YouTube: NextTang" src="https://img.shields.io/badge/YouTube-NextTang-FF0000?style=flat-square&amp;logo=youtube&amp;logoColor=white"></a>
@@ -26,39 +26,38 @@
 ## Current status
 
 > [!IMPORTANT]
-> The Console 138K now boots a user-supplied Sinclair 48K ROM through the
-> imported T80 and standard upstream ULA, with the ULA-visible lower 16 KiB in
-> on-chip block RAM and the CPU's upper 32 KiB served from onboard DDR3. This
-> is a hardware-verified platform slice, not yet the ZX Spectrum Next machine
-> core or a broad compatibility claim.
+> The Console 138K now runs hardware-verified 48K, 128K and Spec256 machine
+> profiles with runtime-loaded user assets, direct USB keyboard/controller
+> input, DDR3-backed machine memory and HDMI audio/video. These are standalone
+> Spectrum-family platform slices, not yet the complete ZX Spectrum Next core
+> and not a blanket compatibility claim.
 
-The `ula` profile reads the Spectrum display file from on-chip machine RAM,
-captures complete native 360 x 288/50 Hz ULA frames and presents a 2x
-720 x 576 image inside the established 1280 x 720/60 HDMI output. A triple
-frame buffer keeps the machine and HDMI clock domains separate and changes the
-displayed bank only at a complete output-frame boundary. Five consecutive
-volatile-SRAM loads produced clean settled Elgato frames and matching FT232RL
-status with no framebuffer overrun or capture-protocol error. The exact
-C-device build reports zero setup and hold violations. Generated bitstreams,
-the user ROM and hardware captures remain outside Git.
+The 48K path boots a user-supplied Sinclair ROM through the imported T80 and
+standard upstream ULA. The ULA-visible lower 16 KiB remains local while the
+CPU's upper 32 KiB is served from calibrated onboard DDR3. User-supplied TZX
+images load through the ROM's real tape path; both the standard loader and an
+independent turbo loader have run on hardware.
 
-The separate `ula-ddr-upper` profile retains that video path while moving CPU
-addresses `0x8000` to `0xffff` behind the bounded clock-domain and DDR3
-service. A fail-first WAIT regression caught the CPU advancing before an upper
-memory request had completed. Hardware then exposed a second regression: the
-Gowin controller must accept each write command and its data together and be
-given a bounded drain before the following read. With both causal fixes in
-place, the exact-C image boots the ROM and repeatedly prints the same complete
-`nexttang was here` loop as the internal-RAM control. The status UART reports
-opcode activity, an upper-RAM write and live calibration, with timeout,
-overrun and calibration-loss clear. This verifies one 48K split-memory
-workload on the received 30354 SOM; it does not verify banked Next memory,
-contention or general game compatibility.
+The 128K profile keeps screen banks 5 and 7 local and serves the remaining six
+banks through the same DDR3 service. It has booted the real 128 menu and run an
+operator-entered BASIC program using a directly attached USB keyboard. One
+direct-attached USB controller is hardware-verified through Kempston input for
+all four directions and fire.
 
-The original colour-bar/logo smoke image and the simpler 48K renderer remain
-separate rollback targets. Source, constraints and regressions are under
-[`boards/console138k/`](boards/console138k/), [`rtl/video/`](rtl/video/) and
-[`tests/`](tests/).
+The separate Spec256 runtime keeps the original 48K game executing while eight
+graphical lanes carry enhanced per-pixel colour. One FPGA image accepts private
+game packs without resynthesis. Exact hardware tests cover clean moving Jetpac,
+Chuckie Egg, Cybernoid, Underwurlde, Knight Lore, Renegade, Sabre Wulf and Sink
+Feel observations, direct USB play, backgrounds, `0xff` passthrough and audible
+HDMI game audio. Into the Eagle's Nest remains a known runtime/display failure;
+these bounded tests do not establish complete-game, general Spec256 or 128K
+Spec256 compatibility.
+
+Generated bitstreams, vendor work products, ROMs, games, packs and captures
+remain outside Git. Source, constraints and regressions are under
+[`boards/console138k/`](boards/console138k/), [`rtl/`](rtl/) and
+[`tests/`](tests/). The hardware progression is shown on the
+[NextTang YouTube channel](https://www.youtube.com/@NextTangFPGA).
 
 Bring-up status is deliberately split between NextTang-owned behaviour and the
 factory TangCore baseline:
@@ -66,14 +65,14 @@ factory TangCore baseline:
 | Area | Current evidence |
 | --- | --- |
 | JTAG and programming | Hardware-verified 6 MHz scan and volatile SRAM loading; Gowin `GW5AST-138`, IDCODE `0x1081b` |
-| Clocks | The 50 MHz board input, 74.375 MHz pixel path and 28/14/7/3.5 MHz machine tree are connected in the hardware-running 48K ULA image. 14 and 7 MHz divide from 28 through `CLKDIV` under one reset and 3.5 divides from 7, after three separate PLL outputs declared as independent clocks hid a hold violation inside the upstream ULA and made the design placement-dependent. The 3.5 MHz cadence is independently bounded by the decoded UART interval; the other machine clocks are vendor-model and build-verified but have not each been measured at a pin |
+| Clocks | The 50 MHz board input, in-range 1125 MHz video VCO, 75/375 MHz HDMI clocks and 28/14/7/3.5 MHz machine tree are connected in the current hardware-running images. Correcting the former out-of-range video VCO removed a content-dependent HDMI loss reproduced with Cybernoid; retained gameplay captures then ran without full-frame dropouts across four workloads. This is bounded evidence, not every-sink certification |
 | UART | Hardware-decoded through an external FT232RL. The current image reports video lock, CPU opcodes, screen writes, complete scaled frames, overrun and capture-protocol status on each line |
-| HDMI | Hardware-verified for 720p60 output, the standard 48K/50 Hz upstream ULA raster and frame-safe 50-to-60 Hz conversion; no HDMI audio |
+| HDMI | Hardware-verified for 720p output, the standard 48K/50 Hz upstream ULA raster, frame-safe 50-to-60 Hz conversion and audible Spec256 game audio. AY plus beeper audio for the classic profiles is simulation- and exact-device build-verified but has not yet been heard on hardware |
 | DDR3 | Hardware-verified on the 30354 1 GB Hynix SOM: calibration, paired writes, read-back, every usable address-line position, the 512 MB boundary and the final aligned 32-byte beat pass with distinct retained patterns. The first integrated machine workload also boots the 48K ROM with CPU addresses `0x8000`-`0xffff` served from DDR3 while the ULA-visible lower 16 KiB remains local. The Console input is 50 MHz and the working path retains Gowin's generated dynamic PLL and `PLL_INIT`. Exhaustive every-cell, sustained-load and banked-Next testing remain open ([resolved issue #5](https://github.com/jattree/NextTang/issues/5)) |
 | Tape | Hardware-verified. A user-supplied TZX is played into the EAR input for the ROM's own loader. Manic Miner loads and runs; Cobra loads through its own turbo speed loader to its credits. The tape and every generated memory image stay outside Git |
-| SD | Factory TangCore reads the supplied card and loads packaged cores; no NextTang SD implementation |
-| Audio | Not brought up |
-| USB HID | The supplied controller navigates factory TangCore. NextTang reads a USB keyboard through that same firmware's PS/2 scan code message on its 2 Mbit/s UART, so the MCU is not reflashed and hubs and multiple devices stay its concern. Decoded to the forty key matrix the Next uses. Build-verified and simulated; not yet hardware-verified |
+| SD | Factory TangCore reads the supplied card. NextTang's read-only FAT32/LFN catalog, loader overlay and pack-streaming profiles are simulated and exact-device build-verified, but the NextTang SD path is not yet hardware-verified |
+| Audio | Audible Jetpac audio is hardware-verified through the Spec256 HDMI path. The reusable AY-3-8912 plus beeper mixer is simulated and exact-device build-verified for the classic profiles |
+| USB HID | Direct FPGA-hosted keyboard input is hardware-verified in 48K, 128K and Spec256 profiles with one exact keyboard. One direct-attached controller is hardware-verified through Kempston input. Hubs, the other root port and broad device compatibility remain open |
 
 The first DDR-to-video integration is also hardware-verified. An exact-C demo
 stores the 16 KiB RGB332 logo in onboard DDR3, repeatedly refills alternating
@@ -81,11 +80,12 @@ on-chip display buffers from DDR3, and advances the logo only after a complete
 refill. This proves a bounded live DDR consumer, not the machine CPU/video
 memory service or a full-screen DDR framebuffer.
 
-The next engineering gate is replacing this deliberately narrow 48K split with
-the wider core's banked memory contract while retaining the verified ULA and
-DDR3 paths. Storage and audio follow, and physical input needs verifying on
-hardware, before any ZX Spectrum Next compatibility claim. The
-[starter roadmap](ROADMAP.md) defines the required evidence.
+The platform groundwork now covers machine clocks, DDR3, 48K and 128K memory,
+video, direct USB input, runtime loading and an HDMI audio path. The next major
+step is connecting those verified services to the wider ZX Spectrum Next core.
+SD hardware bring-up, broader device compatibility and the remaining Spec256
+failures stay open. The [starter roadmap](ROADMAP.md) defines the required
+evidence.
 
 The one part of the project not waiting on that board is the
 [host tooling track](ROADMAP.md#host-tooling-track), which builds the DZRP client and

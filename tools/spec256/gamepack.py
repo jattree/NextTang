@@ -81,16 +81,18 @@ def read_graphical_rom(path: Path) -> bytes:
     return payload
 
 
-def default_graphical_rom_planes() -> tuple[bytes, ...]:
-    """Return graphical ROM planes that leave the ROM in ordinary colours.
+def default_graphical_rom_planes(rom: bytes) -> tuple[bytes, ...]:
+    """Replicate the ordinary ROM into every graphical execution plane.
 
-    Nineteen of the collection's games ship no graphical ROM, and the reference
-    implementation loads one global operator-supplied file rather than a
-    per-game one.  Every pixel at 0xFF means every pixel the ROM draws is
-    passthrough, which is exactly what an unmodified machine shows, and it
-    needs no third-party data.
+    GZX initializes every graphical ROM from the ordinary 48K ROM before an
+    optional ROM0.GFX override.  Replication preserves executable bytes and
+    makes an original set bit colour 255 while an original clear bit remains
+    colour zero.  Filling every byte with 0xff instead turns all graphical ROM
+    instructions and operands into 0xff.
     """
-    return tuple(b"\xff" * ROM_SIZE for _ in range(PLANE_COUNT))
+    if len(rom) != ROM_SIZE:
+        raise ValueError(f"48K ROM must be exactly {ROM_SIZE} bytes, got {len(rom)}")
+    return tuple(rom for _ in range(PLANE_COUNT))
 
 
 SPECTRUM_KEY_INDICES = {
@@ -184,6 +186,7 @@ def build_gamepack(
     rom_graphics_source: Path | None,
     palette_source: Path,
     *,
+    rom_source: Path | None = None,
     backgrounds: Sequence[Path] = (),
     keys: tuple[str, ...] = (),
     start_delay_ms: int = 2000,
@@ -192,9 +195,8 @@ def build_gamepack(
 ) -> bytes:
     """Return one complete private game image accepted by the FPGA loader.
 
-    `rom_graphics_source` may be None for the majority of games that ship no
-    graphical ROM; the ordinary-colour default is used instead.  Backgrounds
-    are supplied in index order, matching the reference's `b00` upwards.
+    When `rom_graphics_source` is None, `rom_source` supplies the ordinary ROM
+    replicated into every graphical plane, matching GZX initialization.
     """
     snapshot_payload = read_exact_file(snapshot_source, SNA_SIZE, "48K SNA")
     graphics_payload = read_exact_file(graphics_source, GFX_SIZE, "Spec256 GFX")
@@ -212,7 +214,11 @@ def build_gamepack(
     boot_image = bootstrap + bytes(BOOT_SIZE - len(bootstrap))
     ram_planes = build_lane_memory_planes(snapshot, graphics_payload)
     if rom_graphics_source is None:
-        rom_planes = default_graphical_rom_planes()
+        if rom_source is None:
+            raise ValueError("a 48K ROM is required when --rom-gfx is omitted")
+        rom_planes = default_graphical_rom_planes(
+            read_exact_file(rom_source, ROM_SIZE, "48K ROM")
+        )
     else:
         rom_planes = build_graphical_rom_planes(
             read_graphical_rom(rom_graphics_source)
@@ -303,6 +309,8 @@ def main() -> int:
     parser.add_argument("--gfx", required=True, type=Path)
     parser.add_argument("--rom-gfx", type=Path,
                         help="optional; ordinary ROM colours are used without it")
+    parser.add_argument("--rom", type=Path,
+                        help="required when --rom-gfx is omitted")
     parser.add_argument("--background", action="append", default=[], type=Path,
                         help="repeatable, in b00-upward index order")
     parser.add_argument("--palette", required=True, type=Path)
@@ -319,6 +327,7 @@ def main() -> int:
             arguments.gfx,
             arguments.rom_gfx,
             arguments.palette,
+            rom_source=arguments.rom,
             backgrounds=tuple(arguments.background),
             keys=tuple(arguments.key),
             start_delay_ms=arguments.start_delay_ms,
