@@ -84,7 +84,7 @@ module nexttang_spec256_main_ddr_memory #(
 
     assign ram_read_data = cpu_upper_selected ? upper_read_data : lower_read_data;
     assign cpu_wait_n = !cpu_upper_request || upper_complete;
-    assign loader_upper_complete = upper_complete && loader_upper_write == 1'b0;
+    assign loader_upper_complete = upper_complete;
 endmodule
 
 `default_nettype wire

@@ -28,10 +28,12 @@ module testbench;
     reg [2:0] cpu_bank = 0;
     reg [7:0] cpu_write_data = 0;
     reg cpu_mreq_n = 1, cpu_rd_n = 1, cpu_wr_n = 1, cpu_rfsh_n = 1;
+    reg poke_write = 0; reg [2:0] poke_bank = 0;
+    reg [13:0] poke_address = 0; reg [7:0] poke_write_data = 0;
     reg video_bank = 0;
     reg [13:0] video_address = 0;
     wire [7:0] ram_read_data, video_data;
-    wire cpu_wait_n, transaction_complete;
+    wire cpu_wait_n, transaction_complete, poke_complete;
     wire line_request, line_write;
     wire [16:0] line_address;
     wire [127:0] line_write_data;
@@ -50,6 +52,8 @@ module testbench;
         .cpu_wr_n(cpu_wr_n), .cpu_rfsh_n(cpu_rfsh_n),
         .ram_read_data(ram_read_data), .cpu_wait_n(cpu_wait_n),
         .transaction_complete(transaction_complete),
+        .poke_write(poke_write), .poke_bank(poke_bank), .poke_address(poke_address),
+        .poke_write_data(poke_write_data), .poke_complete(poke_complete),
         .video_clock(video_clock), .video_bank(video_bank),
         .video_address(video_address), .video_data(video_data),
         .memory_clock(memory_clock), .memory_reset(memory_reset),
@@ -69,6 +73,15 @@ module testbench;
             cpu_write_data = value; cpu_mreq_n = 0; cpu_wr_n = 0;
             @(posedge cpu_clock); @(negedge cpu_clock);
             cpu_mreq_n = 1; cpu_wr_n = 1;
+        end
+    endtask
+
+    task poke_local(input [2:0] bank, input [13:0] address, input [7:0] value);
+        begin
+            @(negedge cpu_clock); poke_bank=bank;poke_address=address;
+            poke_write_data=value;poke_write=1;#1;
+            if(!poke_complete)$fatal(1,"local bank POKE did not complete");
+            @(negedge cpu_clock);poke_write=0;
         end
     endtask
 
@@ -101,8 +114,12 @@ module testbench;
         cpu_reset = 0; memory_reset = 0;
         write_local(3'd5, 14'h0123, 8'h55);
         write_local(3'd7, 14'h0123, 8'h77);
+        poke_local(3'd5,14'h0124,8'ha5);
+        poke_local(3'd7,14'h0124,8'ha7);
         read_local(3'd5, 14'h0123, 8'h55);
         read_local(3'd7, 14'h0123, 8'h77);
+        read_local(3'd5,14'h0124,8'ha5);
+        read_local(3'd7,14'h0124,8'ha7);
         read_video(1'b0, 14'h0123, 8'h55);
         read_video(1'b1, 14'h0123, 8'h77);
         $display("SPECTRUM128_SCREEN_BANKS_PASS");

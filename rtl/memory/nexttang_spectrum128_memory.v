@@ -24,6 +24,12 @@ module nexttang_spectrum128_memory #(
     output wire         cpu_wait_n,
     output wire         transaction_complete,
 
+    input  wire         poke_write,
+    input  wire [2:0]   poke_bank,
+    input  wire [13:0]  poke_address,
+    input  wire [7:0]   poke_write_data,
+    output wire         poke_complete,
+
     input  wire         video_clock,
     input  wire         video_bank,
     input  wire [13:0]  video_address,
@@ -46,10 +52,18 @@ module nexttang_spectrum128_memory #(
 );
     wire memory_cycle = !cpu_mreq_n && cpu_rfsh_n &&
                         (!cpu_rd_n || !cpu_wr_n);
+    wire selected_bank_5 = poke_write ? poke_bank == 3'd5 : cpu_bank == 3'd5;
+    wire selected_bank_7 = poke_write ? poke_bank == 3'd7 : cpu_bank == 3'd7;
     wire bank_5_selected = cpu_bank == 3'd5;
     wire bank_7_selected = cpu_bank == 3'd7;
     wire local_selected = bank_5_selected || bank_7_selected;
-    wire external_request = memory_cycle && !local_selected;
+    wire poke_local = poke_write && (selected_bank_5 || selected_bank_7);
+    wire external_request = poke_write ? !poke_local :
+                                        memory_cycle && !local_selected;
+    wire [2:0] selected_bank = poke_write ? poke_bank : cpu_bank;
+    wire [13:0] selected_address = poke_write ? poke_address : cpu_address[13:0];
+    wire [7:0] selected_write_data = poke_write ? poke_write_data :
+                                                 cpu_write_data;
 
     wire [7:0] bank_5_data;
     wire [7:0] bank_7_data;
@@ -60,9 +74,10 @@ module nexttang_spectrum128_memory #(
 
     nexttang_block_ram #(.ADDRESS_BITS(14)) bank_5 (
         .clock(cpu_clock),
-        .write_enable(memory_cycle && !cpu_wr_n && bank_5_selected),
-        .write_address(cpu_address[13:0]),
-        .write_data(cpu_write_data),
+        .write_enable((poke_write && selected_bank_5) ||
+                      (memory_cycle && !cpu_wr_n && bank_5_selected)),
+        .write_address(selected_address),
+        .write_data(selected_write_data),
         .read_data(bank_5_data),
         .port_b_clock(video_clock),
         .port_b_address(video_address),
@@ -71,9 +86,10 @@ module nexttang_spectrum128_memory #(
 
     nexttang_block_ram #(.ADDRESS_BITS(14)) bank_7 (
         .clock(cpu_clock),
-        .write_enable(memory_cycle && !cpu_wr_n && bank_7_selected),
-        .write_address(cpu_address[13:0]),
-        .write_data(cpu_write_data),
+        .write_enable((poke_write && selected_bank_7) ||
+                      (memory_cycle && !cpu_wr_n && bank_7_selected)),
+        .write_address(selected_address),
+        .write_data(selected_write_data),
         .read_data(bank_7_data),
         .port_b_clock(video_clock),
         .port_b_address(video_address),
@@ -87,9 +103,9 @@ module nexttang_spectrum128_memory #(
         .machine_reset(cpu_reset),
         .memory_available(memory_available),
         .core_request(external_request),
-        .core_read_n(cpu_rd_n),
-        .core_address({4'b0000, cpu_bank, cpu_address[13:0]}),
-        .core_write_data(cpu_write_data),
+        .core_read_n(poke_write ? 1'b1 : cpu_rd_n),
+        .core_address({4'b0000, selected_bank, selected_address}),
+        .core_write_data(selected_write_data),
         .core_read_data(external_data),
         .core_wait(external_wait),
         .core_complete(transaction_complete),
@@ -112,6 +128,8 @@ module nexttang_spectrum128_memory #(
                            bank_7_selected ? bank_7_data : external_data;
     assign video_data = video_bank ? bank_7_video : bank_5_video;
     assign cpu_wait_n = !external_request || transaction_complete;
+    assign poke_complete = poke_local ||
+                           (poke_write && !poke_local && transaction_complete);
 endmodule
 
 `default_nettype wire

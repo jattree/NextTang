@@ -55,7 +55,8 @@ module nexttang_loader_catalog #(
     output reg         error
 );
     localparam [2:0] FORMAT_UNKNOWN=0, FORMAT_TAP=1, FORMAT_TZX=2,
-                     FORMAT_SNA=3, FORMAT_Z80=4, FORMAT_NTSP=5;
+                     FORMAT_SNA=3, FORMAT_Z80=4, FORMAT_NTSP=5,
+                     FORMAT_POK=6;
     localparam [3:0] WAIT_VOLUME=0, START_ROOT=1, SCAN_ROOT=2,
                      CAPTURE_ROOT=3, START_GAMES=4, SCAN_GAMES=5,
                      CAPTURE_GAMES=6, START_TARGET=7, SCAN_TARGET=8,
@@ -122,6 +123,7 @@ module nexttang_loader_catalog #(
             else if (value[31:0] == 32'h2e747a78) suffix_format = FORMAT_TZX;
             else if (value[31:0] == 32'h2e736e61) suffix_format = FORMAT_SNA;
             else if (value[31:0] == 32'h2e7a3830) suffix_format = FORMAT_Z80;
+            else if (value[31:0] == 32'h2e706f6b) suffix_format = FORMAT_POK;
             else if (value == 40'h2e6e747370) suffix_format = FORMAT_NTSP;
             else suffix_format = FORMAT_UNKNOWN;
         end
@@ -229,7 +231,8 @@ module nexttang_loader_catalog #(
                         // Classic machines currently consume tape streams;
                         // snapshots remain invisible until their atomic CPU/RAM
                         // restore path exists.  Spec256 accepts only its pack.
-                        if ((MACHINE_KIND==2 && suffix_format({suffix[31:0],lower(entry_name_data)})==FORMAT_NTSP) ||
+                        if (suffix_format({suffix[31:0],lower(entry_name_data)})==FORMAT_POK ||
+                            (MACHINE_KIND==2 && suffix_format({suffix[31:0],lower(entry_name_data)})==FORMAT_NTSP) ||
                             (MACHINE_KIND!=2 && (suffix_format({suffix[31:0],lower(entry_name_data)})==FORMAT_TAP ||
                                                 suffix_format({suffix[31:0],lower(entry_name_data)})==FORMAT_TZX))) begin
                             clusters[file_count]<=candidate_cluster;sizes[file_count]<=candidate_size;
