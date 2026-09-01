@@ -22,9 +22,10 @@ class TzxStreamTests(unittest.TestCase):
         bench=f"""
 `timescale 1ns/1ps
 module testbench;
- reg write_clock=0,tape_clock=0,write_reset=1,tape_reset=1,content_start=0,play_start=0;
+ reg write_clock=0,tape_clock=0,write_reset=1,tape_reset=1,content_start=0,play_start=0,tape_enable=1;
  reg[7:0]content_byte=0;reg content_valid=0,content_done=0;wire file_pause,fifo_overflow;
- wire ear,active,finished,fault,fault_unsupported;reg[7:0]image[0:{len(tape)-1}];
+ wire ear,active,finished,fault,fault_unsupported;wire[7:0]current_block;
+ wire[16:0]byte_position;reg[7:0]image[0:{len(tape)-1}];
  integer i,toggles=0;reg previous=0;always #5 write_clock=~write_clock;always #7 tape_clock=~tape_clock;
  always @(posedge tape_clock)begin previous<=ear;if(ear!=previous)toggles<=toggles+1;end
  nexttang_tzx_stream #(.CLOCK_HZ(1000),.STANDARD_PILOT_LENGTH(2),
@@ -38,7 +39,8 @@ module testbench;
   @(negedge write_clock);content_done=1;@(negedge write_clock);content_done=0;
   repeat(5)@(negedge tape_clock);if(active||finished)$fatal(1,"played before gate");
   play_start=1;@(negedge tape_clock);play_start=0;
-  wait(finished);#1;if(fault||fifo_overflow||toggles!=22)$fatal(1,"result f=%0d o=%0d t=%0d",fault,fifo_overflow,toggles);
+  wait(finished);#1;if(fault||fifo_overflow||toggles!=22||current_block!=8'h10||byte_position!={len(tape)})
+   $fatal(1,"result f=%0d o=%0d t=%0d b=%02x p=%0d",fault,fifo_overflow,toggles,current_block,byte_position);
   $display("TZX_DUAL_CLOCK_STREAM_PASS");$finish;end
  initial begin #200000;$fatal(1,"timeout");end
 endmodule

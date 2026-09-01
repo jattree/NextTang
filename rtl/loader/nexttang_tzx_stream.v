@@ -25,6 +25,7 @@ module nexttang_tzx_stream #(
     output reg        fifo_overflow,
     input  wire       tape_clock,
     input  wire       tape_reset,
+    input  wire       tape_enable,
     // Kept separate from content_start: SD may fill the FIFO while the ROM
     // boots and the synthetic LOAD command is typed.  Starting any earlier
     // loses the pilot before the ROM is listening to EAR.
@@ -33,7 +34,9 @@ module nexttang_tzx_stream #(
     output wire       active,
     output wire       finished,
     output wire       fault,
-    output wire       fault_unsupported
+    output wire       fault_unsupported,
+    output wire [7:0] current_block,
+    output wire [16:0] byte_position
 );
     reg epoch=0,write_clear=0,writer_finished=0;
     wire fifo_full;wire[10:0]fifo_level;wire[7:0]fifo_data;
@@ -46,10 +49,10 @@ module nexttang_tzx_stream #(
     wire player_start=restart_count==1;
     wire stream_ready;
     wire stream_end=finished_r2&&!fifo_valid;
-    wire[7:0]current_block;wire[16:0]byte_position;wire[31:0]first_data_bytes;
+    wire[31:0]first_data_bytes;
 
     assign file_pause=fifo_level>=11'd512||fifo_full;
-    assign fifo_pop=stream_ready&&fifo_valid;
+    assign fifo_pop=tape_enable&&stream_ready&&fifo_valid;
 
     always @(posedge write_clock)begin
         if(write_reset)begin epoch<=0;write_clear<=0;writer_finished<=0;fifo_overflow<=0;end
@@ -92,6 +95,7 @@ module nexttang_tzx_stream #(
         .HEADER_PILOT_PULSES(HEADER_PILOT_PULSES),
         .DATA_PILOT_PULSES(DATA_PILOT_PULSES)) player(
         .clock(tape_clock),.reset(player_reset),.start(player_start),
+        .clock_enable(tape_enable),
         .stream_data(fifo_data),.stream_valid(fifo_valid),.stream_end(stream_end),
         .stream_ready(stream_ready),.ear(ear),.active(active),.finished(finished),
         .fault(fault),.fault_unsupported(fault_unsupported),

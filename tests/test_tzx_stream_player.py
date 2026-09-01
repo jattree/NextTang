@@ -18,23 +18,28 @@ class TzxStreamPlayerTests(unittest.TestCase):
         bench = f"""
 `timescale 1ns/1ps
 module testbench;
- reg clock=0,reset=1,start=0;reg[7:0]image[0:{len(tape)-1}];integer position=0,toggles=0;
+ reg clock=0,reset=1,start=0,clock_enable=1;reg[7:0]image[0:{len(tape)-1}];integer position=0,toggles=0;
  wire[7:0]stream_data=image[position];wire stream_valid=position<{len(tape)};
  wire stream_end=position=={len(tape)};wire stream_ready,ear,active,finished,fault,fault_unsupported;
  wire[7:0]current_block;wire[16:0]byte_position;wire[31:0]first_data_bytes;reg previous=0;
  always #5 clock=~clock;
- always @(posedge clock)begin if(stream_ready&&stream_valid)position<=position+1;
+ always @(posedge clock)begin if(clock_enable&&stream_ready&&stream_valid)position<=position+1;
   previous<=ear;if(ear!=previous)toggles<=toggles+1;end
  nexttang_tzx_player #(.CLOCK_HZ(1000),.EXTERNAL_STREAM(1),.TZX_BYTES(0),
   .STANDARD_PILOT_LENGTH(2),.STANDARD_SYNC1_LENGTH(2),.STANDARD_SYNC2_LENGTH(2),
   .STANDARD_ZERO_LENGTH(2),.STANDARD_ONE_LENGTH(3),.HEADER_PILOT_PULSES(3),
-  .DATA_PILOT_PULSES(2))dut(.clock(clock),.reset(reset),.start(start),
+  .DATA_PILOT_PULSES(2))dut(.clock(clock),.reset(reset),.start(start),.clock_enable(clock_enable),
   .stream_data(stream_data),.stream_valid(stream_valid),.stream_end(stream_end),
   .stream_ready(stream_ready),.ear(ear),.active(active),.finished(finished),
   .fault(fault),.fault_unsupported(fault_unsupported),.current_block(current_block),
   .byte_position(byte_position),.first_data_bytes(first_data_bytes));
+ integer held_position;reg held_ear;
  initial begin {assignments}
-  repeat(2)@(posedge clock);reset=0;start=1;wait(finished);#1;
+  repeat(2)@(posedge clock);reset=0;start=1;
+  repeat(16)@(posedge clock);@(negedge clock);clock_enable=0;held_position=position;held_ear=ear;
+  repeat(20)@(posedge clock);#1;
+  if(position!=held_position||ear!=held_ear)$fatal(1,"disabled player advanced");
+  clock_enable=1;wait(finished);#1;
   if(fault||toggles!=22||position!={len(tape)})$fatal(1,"stream result f=%0d t=%0d p=%0d",fault,toggles,position);
   $display("TZX_STREAM_PLAYER_PASS");$finish;end
  initial begin #100000;$fatal(1,"timeout");end

@@ -25,6 +25,7 @@ module nexttang_tzx_player #(
     input  wire        clock,
     input  wire        reset,
     input  wire        start,
+    input  wire        clock_enable,
     input  wire [7:0]  stream_data,
     input  wire        stream_valid,
     input  wire        stream_end,
@@ -135,7 +136,10 @@ module nexttang_tzx_player #(
             fetched_byte <= 0;
             byte_valid <= 1'b0;
             end_of_input <= 1'b0;
-        end else begin
+        end else if (clock_enable) begin
+            if (consume_byte && EXTERNAL_STREAM)
+                next_byte_position <= next_byte_position + 1'b1;
+
             if (consume_byte && !EXTERNAL_STREAM)
                 byte_valid <= 1'b0;
 
@@ -212,7 +216,7 @@ module nexttang_tzx_player #(
             pulse_counter <= 0;
             skip_remaining <= 0;
             turbo_block <= 1'b0;
-        end else begin
+        end else if (clock_enable) begin
             if (source_end && state_needs_byte && !source_valid) begin
                 if (state == STATE_NEW_BLOCK) begin
                     state <= STATE_DONE;

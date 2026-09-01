@@ -2,7 +2,7 @@
 // Copyright (C) 2026 NextTang contributors
 `default_nettype none
 module nexttang_loader_overlay (
- input wire clock,input wire enable,input wire ready,input wire error,input wire[2:0]diagnostic_code,
+ input wire clock,input wire enable,input wire ready,input wire error,input wire[3:0]diagnostic_code,
  input wire[10:0]x,input wire[9:0]y,
  input wire[5:0]selection,input wire[5:0]file_count,output reg[5:0]display_entry,
  output reg[5:0]display_name_index,input wire[7:0]display_name_data,
@@ -48,13 +48,16 @@ module nexttang_loader_overlay (
       3:character_next="O";4:character_next="R";5:character_next=" ";
       6:character_next=diagnostic_code==0?"C":diagnostic_code==1?"S":diagnostic_code==2?"S":
                        diagnostic_code==3?"D":diagnostic_code==4?"R":
-                       diagnostic_code==5?"G":diagnostic_code==6?"S":"F";
+                       diagnostic_code==5?"G":diagnostic_code==6?"S":diagnostic_code==7?"F":
+                       diagnostic_code==8?"T":"D";
       7:character_next=diagnostic_code==0?"A":diagnostic_code==1?"D":diagnostic_code==2?"I":
                        diagnostic_code==3?"I":diagnostic_code==4?"D":
-                       diagnostic_code==5?"A":diagnostic_code==6?"P":"I";
+                       diagnostic_code==5?"A":diagnostic_code==6?"P":diagnostic_code==7?"I":
+                       diagnostic_code==8?"Z":"D";
       8:character_next=diagnostic_code==0?"T":diagnostic_code==1?" ":diagnostic_code==2?"G":
                        diagnostic_code==3?"R":diagnostic_code==4?" ":
-                       diagnostic_code==5?"M":diagnostic_code==6?"C":"L";
+                       diagnostic_code==5?"M":diagnostic_code==6?"C":diagnostic_code==7?"L":
+                       diagnostic_code==8?"X":"R";
       9:character_next=diagnostic_code==2?" ":diagnostic_code==3?" ":
                        diagnostic_code==5?" ":" ";default:character_next=" ";endcase end
    end else if(!ready)begin

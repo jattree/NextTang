@@ -16,8 +16,9 @@ class ClassicTapeLoaderTests(unittest.TestCase):
   assigns="\n".join(f"image[{i}]=8'h{b:02x};" for i,b in enumerate(tap))
   bench=f"""`timescale 1ns/1ps
 module testbench;reg write_clock=0,tape_clock=0,write_reset=1,tape_reset=1,content_start=0,play_start=0;
-reg[2:0]content_format=1;reg[7:0]content_byte=0;reg content_valid=0,content_done=0;
-wire file_pause,ear,active,finished,fault,fault_unsupported;reg[7:0]image[0:2];integer i,toggles=0;reg previous=0;
+reg[2:0]content_format=1;reg[7:0]content_byte=0;reg content_valid=0,content_done=0;reg tape_enable=1;
+wire file_pause,ear,active,finished,fault,fault_unsupported;wire[7:0]current_block;
+wire[16:0]byte_position;reg[7:0]image[0:2];integer i,toggles=0;reg previous=0;
 always #5 write_clock=~write_clock;always #7 tape_clock=~tape_clock;
 always@(posedge tape_clock)begin previous<=ear;if(ear!=previous)toggles<=toggles+1;end
 nexttang_classic_tape_loader #(.CLOCK_HZ(1000),.STANDARD_PILOT_LENGTH(2),.STANDARD_SYNC1_LENGTH(2),

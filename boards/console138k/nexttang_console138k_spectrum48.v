@@ -1796,6 +1796,8 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 
 `ifdef NEXTTANG_CLASSIC_SD_LOADER
     wire tape_ear,tape_active,tape_finished,tape_fault,tape_fault_unsupported;
+    wire[7:0]tape_block;
+    wire[16:0]tape_byte_position;
 `ifdef NEXTTANG_SPEC256_SD_PACK
     wire [6:0] spec256_pack_fifo_level;
     wire spec256_pack_fifo_full;
@@ -1815,6 +1817,8 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     assign tape_fault=loader_catalog_error||loader_storage_error||
                       (loader_content_valid&&spec256_pack_fifo_full);
     assign tape_fault_unsupported=1'b0;
+    assign tape_block=8'b0;
+    assign tape_byte_position=17'b0;
 `elsif NEXTTANG_SPECTRUM128
     // The 128 ROM boots with Tape Loader selected; ENTER is sufficient.
     nexttang_post_tape_key_sequencer #(.CLOCK_HZ(3500000),.START_DELAY_MS(3000),
@@ -1833,9 +1837,11 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .content_start(loader_content_start),.content_format(loader_content_format),
         .content_byte(loader_content_byte),.content_valid(loader_content_valid),
         .content_done(loader_content_done),.file_pause(loader_file_pause),
-        .tape_clock(cpu_clock),.tape_reset(cpu_reset),.play_start(typing_finished),
+        .tape_clock(cpu_clock),.tape_reset(cpu_reset),.tape_enable(cpu_wait_n),
+        .play_start(typing_finished),
         .ear(tape_ear),.active(tape_active),.finished(tape_finished),
-        .fault(tape_fault),.fault_unsupported(tape_fault_unsupported));
+        .fault(tape_fault),.fault_unsupported(tape_fault_unsupported),
+        .current_block(tape_block),.byte_position(tape_byte_position));
 `endif
 `elsif NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
     assign typist_keys = 40'b0;
@@ -1933,6 +1939,36 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     );
 `endif
     wire tape_ear = 1'b0;
+`elsif NEXTTANG_CLASSIC_SD_LOADER
+    // SD-loader status is deliberately about the live load rather than the
+    // generic DDR transaction count. V/M/R are CPU activity, high-memory
+    // writes and DDR calibration; C/P/Y are tape active, tape finished and
+    // the combined tape/memory fault. The value packs the current TZX block,
+    // full stream byte position and the live 128K paging state. For 48K the
+    // paging bits are zero.
+    wire [5:0] status_flags = {
+`ifdef NEXTTANG_SPECTRUM48_USE_DDR3
+        tape_fault | tape_fault_unsupported | fault_calibration_lost |
+            fault_overrun | fault_timeout,
+`else
+        tape_fault | tape_fault_unsupported,
+`endif
+        tape_finished, tape_active,
+`ifdef NEXTTANG_SPECTRUM48_USE_DDR3
+        calibration_complete,
+`else
+        video_pll_locked,
+`endif
+        high_ram_write_seen, opcode_seen
+    };
+`ifdef NEXTTANG_SPECTRUM128
+    wire [5:0] status_paging = {cpu_ram_bank, rom_select, paging_locked,
+                                tape_active};
+`else
+    wire [5:0] status_paging = {5'b0, tape_active};
+`endif
+    wire [31:0] status_value = {tape_block, tape_byte_position,
+                                status_paging, 1'b0};
 `elsif NEXTTANG_SPECTRUM48_USE_TAPE
     // The capture card takes about forty seconds to relock after the FPGA is
     // reconfigured, so a tape that starts at the ROM's own pace is already
@@ -1964,6 +2000,7 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .clock(cpu_clock),
         .reset(cpu_reset),
         .start(typing_finished),
+        .clock_enable(cpu_wait_n),
         .ear(tape_ear),
         .active(tape_active),
         .finished(tape_finished),
@@ -2487,10 +2524,19 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 `ifdef NEXTTANG_CLASSIC_SD_LOADER
     wire loader_overlay_enable;
     wire[7:0]loader_overlay_red,loader_overlay_green,loader_overlay_blue;
+`ifdef NEXTTANG_SPECTRUM48_USE_DDR3
+    wire loader_memory_fault = fault_timeout || fault_overrun ||
+                               fault_calibration_lost;
+`else
+    wire loader_memory_fault = 1'b0;
+`endif
     nexttang_loader_overlay loader_overlay(
-        .clock(pixel_clock),.enable(loader_menu_active),.ready(loader_menu_ready),
-        .error(loader_storage_error||loader_catalog_error),
-        .diagnostic_code(loader_storage_error?loader_storage_diagnostic:3'd0),
+        .clock(pixel_clock),
+        .enable(loader_menu_active||tape_fault||loader_memory_fault),
+        .ready(loader_menu_ready),
+        .error(loader_storage_error||loader_catalog_error||tape_fault||loader_memory_fault),
+        .diagnostic_code(loader_memory_fault?4'd9:tape_fault?4'd8:
+                         loader_storage_error?{1'b0,loader_storage_diagnostic}:4'd0),
         .x(hdmi_x),.y(hdmi_y),
         .selection(loader_selection),.file_count(loader_file_count),
         .display_entry(loader_display_entry),.display_name_index(loader_display_name_index),

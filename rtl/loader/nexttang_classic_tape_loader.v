@@ -16,9 +16,10 @@ module nexttang_classic_tape_loader #(
     input wire write_clock,input wire write_reset,input wire content_start,
     input wire[2:0]content_format,input wire[7:0]content_byte,
     input wire content_valid,input wire content_done,output wire file_pause,
-    input wire tape_clock,input wire tape_reset,input wire play_start,
+    input wire tape_clock,input wire tape_reset,input wire tape_enable,input wire play_start,
     output wire ear,output wire active,
-    output wire finished,output wire fault,output wire fault_unsupported
+    output wire finished,output wire fault,output wire fault_unsupported,
+    output wire[7:0]current_block,output wire[16:0]byte_position
 );
     localparam[2:0]FORMAT_TAP=1,FORMAT_TZX=2;
     wire[7:0]tap_byte;wire tap_valid,tap_done,tap_pause,tap_fault;
@@ -46,8 +47,10 @@ module nexttang_classic_tape_loader #(
         .write_clock(write_clock),.write_reset(write_reset),.content_start(content_start),
         .content_byte(tzx_byte),.content_valid(tzx_valid),.content_done(tzx_done),
         .file_pause(fifo_pause),.fifo_overflow(fifo_overflow),.tape_clock(tape_clock),
-        .tape_reset(tape_reset),.play_start(play_start),.ear(ear),.active(active),.finished(finished),
-        .fault(player_fault),.fault_unsupported(fault_unsupported));
+        .tape_reset(tape_reset),.tape_enable(tape_enable),.play_start(play_start),
+        .ear(ear),.active(active),.finished(finished),
+        .fault(player_fault),.fault_unsupported(fault_unsupported),
+        .current_block(current_block),.byte_position(byte_position));
 endmodule
 
 `default_nettype wire

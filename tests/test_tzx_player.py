@@ -24,6 +24,7 @@ module testbench;
     reg clock = 0;
     reg reset = 1;
     reg start = 0;
+    reg clock_enable = 1;
     wire ear, active, finished, fault, fault_unsupported;
     wire [7:0] current_block;
     wire [16:0] byte_position;
@@ -49,7 +50,7 @@ module testbench;
         .HEADER_PILOT_PULSES(3),
         .DATA_PILOT_PULSES(2)
     ) dut (
-        .clock(clock), .reset(reset), .start(start), .ear(ear),
+        .clock(clock), .reset(reset), .start(start), .clock_enable(clock_enable), .ear(ear),
         .active(active), .finished(finished), .fault(fault),
         .fault_unsupported(fault_unsupported),
         .current_block(current_block), .byte_position(byte_position)
@@ -219,6 +220,7 @@ module testbench;
     reg clock = 0;
     reg reset = 1;
     reg start = 0;
+    reg clock_enable = 1;
     wire ear, active, finished, fault, fault_unsupported;
     wire [7:0] current_block;
     wire [16:0] byte_position;
@@ -235,7 +237,7 @@ module testbench;
         .HEADER_PILOT_PULSES({header_pilot}),
         .DATA_PILOT_PULSES(4)
     ) dut (
-        .clock(clock), .reset(reset), .start(start), .ear(ear),
+        .clock(clock), .reset(reset), .start(start), .clock_enable(clock_enable), .ear(ear),
         .active(active), .finished(finished), .fault(fault),
         .fault_unsupported(fault_unsupported),
         .current_block(current_block), .byte_position(byte_position)
