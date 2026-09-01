@@ -36,7 +36,9 @@ The 48K path boots a user-supplied Sinclair ROM through the imported T80 and
 standard upstream ULA. The ULA-visible lower 16 KiB remains local while the
 CPU's upper 32 KiB is served from calibrated onboard DDR3. User-supplied TZX
 images load through the ROM's real tape path; both the standard loader and an
-independent turbo loader have run on hardware.
+independent turbo loader have run on hardware. The native read-only SD loader
+has also mounted the physical FAT32 card, cataloged `/games/Classic48`, streamed
+Finders Keepers from TZX and reached gameplay before returning to its live menu.
 
 The 128K profile keeps screen banks 5 and 7 local and serves the remaining six
 banks through the same DDR3 service. It has booted the real 128 menu and run an
@@ -70,7 +72,7 @@ factory TangCore baseline:
 | HDMI | Hardware-verified for 720p output, the standard 48K/50 Hz upstream ULA raster, frame-safe 50-to-60 Hz conversion and audible Spec256 game audio. AY plus beeper audio for the classic profiles is simulation- and exact-device build-verified but has not yet been heard on hardware |
 | DDR3 | Hardware-verified on the 30354 1 GB Hynix SOM: calibration, paired writes, read-back, every usable address-line position, the 512 MB boundary and the final aligned 32-byte beat pass with distinct retained patterns. The first integrated machine workload also boots the 48K ROM with CPU addresses `0x8000`-`0xffff` served from DDR3 while the ULA-visible lower 16 KiB remains local. The Console input is 50 MHz and the working path retains Gowin's generated dynamic PLL and `PLL_INIT`. Exhaustive every-cell, sustained-load and banked-Next testing remain open ([resolved issue #5](https://github.com/jattree/NextTang/issues/5)) |
 | Tape | Hardware-verified. A user-supplied TZX is played into the EAR input for the ROM's own loader. Manic Miner loads and runs; Cobra loads through its own turbo speed loader to its credits. The tape and every generated memory image stay outside Git |
-| SD | Factory TangCore reads the supplied card. NextTang's read-only FAT32/LFN catalog, loader overlay and pack-streaming profiles are simulated and exact-device build-verified, but the NextTang SD path is not yet hardware-verified |
+| SD | The NextTang-owned read-only SDHC/FAT32/LFN path is hardware-verified for one bounded 48K result: the exact-C loader cataloged the physical `/games/Classic48` directory, streamed `FINDERS KEEPERS.TZX` and reached gameplay. TAP, 128K, Spec256 packs, broader cards/filesystems and persistent boot remain unverified |
 | Audio | Audible Jetpac audio is hardware-verified through the Spec256 HDMI path. The reusable AY-3-8912 plus beeper mixer is simulated and exact-device build-verified for the classic profiles |
 | USB HID | Direct FPGA-hosted keyboard input is hardware-verified in 48K, 128K and Spec256 profiles with one exact keyboard. One direct-attached controller is hardware-verified through Kempston input. Hubs, the other root port and broad device compatibility remain open |
 
@@ -83,9 +85,9 @@ memory service or a full-screen DDR framebuffer.
 The platform groundwork now covers machine clocks, DDR3, 48K and 128K memory,
 video, direct USB input, runtime loading and an HDMI audio path. The next major
 step is connecting those verified services to the wider ZX Spectrum Next core.
-SD hardware bring-up, broader device compatibility and the remaining Spec256
-failures stay open. The [starter roadmap](ROADMAP.md) defines the required
-evidence.
+The 128K and Spec256 SD paths, broader device compatibility and the remaining
+Spec256 failures stay open. The [starter roadmap](ROADMAP.md) defines the
+required evidence.
 
 The one part of the project not waiting on that board is the
 [host tooling track](ROADMAP.md#host-tooling-track), which builds the DZRP client and

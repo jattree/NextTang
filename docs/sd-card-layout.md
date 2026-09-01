@@ -31,7 +31,9 @@ inside a running Spectrum core does not reconfigure the FPGA.
 
 Current evidence boundary: the read-only SDHC/FAT32/LFN stack, fragmented FAT
 walking, shared menu and backpressured TAP/TZX stream pass simulation. Separate
-48K and 128K exact-C images place, route and pass setup/hold timing. Neither
-image nor a physical card read has been hardware-tested. SNA/Z80 files are
-hidden until atomic snapshot restore exists; Spec256 pack dispatch remains
-separate work.
+48K and 128K exact-C images place, route and pass setup/hold timing. The 48K
+image has mounted the physical card, cataloged `/games/Classic48`, streamed
+`FINDERS KEEPERS.TZX` through the ROM loader, reached gameplay and returned to
+the still-resident loader menu. This is one bounded hardware result; TAP, the
+128K image, Spec256 packs and broad card/file compatibility remain unverified.
+SNA/Z80 files are hidden until atomic snapshot restore exists.
