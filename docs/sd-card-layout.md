@@ -34,6 +34,11 @@ walking, shared menu and backpressured TAP/TZX stream pass simulation. Separate
 48K and 128K exact-C images place, route and pass setup/hold timing. The 48K
 image has mounted the physical card, cataloged `/games/Classic48`, streamed
 `FINDERS KEEPERS.TZX` through the ROM loader, reached gameplay and returned to
-the still-resident loader menu. This is one bounded hardware result; TAP, the
-128K image, Spec256 packs and broad card/file compatibility remain unverified.
+the still-resident loader menu. The 128K image has streamed ordinary-speed
+Spellbound into multi-room gameplay across its local-SRAM/DDR3 bank split; a
+Three Weeks in Paradise turbo-loader remains incompatible. A timing-clean
+local-memory Spec256 image has cataloged `/games/Spec256`, streamed and accepted
+one exact Jetpac pack and reached enhanced gameplay. These are bounded hardware
+results; TAP, other games, the combined Spec256/DDR3 profile and broad card/file
+compatibility remain unverified.
 SNA/Z80 files are hidden until atomic snapshot restore exists.
