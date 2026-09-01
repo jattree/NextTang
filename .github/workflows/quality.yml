@@ -27,7 +27,18 @@ jobs:
       - name: Install the simulators and assembler the tests invoke
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends iverilog ghdl verilator
+          sudo apt-get install -y --no-install-recommends \
+            iverilog ghdl autoconf flex bison help2man
+      - name: Build the pinned Verilator lint tool
+        run: |
+          version=$(grep -oP '(?<=^NEXTTANG_VERILATOR_REFERENCE_VERSION=).*' toolchain/versions.env)
+          git clone --branch "v$version" --depth 1 \
+            https://github.com/verilator/verilator.git /tmp/verilator
+          cd /tmp/verilator
+          autoconf
+          ./configure --prefix=/usr/local
+          make -C /tmp/verilator -j"$(nproc)"
+          sudo make -C /tmp/verilator install
       - name: Build sjasmplus
         run: |
           version=$(grep -oP '(?<=^NEXTTANG_SJASMPLUS_VERSION=).*' toolchain/versions.env)
