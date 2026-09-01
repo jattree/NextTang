@@ -105,10 +105,18 @@ fi
 # and nothing else does; that is a simulation concern, not a synthesis one.
 verilator_flags=(
     --lint-only
-    -Wno-MODMISSING
     -Wno-TIMESCALEMOD
     "+incdir+$include_dir"
 )
+
+# MODMISSING was added after the Verilator release packaged by Ubuntu 24.04,
+# which GitHub-hosted runners still use.  Newer releases warn for the VHDL and
+# vendor-IP black boxes this split-language pass deliberately leaves unresolved;
+# older releases accept those modules but reject the unknown warning name. Probe
+# the option rather than tying CI to either version.
+if "$verilator" -Wno-MODMISSING --version >/dev/null 2>&1; then
+    verilator_flags+=(-Wno-MODMISSING)
+fi
 
 # Structural checks that are off in Verilator's default set. Enabled by name
 # rather than with -Wall, which additionally raises PROCASSINIT, UNUSEDSIGNAL,

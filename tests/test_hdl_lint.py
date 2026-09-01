@@ -155,6 +155,18 @@ class LintScriptTest(unittest.TestCase):
         )
         self.assertNotEqual(done.returncode, 0)
 
+    def test_modmissing_suppression_is_version_gated(self) -> None:
+        """Ubuntu's Verilator predates MODMISSING; the local gate must not."""
+        script = LINT_SCRIPT.read_text()
+        self.assertIn(
+            'if "$verilator" -Wno-MODMISSING --version', script,
+        )
+        unconditional = re.search(
+            r"verilator_flags=\((.*?)\)", script, re.S,
+        )
+        self.assertIsNotNone(unconditional)
+        self.assertNotIn("MODMISSING", unconditional.group(1))
+
     def test_stub_covers_every_directly_instantiated_gowin_primitive(self) -> None:
         """The stubs stand in for the Gowin hard primitives the project
         instantiates itself. A new one added to the RTL without a stub would
