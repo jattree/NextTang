@@ -28,6 +28,30 @@ literal, which Gowin rejects as a width mismatch. It is changed to
 gives that line. The modification is recorded here because the file is otherwise
 byte-identical and its blob hash therefore no longer matches the audit.
 
+The third import, on 2026-10-26, brings in the rest of the machine core:
+`rtl/zxnext.vhd` and the 28 files it instantiates under `rtl/audio/`,
+`rtl/device/`, `rtl/misc/`, `rtl/serial/` and `rtl/video/`. That set is the
+transitive closure of `zxnext.vhd`, less three files:
+
+- `rtl/rom/bootrom.vhd`, which stays excluded and is replaced by the
+  project-owned `rtl/core/nexttang_diagnostic_bootrom.vhd`.
+- MiSTer's `rtl/mister/bram.vhd`, which is replaced by the inferred RAMs under
+  `rtl/core/memory/`.
+- `rtl/serial/uart_old.vhd`, which redefines the `uart` entity and is not in the
+  upstream project file list.
+
+The membrane, keymap and `i2s_master` files belong to MiSTer's top level, not
+the core, and stay candidates. Every imported file matched its audited blob.
+
+One line of `rtl/serial/fifop.vhd` is modified. Upstream computes the
+"almost full" flag by comparing `stored(DEPTH_BITS-1 downto 1)` with
+`std_logic_vector(to_unsigned(-1, stored'length-1))`. Gowin rejects the
+negative argument to `to_unsigned`. The two operands also differ in width, so
+the comparison could never match on any toolchain. It now compares the slice
+with an all-ones aggregate, which is what the "full - 2 bytes" comment
+describes. The flag drives the UART receivers' RTR line when hardware flow
+control is enabled. NextNano carries the same replacement in its Gowin build.
+
 ## Reference projects
 
 These are read for their answers to device-specific questions. Nothing is
