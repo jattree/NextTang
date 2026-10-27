@@ -18,12 +18,48 @@ ATTRIBUTES      equ $5800
 ATTRIBUTE_COUNT equ $0300
 RAM_UNDER_TEST  equ $8000
 RAM_TEST_BYTES  equ $4000
+NEXTREG_SELECT  equ $243b
+NEXTREG_DATA    equ $253b
+ULA_PALETTE_ENTRIES equ 32
 
 start:
         di
         ld      sp,$ffff
         xor     a
         out     ($fe),a
+
+; ---------------------------------------------------------------------------
+; Load the Next's ULA palette.
+;
+; The Next's palette RAM powers up empty on every platform, so until something
+; writes it, every ULA colour is black. On a real Next the boot firmware loads
+; it; here the diagnostic has to. A plain Spectrum ignores both ports, since
+; neither has A0 low.
+; ---------------------------------------------------------------------------
+        ld      bc,NEXTREG_SELECT
+        ld      a,$43                   ; palette control
+        out     (c),a
+        inc     b                       ; NEXTREG_DATA
+        xor     a                       ; write the first ULA palette, auto-increment
+        out     (c),a
+        dec     b
+        ld      a,$40                   ; palette index
+        out     (c),a
+        inc     b
+        xor     a
+        out     (c),a
+        dec     b
+        ld      a,$41                   ; 8-bit palette value
+        out     (c),a
+        inc     b
+        ld      hl,ula_palette
+        ld      d,ULA_PALETTE_ENTRIES
+palette_loop:
+        ld      a,(hl)
+        out     (c),a                   ; the index advances on each write
+        inc     hl
+        dec     d
+        jr      nz,palette_loop
 
 ; ---------------------------------------------------------------------------
 ; Draw a computed pattern across the whole bitmap.
@@ -180,9 +216,18 @@ fail_attribute_loop:
 memory_fail_hold:
         jr      memory_fail_hold
 
+; The Next's default ULA colours in RRRGGGBB: ink 0-7, bright ink 8-15, paper
+; 16-23 and bright paper 24-31. The border uses the paper entries.
+ula_palette:
+        db      $00,$02,$a0,$a2,$14,$16,$b4,$b6
+        db      $00,$03,$e0,$e7,$1c,$1f,$fc,$ff
+        db      $00,$02,$a0,$a2,$14,$16,$b4,$b6
+        db      $00,$03,$e0,$e7,$1c,$1f,$fc,$ff
+        assert  $ - ula_palette = ULA_PALETTE_ENTRIES
+
         assert  $ < $1fe0
         defs    $1fe0-$,$ff
-        db      "NEXTTANG DIAG 2",0
+        db      "NEXTTANG DIAG 3",0
         defs    $2000-$,$ff
 
         assert  $ = $2000
