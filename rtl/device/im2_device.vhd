@@ -53,6 +53,7 @@ entity im2_device is
    );
    port (
       i_CLK_CPU         : in std_logic;
+      i_CPU_CEN_R       : in std_logic := '1';   -- NextTang: i_CLK_CPU edge enable
       i_reset_n         : in std_logic;
       
       i_im2_mode        : in std_logic;   -- 1 if z80 is in im 2 mode (set 1 if unknown)
@@ -90,7 +91,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if rising_edge(i_CLK_CPU) then
+      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          if i_reset_n = '0' then
             state <= S_0;
          else

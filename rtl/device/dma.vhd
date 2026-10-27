@@ -31,6 +31,8 @@ entity z80dma is
    ( 
       reset_i        : in std_logic;
       clk_i          : in std_logic;
+      cen_r_i        : in std_logic := '1';   -- NextTang: clk_i edge enables
+      cen_f_i        : in std_logic := '1';
       turbo_i        : in std_logic_vector(1 downto 0);  -- 00 = 3.5MHz, 01 = 7MHz, 10 = 14MHz, 11 = 28MHz
       dma_mode_i     : in std_logic;  -- 1 = z80 dma compatible
       
@@ -139,7 +141,7 @@ begin
    
    process (clk_i)
    begin
-      if falling_edge(clk_i) then
+      if falling_edge(clk_i) and cen_f_i = '1' then
          wait_n_s <= wait_n_i;
       end if;
    end process;
@@ -148,7 +150,7 @@ begin
    
    process (clk_i)
    begin
-      if falling_edge(clk_i) then
+      if falling_edge(clk_i) and cen_f_i = '1' then
          dma_rd_s <= dma_read_cycle and not dma_rw_cancel;
          dma_wr_s <= dma_write_cycle and not dma_rw_cancel;
       end if;
@@ -162,7 +164,7 @@ begin
    
    process (clk_i)
    begin
-      if falling_edge(clk_i) then
+      if falling_edge(clk_i) and cen_f_i = '1' then
          if dma_read_cycle = '1' then
             dma_d_n_s <= dma_d_i;
          end if;
@@ -171,7 +173,7 @@ begin
 
    process (clk_i)
    begin
-      if rising_edge(clk_i) then
+      if rising_edge(clk_i) and cen_r_i = '1' then
          if dma_read_cycle = '1' then
             dma_d_p_s <= dma_d_i;
          end if;
@@ -206,7 +208,7 @@ begin
 
       
    begin
-      if rising_edge(clk_i) then
+      if rising_edge(clk_i) and cen_r_i = '1' then
       
        if reset_i = '1' then
        

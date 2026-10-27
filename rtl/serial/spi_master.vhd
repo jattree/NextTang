@@ -44,6 +44,8 @@ use ieee.std_logic_unsigned.all;
 entity spi_master is
    port (
       clock_i        : in std_logic;
+      cen_r_i        : in std_logic := '1';   -- NextTang: clock_i edge enables
+      cen_f_i        : in std_logic := '1';
       reset_i        : in std_logic;
       
       spi_sck_o      : out std_logic;
@@ -81,7 +83,7 @@ begin
    
    process (clock_i)
    begin
-      if falling_edge(clock_i) then
+      if falling_edge(clock_i) and cen_f_i = '1' then
          if reset_i = '1' then
             counter <= (others => '0');
          elsif counter_is_zero = '0' or spi_begin = '1' then
@@ -92,7 +94,7 @@ begin
    
    process (clock_i)
    begin
-      if falling_edge(clock_i) then
+      if falling_edge(clock_i) and cen_f_i = '1' then
          if reset_i = '1' then
             sck <= '0';
          else
@@ -105,7 +107,7 @@ begin
    
    process (clock_i)
    begin
-      if falling_edge(clock_i) then
+      if falling_edge(clock_i) and cen_f_i = '1' then
          if reset_i = '1' then
             shift <= (others => '1');
          elsif spi_begin = '1' then
@@ -128,7 +130,7 @@ begin
    
    process (clock_i)
    begin
-      if rising_edge(clock_i) then
+      if rising_edge(clock_i) and cen_r_i = '1' then
          if counter_is_zero = '1' then
             miso_dat <= shift(7 downto 0);
          end if;

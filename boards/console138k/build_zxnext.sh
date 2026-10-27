@@ -7,7 +7,8 @@
 # UART. It needs no ROM, firmware or vendor source.
 #
 # The `diagnostic-ddr3` profile is the same image with the whole 2 MB main
-# memory in onboard DDR3. It needs --vendor-source: the directory holding
+# memory in onboard DDR3, the SD socket on the core's SPI, and the two USB-A
+# sockets as keyboard and joystick. It needs --vendor-source: the directory holding
 # Sipeed's generated DDR3 controller, its Gowin_PLL wrapper and PLL_INIT, which
 # carry no redistribution grant and stay outside Git.
 set -euo pipefail
@@ -48,12 +49,12 @@ case "$profile" in
     diagnostic)
         base_name=nexttang_console138k_zxnext
         constraints_base=console138k_zxnext
-        route_option=1
+        route_options=(1 2)
         ;;
     diagnostic-ddr3)
         base_name=nexttang_console138k_zxnext_ddr3
         constraints_base=console138k_zxnext_ddr3
-        route_option=2
+        route_options=(2 1)
         if [[ "$vendor_source" != /* || ! -d "$vendor_source" ]]; then
             printf '%s\n' 'console138k zxnext build: diagnostic-ddr3 requires --vendor-source ABSOLUTE_DIRECTORY' >&2
             exit 2
@@ -95,10 +96,9 @@ for core_file in "${core_files[@]}"; do
 done
 source_files+=(
     "$repo_root/rtl/reset/nexttang_reset_release.v"
-    "$repo_root/rtl/clock/nexttang_cpu_clock_contention.v"
+    "$repo_root/rtl/clock/nexttang_zxnext_cpu_enables.vhd"
     "$repo_root/rtl/clock/nexttang_machine_clock_enables.v"
     "$repo_root/boards/console138k/nexttang_console138k_machine_pll.v"
-    "$repo_root/boards/console138k/nexttang_console138k_cpu_clock_mux.v"
     "$repo_root/boards/console138k/nexttang_console138k_machine_clock_tree.v"
     "$repo_root/boards/console138k/nexttang_console138k_pll.v"
     "$repo_root/rtl/memory/nexttang_block_ram.v"
@@ -121,6 +121,12 @@ if [[ "$profile" == diagnostic-ddr3 ]]; then
         "$vendor_source/gowin_pll/gowin_pll.v"
         "$vendor_source/gowin_pll/gowin_pll_mod.v"
         "$vendor_source/pll_init.v"
+        "$repo_root/rtl/input/usb_hid_host.v"
+        "$repo_root/rtl/input/usb_hid_host_dual_rom.v"
+        "$repo_root/rtl/input/nexttang_usb_keyboard_matrix.v"
+        "$repo_root/rtl/input/nexttang_usb_gamepad_kempston.v"
+        "$repo_root/rtl/input/nexttang_keyboard_matrix.v"
+        "$repo_root/boards/console138k/nexttang_console138k_usb_pll.v"
     )
 fi
 # The DDR3 wrapper textually includes the shared top, so both are build inputs
@@ -147,6 +153,12 @@ if [[ "$toolchain" != vendor ]]; then
     printf 'console138k zxnext build: toolchain not implemented: %s\n' "$toolchain" >&2
     exit 2
 fi
+
+# The PLL counts a phase in VCO periods and the SDC states it in nanoseconds;
+# nothing else ties the two together, and they drifted apart once already.
+python3 "$repo_root/scripts/check_pll_phase.py" \
+    "$repo_root/boards/console138k/$constraints_base.sdc" \
+    "$repo_root/boards/console138k/nexttang_console138k_machine_pll.v" || exit 1
 if [[ "$output_dir" != /* ]]; then
     printf '%s\n' 'console138k zxnext build: --output must be an absolute path' >&2
     exit 2
@@ -166,50 +178,74 @@ for source_file in "${source_files[@]}" "${included_files[@]}"; do
     }
 done
 
+# The USB microcode ROM is read by relative name from the build directory.
+if [[ "$profile" == diagnostic-ddr3 ]]; then
+    cp "$repo_root/rtl/input/usb_hid_host_rom.mem" "$output_dir/usb_hid_host_rom.mem"
+    included_files+=("$repo_root/rtl/input/usb_hid_host_rom.mem")
+fi
+
 project_tcl="$output_dir/$base_name.tcl"
 build_log="$output_dir/build.log"
 bitstream="$output_dir/impl/pnr/$base_name.fs"
 timing_report="$output_dir/impl/pnr/$base_name.tr"
 source_hashes="$output_dir/source-sha256.txt"
 
-{
-    printf 'set_device -device_version C GW5AST-LV138PG484AC1/I0\n'
-    printf 'set_option -top_module %s\n' "$base_name"
-    printf 'set_option -output_base_name %s\n' "$base_name"
-    printf 'set_option -vhdl_std vhd2008\n'
-    printf 'set_option -verilog_std sysv2017\n'
-    printf 'set_option -gen_text_timing_rpt 1\n'
-    # Measured on the complete core. Placement option 2 is what lets the CPU's
-    # half-cycle paths meet 28 MHz. The router option is per profile: with
-    # DDR3, option 2 gives +0.74 ns of setup margin where option 1 gives +0.27.
-    printf 'set_option -place_option 2\n'
-    printf 'set_option -route_option %s\n' "$route_option"
-    for source_file in "${source_files[@]}"; do
-        printf 'add_file {%s}\n' "$source_file"
-    done
-    printf 'run all\n'
-} >"$project_tcl"
-
-(
-    cd -- "$output_dir"
-    gw_sh "$project_tcl"
-) 2>&1 | tee "$build_log" || {
-    printf 'console138k zxnext build: FAIL (see %s)\n' "$build_log" >&2
-    exit 1
-}
-
 sha256sum "${source_files[@]}" "${included_files[@]}" >"$source_hashes"
 
-if grep -q '^ERROR' "$build_log"; then
-    printf 'console138k zxnext build: vendor errors (see %s)\n' "$build_log" >&2
-    exit 1
-fi
-if [[ ! -f "$bitstream" ]]; then
-    printf 'console138k zxnext build: no bitstream produced (see %s)\n' "$build_log" >&2
-    exit 1
-fi
+# The core works on both edges of related clocks, and several of its
+# half-cycle paths sit within a fraction of a nanosecond of 28 MHz. Which
+# router option closes them changes as the design changes, so each profile
+# lists the options to try in order. A failed attempt keeps its reports under
+# attempt-route-N for inspection; the bitstream that passes stays in impl/.
+attempt=0
+for route_option in "${route_options[@]}"; do
+    attempt=$((attempt + 1))
+    {
+        printf 'set_device -device_version C GW5AST-LV138PG484AC1/I0\n'
+        printf 'set_option -top_module %s\n' "$base_name"
+        printf 'set_option -output_base_name %s\n' "$base_name"
+        printf 'set_option -vhdl_std vhd2008\n'
+        printf 'set_option -verilog_std sysv2017\n'
+        printf 'set_option -gen_text_timing_rpt 1\n'
+        # Placement option 2 is what lets the CPU's half-cycle paths meet
+        # 28 MHz on the complete core.
+        printf 'set_option -place_option 2\n'
+        printf 'set_option -route_option %s\n' "$route_option"
+        for source_file in "${source_files[@]}"; do
+            printf 'add_file {%s}\n' "$source_file"
+        done
+        printf 'run all\n'
+    } >"$project_tcl"
 
-python3 "$repo_root/scripts/check_timing.py" "$timing_report" || exit 1
+    (
+        cd -- "$output_dir"
+        gw_sh "$project_tcl"
+    ) 2>&1 | tee "$build_log" || {
+        printf 'console138k zxnext build: FAIL (see %s)\n' "$build_log" >&2
+        exit 1
+    }
 
-printf 'console138k zxnext build: PASS\n'
-printf 'bitstream: %s\n' "$bitstream"
+    if grep -q '^ERROR' "$build_log"; then
+        printf 'console138k zxnext build: vendor errors (see %s)\n' "$build_log" >&2
+        exit 1
+    fi
+    if [[ ! -f "$bitstream" ]]; then
+        printf 'console138k zxnext build: no bitstream produced (see %s)\n' "$build_log" >&2
+        exit 1
+    fi
+
+    if python3 "$repo_root/scripts/check_timing.py" "$timing_report"; then
+        printf 'console138k zxnext build: PASS with route option %s\n' "$route_option"
+        printf 'bitstream: %s\n' "$bitstream"
+        exit 0
+    fi
+
+    if (( attempt < ${#route_options[@]} )); then
+        printf 'console138k zxnext build: timing failed with route option %s, trying the next\n' "$route_option" >&2
+        mv "$output_dir/impl" "$output_dir/attempt-route-$route_option"
+        mv "$build_log" "$output_dir/attempt-route-$route_option/build.log"
+    fi
+done
+
+printf 'console138k zxnext build: timing failed with every route option\n' >&2
+exit 1

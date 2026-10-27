@@ -49,6 +49,12 @@ entity zxnext is
       i_CLK_14             : in std_logic;      -- 14MHz hi-res pixel clock
       i_CLK_7              : in std_logic;      -- 7MHz pixel clock
       i_CLK_CPU            : in std_logic;      -- CPU clock adjusted for speed and contention
+      -- NextTang: enables for logic on i_CLK_CPU's rising and falling edges.
+      -- Left at '1' with a real CPU clock, the core is unchanged; driven by
+      -- nexttang_zxnext_cpu_enables with i_CLK_CPU tied to i_CLK_28, the CPU
+      -- runs on the 28 MHz clock.
+      i_CPU_CEN_R          : in std_logic := '1';
+      i_CPU_CEN_F          : in std_logic := '1';
       i_CLK_PSG_EN         : in std_logic;      -- 28MHz clock enable for PSG
 
       o_CPU_SPEED          : out std_logic_vector(1 downto 0);    -- cpu speed selection 00 = 3.5, 01 = 7, 10 = 14, 11 = 28
@@ -1682,6 +1688,8 @@ begin
    port map (
       RESET_n     => not reset,     -- in
       CLK_n       => i_CLK_CPU,     -- in
+      CEN_R       => i_CPU_CEN_R,   -- NextTang
+      CEN_F       => i_CPU_CEN_F,   -- NextTang
       WAIT_n      => z80_wait_n,    -- in
       INT_n       => z80_int_n,     -- in
       NMI_n       => z80_nmi_n,     -- in (detection is on rising edge of cpu clock)
@@ -1705,7 +1713,7 @@ begin
 
 --   process (i_CLK_CPU)
 --   begin
---      if rising_edge(i_CLK_CPU) then
+--      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
 --         dma_mreq_n_d <= dma_mreq_n;
 --      end if;
 --   end process;
@@ -1713,6 +1721,8 @@ begin
    port map (
       reset_i        => reset,
       clk_i          => i_CLK_CPU,
+      cen_r_i        => i_CPU_CEN_R,   -- NextTang
+      cen_f_i        => i_CPU_CEN_F,   -- NextTang
       turbo_i        => cpu_speed,
       dma_mode_i     => dma_mode,       -- 0 = zxn dma, 1 = z80 dma
 
@@ -1742,14 +1752,14 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_dma_dat <= port_dma_dat_0;
       end if;
    end process;
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          if reset = '1' then
             dma_mode <= '0';
          elsif port_dma_rd = '1' or port_dma_wr = '1' then
@@ -1830,6 +1840,8 @@ begin
    im2ctl_mod: entity work.im2_control
    port map (
       i_CLK_CPU         => i_CLK_CPU,
+      i_CPU_CEN_R       => i_CPU_CEN_R,   -- NextTang
+      i_CPU_CEN_F       => i_CPU_CEN_F,   -- NextTang
       i_reset           => reset,
       
       i_m1_n            => cpu_m1_n,
@@ -1905,6 +1917,7 @@ begin
    port map (
       i_CLK_28             => i_CLK_28,
       i_CLK_CPU            => i_CLK_CPU,
+      i_CPU_CEN_R          => i_CPU_CEN_R,   -- NextTang
       i_reset              => reset,
       
       i_m1_n               => cpu_m1_n,
@@ -1939,7 +1952,7 @@ begin
 
    process (i_CLK_CPU)
    begin
-      if rising_edge(i_CLK_CPU) then
+      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          if reset = '1' then
             im2_dma_delay <= '0';
          else
@@ -1973,7 +1986,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if rising_edge(i_CLK_CPU) then
+      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          if pulse_int_n = '1' then
             pulse_count <= (others => '0');
          elsif pulse_count_end = '0' then
@@ -2010,7 +2023,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if rising_edge(i_CLK_CPU) then
+      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          if reset = '1' or nr_c0_stackless_nmi = '0' then
             z80_stackless_retn_en <= '0';
          elsif Z80N_command_s = NMIACK_LSB then
@@ -2089,7 +2102,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if rising_edge(i_CLK_CPU) then
+      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          if reset = '1' then
             nmi_state <= S_NMI_IDLE;
          elsif nr_03_config_mode = '1' then
@@ -3219,14 +3232,14 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_103b_dat <= "1111111" & (i_I2C_SCL_n and pi_i2c1_scl);
       end if;
    end process;
 
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_113b_dat <= "1111111" & (i_I2C_SDA_n and pi_i2c1_sda);
       end if;
    end process;
@@ -3246,6 +3259,8 @@ begin
    spi_master_mod: entity work.spi_master   --not changed for 3.02 . not needed in mister the changes
    port map (
       clock_i        => i_CLK_CPU,
+      cen_r_i        => i_CPU_CEN_R,   -- NextTang
+      cen_f_i        => i_CPU_CEN_F,   -- NextTang
       reset_i        => '0',           -- hard_reset done through core load
       
       spi_sck_o      => spi_sck,
@@ -3381,7 +3396,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_uart_dat <= uart_do;
       end if;
    end process;
@@ -3409,7 +3424,7 @@ begin
 
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          keyrow <= cpu_a(15 downto 8);
       end if;
    end process;
@@ -3418,7 +3433,7 @@ begin
 
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          if expbus_eff_en = '0' or port_propagate_fe = '0' or port_fe_override = '0' then
             port_fe_dat_0 <= '1' & ((i_AUDIO_EAR xor pi_fe_ear) or (port_fe_ear or (port_fe_mic and nr_08_keyboard_issue2))) & '1' & i_KBD_COL;
          else
@@ -3459,14 +3474,14 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_1f_dat <= joyL_1f or joyR_1f;
       end if;
    end process;
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_37_dat <= joyL_37 or joyR_37;
       end if;
    end process;
@@ -3506,21 +3521,21 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_fbdf_dat <= i_MOUSE_X;
       end if;
    end process;
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_ffdf_dat <= i_MOUSE_Y;
       end if;
    end process;
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_fadf_dat <= i_MOUSE_WHEEL & '1' & (not i_MOUSE_BUTTON(2)) & (not i_MOUSE_BUTTON(0)) & (not i_MOUSE_BUTTON(1));
       end if;
    end process;
@@ -3564,7 +3579,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_fe_border <= port_fe_reg(2 downto 0);
       end if;
    end process;
@@ -3590,7 +3605,7 @@ begin
 
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_ff_dat_tmx <= port_ff_reg;
       end if;
    end process;
@@ -3639,7 +3654,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_7ffd_dat <= port_7ffd_reg;
       end if;
    end process;
@@ -3878,7 +3893,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_123b_dat <= port_123b_layer2_map_segment & "00" & port_123b_layer2_map_shadow & port_123b_layer2_map_rd_en & port_123b_layer2_en & port_123b_layer2_map_wr_en;
       end if;
    end process;
@@ -4043,7 +4058,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_ctc_dat <= ctc_do;
       end if;
    end process;
@@ -4255,7 +4270,7 @@ begin
 
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          if nr_0a_mf_type = "00" then     -- mf +3
             case cpu_a(15 downto 12) is
                when "0001" => mf_port_dat <= port_1ffd_reg;
@@ -4386,6 +4401,7 @@ begin
       i_CLK_7                 => i_CLK_7,
       i_CLK_14                => i_CLK_14,
       i_CLK_CPU               => i_CLK_CPU,
+      i_CPU_CEN_R             => i_CPU_CEN_R,   -- NextTang
       
       i_cpu_mreq_n            => cpu_mreq_n,
       i_cpu_iorq_n            => cpu_iorq_n,
@@ -4446,7 +4462,7 @@ begin
 
    process (i_CLK_CPU)
    begin
-      if rising_edge(i_CLK_CPU) then
+      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          if mem_contend = '1' and cpu_mreq_n = '0' then
             if cpu_rd_n = '0' then
                p3_floating_bus_dat <= cpu_di;
@@ -5747,7 +5763,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if rising_edge(i_CLK_CPU) then
+      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          if reset = '1' then
          
             cpu_speed <= "00";
@@ -5822,7 +5838,7 @@ begin
 
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_253b_dat_0 <= port_253b_dat;
       end if;
    end process;
@@ -6340,7 +6356,7 @@ begin
 
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          port_fffd_dat <= psg_dat;
       end if;
    end process;

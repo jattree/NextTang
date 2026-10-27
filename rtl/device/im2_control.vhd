@@ -45,6 +45,8 @@ use ieee.std_logic_unsigned.all;
 entity im2_control is
    port (
       i_CLK_CPU         : in std_logic;
+      i_CPU_CEN_R       : in std_logic := '1';   -- NextTang: i_CLK_CPU edge enables
+      i_CPU_CEN_F       : in std_logic := '1';
       i_reset           : in std_logic;
       
       i_m1_n            : in std_logic;
@@ -95,7 +97,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if rising_edge(i_CLK_CPU) then
+      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          if i_reset = '1' then
             ifetch_d <= '0';
          else
@@ -110,7 +112,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if rising_edge(i_CLK_CPU) then
+      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          if i_reset = '1' then
             cpu_opcode <= (others => '0');
          elsif ifetch = '1' then
@@ -146,7 +148,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if rising_edge(i_CLK_CPU) then
+      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          if i_reset = '1' then
             state <= S_0;
          else
@@ -217,7 +219,7 @@ begin
    
    process (i_CLK_CPU)
    begin
-      if falling_edge(i_CLK_CPU) then
+      if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          if i_reset = '1' then
             im_mode <= (others => '0');
          elsif state = S_ED_T4 and ifetch_fe_t3 = '1' and cpu_opcode(7 downto 6) = "01" and cpu_opcode(2 downto 0) = "110" then

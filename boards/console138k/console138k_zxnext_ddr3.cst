@@ -175,3 +175,23 @@ CLOCK_LOC "clock_28" BUFG = CLK;
 CLOCK_LOC "clock_28_n" BUFG = CLK;
 CLOCK_LOC "clock_14" BUFG = CLK;
 CLOCK_LOC "clock_7" BUFG = CLK;
+
+// SD socket on the core's SPI, as in console138k_classic_loader_extra.cst.
+IO_LOC "sd_miso" AA15;
+IO_PORT "sd_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "sd_clk" V15;
+IO_PORT "sd_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "sd_cs" W15;
+IO_PORT "sd_cs" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "sd_mosi" Y16;
+IO_PORT "sd_mosi" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+
+// USB-A sockets for the direct hosts, as in console138k_spectrum128_usb_ddr3_extra.cst.
+IO_LOC "usb1_dp" H13;
+IO_PORT "usb1_dp" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb1_dn" G13;
+IO_PORT "usb1_dn" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb2_dp" M15;
+IO_PORT "usb2_dp" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "usb2_dn" M16;
+IO_PORT "usb2_dn" IO_TYPE=LVCMOS33 DRIVE=8;

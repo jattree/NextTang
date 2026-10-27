@@ -36,6 +36,7 @@ entity peripherals is
    port (
       i_CLK_28             : in std_logic;
       i_CLK_CPU            : in std_logic;
+      i_CPU_CEN_R          : in std_logic := '1';   -- NextTang: i_CLK_CPU edge enable
       i_reset              : in std_logic;
       
       i_m1_n               : in std_logic;
@@ -94,6 +95,7 @@ begin
       port map (
          i_CLK_28                => i_CLK_28,
          i_CLK_CPU               => i_CLK_CPU,
+         i_CPU_CEN_R             => i_CPU_CEN_R,
          i_reset                 => i_reset,
       
          i_m1_n                  => i_m1_n,

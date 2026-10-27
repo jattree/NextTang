@@ -11,6 +11,12 @@
 // the upstream ULA on its own 7 to 14 MHz paths.  Dividing from one source with
 // one reset makes the relationship the constraints declare a real one.
 //
+// Phases are counted in VCO periods against the output divider, so they move
+// whenever the divider does. CLKOUT3's 13 + 4/8 was 180 degrees against the
+// 27 MHz input's divider of 27 and was left unchanged when the divider became
+// 25, which put clock_28_n at 194 degrees, 1.43 ns behind its constraint, from
+// August to October 2026. Against 25 it is 12 + 4/8.
+//
 // The 50 MHz board clock on V22 is used rather than the Dock's 27 MHz on V10,
 // which has no clock-capable routing on this device.  Integer dividers reach
 // the machine frequencies exactly from 50 MHz, so nothing is lost by it.
@@ -113,7 +119,7 @@ module nexttang_console138k_machine_pll (
     defparam pll.CLKOUT1_PE_FINE = 0;
     defparam pll.CLKOUT2_PE_COARSE = 0;
     defparam pll.CLKOUT2_PE_FINE = 0;
-    defparam pll.CLKOUT3_PE_COARSE = 13;
+    defparam pll.CLKOUT3_PE_COARSE = 12;
     defparam pll.CLKOUT3_PE_FINE = 4;
 
     // Both dividers take the same high speed clock and come out of the same

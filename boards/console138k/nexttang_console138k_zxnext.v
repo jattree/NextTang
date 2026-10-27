@@ -15,6 +15,10 @@
 // With NEXTTANG_ZXNEXT_DDR3 defined, the whole 2 MB space lives in DDR3
 // behind the hardware-verified CPU memory service, and the machine is held in
 // reset until the controller calibrates.
+//
+// With NEXTTANG_ZXNEXT_IO defined, the core's own SPI drives the SD socket and
+// the two USB-A sockets carry the direct USB hosts. A keyboard is scanned into
+// the core's keyboard port and a gamepad becomes the left joystick.
 
 `default_nettype none
 
@@ -48,6 +52,17 @@ module `NEXTTANG_ZXNEXT_TOP (
     inout  wire [3:0]  ddr_dqs,
     inout  wire [3:0]  ddr_dqs_n
 `endif
+`ifdef NEXTTANG_ZXNEXT_IO
+    ,
+    output wire        sd_clk,
+    output wire        sd_mosi,
+    output wire        sd_cs,
+    input  wire        sd_miso,
+    inout  wire        usb1_dp,
+    inout  wire        usb1_dn,
+    inout  wire        usb2_dp,
+    inout  wire        usb2_dn
+`endif
 );
     // ----------------------------------------------------------------- clocks
     wire serial_clock;
@@ -65,8 +80,9 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire clock_28_n;
     wire clock_14;
     wire clock_7;
-    wire clock_3m5;
-    wire cpu_clock;
+    wire cpu_rising_enable;
+    wire cpu_falling_enable;
+    wire cpu_enables_locked;
     wire psg_enable;
     wire machine_reset;
     wire machine_locked;
@@ -118,18 +134,27 @@ module `NEXTTANG_ZXNEXT_TOP (
         .force_reset(1'b0),
         .memory_calibrated(calibration_complete),
         .memory_fault(memory_fault),
-        .cpu_clock_lsb(cpu_clock_lsb),
-        .cpu_contend(cpu_contend),
-        .cpu_speed(cpu_speed),
         .clock_28(clock_28),
         .clock_28_n(clock_28_n),
         .clock_14(clock_14),
         .clock_7(clock_7),
-        .clock_3m5(clock_3m5),
-        .cpu_clock(cpu_clock),
         .psg_enable(psg_enable),
         .machine_reset(machine_reset),
         .clock_locked(machine_locked)
+    );
+
+    // The CPU runs on clock_28. These enables mark where its rising and
+    // falling edges would have been, at the speed the core asks for and with
+    // 3.5 MHz contention, by MiSTer's rules.
+    nexttang_zxnext_cpu_enables cpu_enables (
+        .i_CLK_28(clock_28),
+        .i_CLK_7(clock_7),
+        .i_CPU_SPEED(cpu_speed),
+        .i_CPU_CONTEND(cpu_contend),
+        .i_CPU_CLK_LSB(cpu_clock_lsb),
+        .o_CEN_R(cpu_rising_enable),
+        .o_CEN_F(cpu_falling_enable),
+        .o_LOCKED(cpu_enables_locked)
     );
 
     // ------------------------------------------------------------------- core
@@ -137,6 +162,13 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire        ram_a_request;
     wire        ram_a_cycle_request;
     wire        cpu_wait;
+    wire [7:0]  keyboard_rows;
+    wire [4:0]  keyboard_columns;
+    wire [11:0] left_joystick;
+    wire        spi_clock;
+    wire        spi_mosi;
+    wire        spi_sd0_select_n;
+    wire        spi_sd_miso;
     wire        ram_a_read_n;
     wire [7:0]  ram_a_write_data;
     wire [7:0]  ram_a_read_data;
@@ -161,7 +193,9 @@ module `NEXTTANG_ZXNEXT_TOP (
         .i_CLK_28_n(clock_28_n),
         .i_CLK_14(clock_14),
         .i_CLK_7(clock_7),
-        .i_CLK_CPU(cpu_clock),
+        .i_CLK_CPU(clock_28),
+        .i_CPU_CEN_R(cpu_rising_enable),
+        .i_CPU_CEN_F(cpu_falling_enable),
         .i_CLK_PSG_EN(psg_enable),
         .o_CPU_SPEED(cpu_speed),
         .o_CPU_CONTEND(cpu_contend),
@@ -179,16 +213,15 @@ module `NEXTTANG_ZXNEXT_TOP (
         .i_SPKEY_FUNCTION(10'b0),
         .i_SPKEY_BUTTONS(2'b0),
 
-        // No keyboard yet: every column reads released.
         .o_KBD_CANCEL(),
-        .o_KBD_ROW(),
-        .i_KBD_COL(5'b11111),
+        .o_KBD_ROW(keyboard_rows),
+        .i_KBD_COL(keyboard_columns),
         .i_KBD_EXTENDED_KEYS(16'hffff),
         .o_KEYMAP_ADDR(),
         .o_KEYMAP_DATA(),
         .o_KEYMAP_WE(),
         .o_JOYMAP_WE(),
-        .i_JOY_LEFT(12'b0),
+        .i_JOY_LEFT(left_joystick),
         .i_JOY_RIGHT(12'b0),
         .o_JOY_IO_MODE_EN(),
         .o_JOY_IO_MODE_PIN_7(),
@@ -206,13 +239,12 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_I2C_SCL_n(),
         .o_I2C_SDA_n(),
 
-        // No SD card yet: MISO idles high, as an empty socket does.
         .o_SPI_SS_FLASH_n(),
         .o_SPI_SS_SD1_n(),
-        .o_SPI_SS_SD0_n(),
-        .o_SPI_SCK(),
-        .o_SPI_MOSI(),
-        .i_SPI_SD_MISO(1'b1),
+        .o_SPI_SS_SD0_n(spi_sd0_select_n),
+        .o_SPI_SCK(spi_clock),
+        .o_SPI_MOSI(spi_mosi),
+        .i_SPI_SD_MISO(spi_sd_miso),
         .i_SPI_FLASH_MISO(1'b1),
 
         .i_UART0_RX(1'b1),
@@ -291,6 +323,183 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_GPIO(),
         .o_GPIO_EN()
     );
+
+    // ------------------------------------------------------------ keyboard, SD
+`ifdef NEXTTANG_ZXNEXT_IO
+    // The core's own SPI master reaches the SD socket directly. Without a card,
+    // the pulled-up MISO reads 0xff, as an empty socket does.
+    assign sd_clk = spi_clock;
+    assign sd_mosi = spi_mosi;
+    assign sd_cs = spi_sd0_select_n;
+    assign spi_sd_miso = sd_miso;
+
+    wire usb_clock;
+    wire usb_pll_locked;
+
+    nexttang_console138k_usb_pll usb_pll (
+        .clock_in(sys_clk), .clock_60(usb_clock), .locked(usb_pll_locked)
+    );
+
+    wire [1:0] usb1_type, usb2_type;
+    wire [7:0] usb1_modifiers, usb2_modifiers;
+    wire [7:0] usb1_key1, usb1_key2, usb1_key3, usb1_key4, usb1_key5, usb1_key6;
+    wire [7:0] usb2_key1, usb2_key2, usb2_key3, usb2_key4, usb2_key5, usb2_key6;
+    wire usb1_dm_out, usb1_dp_out, usb1_output_enable;
+    wire usb2_dm_out, usb2_dp_out, usb2_output_enable;
+    wire [9:0] usb1_rom_address, usb2_rom_address;
+    wire [3:0] usb1_rom_data, usb2_rom_data;
+    wire usb1_rom_enable, usb2_rom_enable;
+    wire usb1_game_left, usb1_game_right, usb1_game_up, usb1_game_down;
+    wire usb1_game_a, usb1_game_b, usb1_game_x, usb1_game_y;
+    wire usb2_game_left, usb2_game_right, usb2_game_up, usb2_game_down;
+    wire usb2_game_a, usb2_game_b, usb2_game_x, usb2_game_y;
+    wire usb1_game_select, usb1_game_start, usb2_game_select, usb2_game_start;
+    wire [3:0] usb1_game_extra, usb2_game_extra;
+
+    // A device already plugged in when the FPGA loads keeps the address an
+    // earlier host gave it, so it never answers this one and stays absent
+    // until it is unplugged. Driving both lines low (SE0) for 30 ms at
+    // start-up is a USB bus reset, which returns it to address 0. The hosts
+    // come out of reset 10 ms before the lines are released, so they see the
+    // device connect.
+    localparam integer USB_HOST_RELEASE = 1200000;  // 20 ms at 60 MHz
+    localparam integer USB_BUS_RELEASE = 1800000;   // 30 ms
+    reg [20:0] usb_startup = 21'd0;
+    wire usb_bus_reset = usb_startup < USB_BUS_RELEASE;
+    wire usb_host_reset = !usb_pll_locked || usb_startup < USB_HOST_RELEASE;
+
+    always @(posedge usb_clock or negedge usb_pll_locked) begin
+        if (!usb_pll_locked)
+            usb_startup <= 21'd0;
+        else if (usb_bus_reset)
+            usb_startup <= usb_startup + 1'b1;
+    end
+
+    assign usb1_dn = usb_bus_reset ? 1'b0 : usb1_output_enable ? usb1_dm_out : 1'bz;
+    assign usb1_dp = usb_bus_reset ? 1'b0 : usb1_output_enable ? usb1_dp_out : 1'bz;
+    assign usb2_dn = usb_bus_reset ? 1'b0 : usb2_output_enable ? usb2_dm_out : 1'bz;
+    assign usb2_dp = usb_bus_reset ? 1'b0 : usb2_output_enable ? usb2_dp_out : 1'bz;
+
+    // Either socket takes a keyboard or a gamepad.
+    usb_hid_host #(
+        .FULL_SPEED(1), .KEYBOARD_SUPPORT(1), .MOUSE_SUPPORT(0), .GAME_SUPPORT(1)
+    ) usb_host_one (
+        .clk(usb_clock), .reset(usb_host_reset), .cs(1'b1),
+        .usb_dm_i(usb1_dn), .usb_dp_i(usb1_dp),
+        .usb_dm_o(usb1_dm_out), .usb_dp_o(usb1_dp_out),
+        .usb_oe(usb1_output_enable),
+        .typ(usb1_type), .full_report(), .connerr(), .busy(),
+        .key_modifiers(usb1_modifiers),
+        .key_0(usb1_key1), .key_1(usb1_key2), .key_2(usb1_key3),
+        .key_3(usb1_key4), .key_4(usb1_key5), .key_5(usb1_key6),
+        .mouse_btn(), .mouse_dx(), .mouse_dy(),
+        .game_l(usb1_game_left), .game_r(usb1_game_right),
+        .game_u(usb1_game_up), .game_d(usb1_game_down),
+        .game_a(usb1_game_a), .game_b(usb1_game_b),
+        .game_x(usb1_game_x), .game_y(usb1_game_y),
+        .game_sel(usb1_game_select), .game_sta(usb1_game_start),
+        .game_extra(usb1_game_extra),
+        .dbg_hid_report(), .dbg_hid_regs(), .dbg_byte_strobe(),
+        .dbg_packet_valid(), .dbg_config_snapshot(),
+        .dbg_config_snapshot_valid(), .dbg_full_speed(), .dbg_speed_sample(),
+        .rom_addr(usb1_rom_address), .rom_dout(usb1_rom_data),
+        .rom_en(usb1_rom_enable)
+    );
+
+    usb_hid_host #(
+        .FULL_SPEED(1), .KEYBOARD_SUPPORT(1), .MOUSE_SUPPORT(0), .GAME_SUPPORT(1)
+    ) usb_host_two (
+        .clk(usb_clock), .reset(usb_host_reset), .cs(1'b1),
+        .usb_dm_i(usb2_dn), .usb_dp_i(usb2_dp),
+        .usb_dm_o(usb2_dm_out), .usb_dp_o(usb2_dp_out),
+        .usb_oe(usb2_output_enable),
+        .typ(usb2_type), .full_report(), .connerr(), .busy(),
+        .key_modifiers(usb2_modifiers),
+        .key_0(usb2_key1), .key_1(usb2_key2), .key_2(usb2_key3),
+        .key_3(usb2_key4), .key_4(usb2_key5), .key_5(usb2_key6),
+        .mouse_btn(), .mouse_dx(), .mouse_dy(),
+        .game_l(usb2_game_left), .game_r(usb2_game_right),
+        .game_u(usb2_game_up), .game_d(usb2_game_down),
+        .game_a(usb2_game_a), .game_b(usb2_game_b),
+        .game_x(usb2_game_x), .game_y(usb2_game_y),
+        .game_sel(usb2_game_select), .game_sta(usb2_game_start),
+        .game_extra(usb2_game_extra),
+        .dbg_hid_report(), .dbg_hid_regs(), .dbg_byte_strobe(),
+        .dbg_packet_valid(), .dbg_config_snapshot(),
+        .dbg_config_snapshot_valid(), .dbg_full_speed(), .dbg_speed_sample(),
+        .rom_addr(usb2_rom_address), .rom_dout(usb2_rom_data),
+        .rom_en(usb2_rom_enable)
+    );
+
+    usb_hid_host_dual_rom usb_microcode (
+        .clk(usb_clock),
+        .addra(usb1_rom_address), .douta(usb1_rom_data), .ena(usb1_rom_enable),
+        .addrb(usb2_rom_address), .doutb(usb2_rom_data), .enb(usb2_rom_enable)
+    );
+
+    wire [39:0] usb1_keys, usb2_keys;
+    wire [4:0] usb1_kempston, usb2_kempston;
+
+    nexttang_usb_keyboard_matrix usb1_key_decode (
+        .device_type(usb1_type), .modifiers(usb1_modifiers),
+        .key1(usb1_key1), .key2(usb1_key2), .key3(usb1_key3),
+        .key4(usb1_key4), .key5(usb1_key5), .key6(usb1_key6), .keys(usb1_keys)
+    );
+    nexttang_usb_keyboard_matrix usb2_key_decode (
+        .device_type(usb2_type), .modifiers(usb2_modifiers),
+        .key1(usb2_key1), .key2(usb2_key2), .key3(usb2_key3),
+        .key4(usb2_key4), .key5(usb2_key5), .key6(usb2_key6), .keys(usb2_keys)
+    );
+    nexttang_usb_gamepad_kempston usb1_game_decode (
+        .device_type(usb1_type),
+        .left(usb1_game_left), .right(usb1_game_right),
+        .up(usb1_game_up), .down(usb1_game_down),
+        .a(usb1_game_a), .b(usb1_game_b), .x(usb1_game_x), .y(usb1_game_y),
+        .select_button(usb1_game_select), .start_button(usb1_game_start),
+        .extra_buttons(usb1_game_extra), .joystick(usb1_kempston)
+    );
+    nexttang_usb_gamepad_kempston usb2_game_decode (
+        .device_type(usb2_type),
+        .left(usb2_game_left), .right(usb2_game_right),
+        .up(usb2_game_up), .down(usb2_game_down),
+        .a(usb2_game_a), .b(usb2_game_b), .x(usb2_game_x), .y(usb2_game_y),
+        .select_button(usb2_game_select), .start_button(usb2_game_start),
+        .extra_buttons(usb2_game_extra), .joystick(usb2_kempston)
+    );
+
+    // Key and joystick state crosses into the 28 MHz machine domain on two
+    // flops. Each bit is independent, so a key changing mid-crossing is seen
+    // at most one cycle late, never as a phantom key.
+    reg [39:0] keys_meta = 40'b0;
+    reg [39:0] keys_sync = 40'b0;
+    reg [4:0] kempston_meta = 5'b0;
+    reg [4:0] kempston_sync = 5'b0;
+
+    always @(posedge clock_28) begin
+        keys_meta <= usb1_keys | usb2_keys;
+        keys_sync <= keys_meta;
+        kempston_meta <= usb1_kempston | usb2_kempston;
+        kempston_sync <= kempston_meta;
+    end
+
+    nexttang_keyboard_matrix keyboard_scan (
+        .row_select(keyboard_rows),
+        .keys(keys_sync),
+        .columns(keyboard_columns)
+    );
+
+    // Kempston's fire, up, down, left and right already sit where the core's
+    // joystick word puts B, U, D, L and R.
+    assign left_joystick = {7'b0, kempston_sync};
+    wire keyboard_connected = usb1_type == 2'd1 || usb2_type == 2'd1;
+    wire input_active = |keys_sync || |kempston_sync;
+`else
+    assign keyboard_columns = 5'b11111;
+    assign left_joystick = 12'b0;
+    assign spi_sd_miso = 1'b1;
+    wire keyboard_connected = 1'b0;
+    wire input_active = 1'b0;
+`endif
 
     // ---------------------------------------------------------- main memory
 `ifdef NEXTTANG_ZXNEXT_DDR3
@@ -652,8 +861,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         end
     end
 
-    // The first captured pixel of each frame is top-left border, so it reports
-    // the border colour the diagnostic set: green on pass, red on failure.
+    // The core's HDMI window begins with 16 pixels of blanking, so the border
+    // colour is sampled further in, at (24, 8), which is border in every mode.
     reg [8:0] border_rgb = 9'b0;
     reg frame_seen = 1'b0;
     reg lit_pixel_seen = 1'b0;
@@ -664,10 +873,10 @@ module `NEXTTANG_ZXNEXT_TOP (
             frame_seen <= 1'b0;
             lit_pixel_seen <= 1'b0;
         end else begin
-            if (capture_frame_start) begin
-                border_rgb <= capture_pixel;
+            if (capture_frame_start)
                 frame_seen <= 1'b1;
-            end
+            if (capture_pixel_valid && capture_x == 9'd24 && capture_y == 9'd8)
+                border_rgb <= capture_pixel;
             if (capture_pixel_valid && capture_pixel != 9'b0)
                 lit_pixel_seen <= 1'b1;
         end
@@ -679,16 +888,17 @@ module `NEXTTANG_ZXNEXT_TOP (
         frame_seen, test_window_write_seen, opcode_seen,
         lit_pixel_seen, !machine_reset, video_pll_locked
     };
-    // Last opcode address, border colour, CPU speed, capture and scaler
-    // faults, then the memory service's timeout, overrun and calibration loss.
+    // Last opcode address, border colour, USB keyboard connected, any key or
+    // joystick input held, capture and scaler faults, then the memory
+    // service's timeout, overrun and calibration loss.
 `ifdef NEXTTANG_ZXNEXT_DDR3
     wire [2:0] memory_faults = {fault_timeout, fault_overrun, fault_calibration_lost};
 `else
     wire [2:0] memory_faults = 3'b0;
 `endif
     wire [31:0] status_value = {
-        opcode_address, border_rgb, cpu_speed, capture_protocol_error,
-        scaled_overrun, memory_faults
+        opcode_address, border_rgb, keyboard_connected, input_active,
+        capture_protocol_error, scaled_overrun, memory_faults
     };
 
     nexttang_debug_status_uart #(

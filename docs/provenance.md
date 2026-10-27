@@ -52,6 +52,24 @@ with an all-ones aggregate, which is what the "full - 2 bytes" comment
 describes. The flag drives the UART receivers' RTR line when hardware flow
 control is enabled. NextNano carries the same replacement in its Gowin build.
 
+On 2026-10-27 nine files gain clock enables for the CPU's own clock, so the
+Console 138K can run the CPU on `i_CLK_28` instead of a separate CPU clock:
+`rtl/zxnext.vhd`, `rtl/cpu/t80na.vhd`, `rtl/device/dma.vhd`,
+`rtl/device/im2_control.vhd`, `rtl/device/im2_device.vhd`,
+`rtl/device/im2_peripheral.vhd`, `rtl/device/peripherals.vhd`,
+`rtl/serial/spi_master.vhd` and `rtl/video/zxula.vhd`. Each process clocked
+on an edge of the CPU clock gains a condition on a new enable input,
+`rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1'` or the falling-edge equivalent
+with `i_CPU_CEN_F`, and the inputs are passed down to the submodules that hold
+such processes. In `t80na.vhd` the wrapper's own processes are gated the same
+way and the inner T80N's existing `CEN` becomes `Spec256_cen and CEN_R`. Every
+new input defaults to `'1'`, so a board that supplies a real CPU clock and
+leaves them unconnected gets the upstream core unchanged; a simulation of the
+whole core shows identical outputs on every 28 MHz edge for 4.5 million cycles
+in that configuration. The reason, the enable generator and the equivalence
+evidence are in the project wiki under
+`raw/zxnext-single-clock-cpu-2026-10-27.md`.
+
 ## Reference projects
 
 These are read for their answers to device-specific questions. Nothing is

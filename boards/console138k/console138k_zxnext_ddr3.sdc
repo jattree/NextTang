@@ -15,22 +15,35 @@ create_clock -name clock_28 -period 35.714 [get_pins {clock_tree/machine_pll/pll
 create_clock -name clock_28_n -period 35.714 -waveform {17.857 35.714} [get_pins {clock_tree/machine_pll/pll/CLKOUT3}]
 create_generated_clock -name clock_14 -source [get_pins {clock_tree/machine_pll/pll/CLKOUT0}] -divide_by 2 [get_pins {clock_tree/machine_pll/divider_14/CLKOUT}]
 create_generated_clock -name clock_7 -source [get_pins {clock_tree/machine_pll/pll/CLKOUT0}] -divide_by 4 [get_pins {clock_tree/machine_pll/divider_7/CLKOUT}]
-create_clock -name cpu_clock -period 35.714 [get_pins {clock_tree/cpu_clock_mux/cpu_clock_selector/CLKOUT}]
+# There is no CPU clock. The core's CPU runs on clock_28 with clock enables
+# (rtl/clock/nexttang_zxnext_cpu_enables.vhd), so every CPU path is a clock_28
+# path, timed at 28 MHz with the half-cycle paths between its two edges. A CPU
+# clock made in fabric and selected through a DCS was never analysed: Gowin
+# starts a generated clock at zero at its own pin and does not propagate a
+# clock through a DCS, and its real delay of 2 to 5 ns broke hold on the CPU's
+# I/O read-back (raw/zxnext-clock-model-gap-2026-10-27.md).
 
 # DDR3: Sipeed's generated controller runs its memory interface at 400 MHz and
 # its user side at 100 MHz. Neither has a timed path to any other clock; the
 # CPU memory service crosses into the controller domain through the CDC bridge.
 create_clock -name memory_clock -period 2.500 [get_nets {memory_clock}]
 create_clock -name controller_clock -period 10.000 [get_pins {ddr3/gw3_top/u_ddr_phy_top/fclkdiv/CLKOUT}]
-set_clock_groups -asynchronous -group [get_clocks {memory_clock}] -group [get_clocks {sys_clk serial_clock pixel_clock clock_28 clock_28_n clock_14 clock_7 cpu_clock controller_clock}]
-set_clock_groups -asynchronous -group [get_clocks {controller_clock}] -group [get_clocks {sys_clk serial_clock pixel_clock clock_28 clock_28_n clock_14 clock_7 cpu_clock}]
+set_clock_groups -asynchronous -group [get_clocks {memory_clock}] -group [get_clocks {sys_clk serial_clock pixel_clock clock_28 clock_28_n clock_14 clock_7 controller_clock}]
+set_clock_groups -asynchronous -group [get_clocks {controller_clock}] -group [get_clocks {sys_clk serial_clock pixel_clock clock_28 clock_28_n clock_14 clock_7}]
+
+# The USB hosts run on their own 60 MHz PLL. Key and joystick state reaches
+# the machine domain only through two-flop synchronisers.
+create_clock -name usb_clock -period 16.667 [get_pins {usb_pll/pll/CLKOUT0}]
+set_clock_groups -asynchronous -group [get_clocks {usb_clock}] -group [get_clocks {sys_clk serial_clock pixel_clock clock_28 clock_28_n clock_14 clock_7 memory_clock controller_clock}]
+set_false_path -to [get_regs {keys_meta*}]
+set_false_path -to [get_regs {kempston_meta*}]
 
 # The frame buffer's toggle handshakes are the only boundary between the 50 Hz
 # machine raster and 720p60. Each control signal is synchronised twice; bank
 # identifiers are held stable by their toggle until acknowledged.
 set_clock_groups -asynchronous -group [get_clocks {sys_clk}] -group [get_clocks {serial_clock pixel_clock}]
-set_clock_groups -asynchronous -group [get_clocks {sys_clk}] -group [get_clocks {clock_28 clock_28_n clock_14 clock_7 cpu_clock}]
-set_clock_groups -asynchronous -group [get_clocks {serial_clock pixel_clock}] -group [get_clocks {clock_28 clock_28_n clock_14 clock_7 cpu_clock}]
+set_clock_groups -asynchronous -group [get_clocks {sys_clk}] -group [get_clocks {clock_28 clock_28_n clock_14 clock_7}]
+set_clock_groups -asynchronous -group [get_clocks {serial_clock pixel_clock}] -group [get_clocks {clock_28 clock_28_n clock_14 clock_7}]
 
 set_false_path -to [get_regs {scaler/acknowledge_meta*}]
 set_false_path -to [get_regs {scaler/read_bank_meta*}]
@@ -51,7 +64,7 @@ set_false_path -to [get_regs {status_uart/flags_meta*}]
 # one 8-pixel cell for one frame. Setup on these paths has more than 35 ns of
 # slack, so this removes only the hold check. Every other path in the core
 # stays timed.
-set_false_path -from [get_regs {core/nr_26_ula_scrollx* core/nr_27_ula_scrolly*}] -to [get_regs {core/ula_mod/px* core/ula_mod/py*}]
+set_false_path -from [get_regs {core/nr_26_ula_scrollx* core/nr_27_ula_scrolly*}] -to [get_regs {core/ula_mod/px* core/ula_mod/py*}] -hold
 
 # Reset release happens once while nothing is running.
 set_false_path -from [get_regs {pixel_reset_shift*}]

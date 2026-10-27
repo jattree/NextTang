@@ -85,6 +85,8 @@ entity T80Na is
    port(
       RESET_n  : in    std_logic;
       CLK_n    : in    std_logic;
+      CEN_R    : in    std_logic := '1';  -- NextTang: CLK_n rising-edge enable
+      CEN_F    : in    std_logic := '1';  -- NextTang: CLK_n falling-edge enable
       WAIT_n   : in    std_logic;
       INT_n    : in    std_logic;
       NMI_n    : in    std_logic;
@@ -175,7 +177,7 @@ architecture rtl of T80Na is
 
 begin
 
-   CEN <= Spec256_cen;
+   CEN <= Spec256_cen and CEN_R;
 
    BUSAK_n <= BUSAK_n_i;                                    -- 30/10/19 Charlie Ingley - IORQ/RD/WR changes
    MREQ_rw <= MREQ and (Req_Inhibit or MReq_Inhibit);             --          added MREQ timing control
@@ -205,7 +207,7 @@ begin
    begin
       if RESET_n = '0' then
          Reset_s <= '0';
-      elsif CLK_n'event and CLK_n = '1' then
+      elsif CLK_n'event and CLK_n = '1' and CEN_R = '1' then
          Reset_s <= '1';
       end if;
    end process;
@@ -275,7 +277,7 @@ begin
 
    process (CLK_n)
    begin
-      if CLK_n'event and CLK_n = '0' then
+      if CLK_n'event and CLK_n = '0' and CEN_F = '1' then
          if TState = "011" and BUSAK_n_i = '1' then
 --          DI_Reg <= to_x01(D);
             DI_Reg <= D_i;
@@ -288,7 +290,7 @@ begin
    begin
       if Reset_s = '0' then         
          WR_t2 <= '0';
-      elsif CLK_n'event and CLK_n = '0' then
+      elsif CLK_n'event and CLK_n = '0' and CEN_F = '1' then
          if MCycle /= "001" then 
                if TState = "010" then  -- WR starts on falling edge of T2 for MREQ
                   WR_t2 <=  Write;
@@ -305,7 +307,7 @@ begin
    begin
       if Reset_s = '0' then
          Req_Inhibit <= '1';  -- Charlie Ingley 30/10/19 - changed Req_Inhibit polarity
-      elsif CLK_n'event and CLK_n = '1' then
+      elsif CLK_n'event and CLK_n = '1' and CEN_R = '1' then
          if MCycle = "001" and TState = "010" and WAIT_n = '1' then  -- by Fabio Belavenuto - fix behavior of Wait_n
             Req_Inhibit <= '0';
          else
@@ -319,7 +321,7 @@ begin
    begin
       if Reset_s = '0' then
          MReq_Inhibit <= '1'; -- Charlie Ingley 30/10/19 - changed Req_Inhibit polarity
-      elsif CLK_n'event and CLK_n = '0' then
+      elsif CLK_n'event and CLK_n = '0' and CEN_F = '1' then
          if MCycle = "001" and TState = "010" and WAIT_n = '1' then  -- by Fabio Belavenuto - fix behavior of Wait_n
             MReq_Inhibit <= '0';
          else
@@ -334,7 +336,7 @@ begin
       if Reset_s = '0' then
          RD <= '0';
          MREQ <= '0';
-      elsif CLK_n'event and CLK_n = '0' then
+      elsif CLK_n'event and CLK_n = '0' and CEN_F = '1' then
          if MCycle = "001" then
             if TState = "001" then
                RD <= IntCycle_n;
@@ -365,7 +367,7 @@ begin
    begin
       if Reset_s = '0' then
          IORQ_int <= '0';
-      elsif CLK_n'event and CLK_n = '1' then
+      elsif CLK_n'event and CLK_n = '1' and CEN_R = '1' then
          if MCycle = "001" then
             if TState = "001" then
                IORQ_int <= not IntCycle_n;
@@ -381,7 +383,7 @@ begin
    begin
       if Reset_s = '0' then
          IORQ_int_inhibit <= "111";
-      elsif CLK_n'event and CLK_n = '0' then
+      elsif CLK_n'event and CLK_n = '0' and CEN_F = '1' then
          if IntCycle_n = '0' then
             if MCycle = "001" then
                IORQ_int_inhibit <= IORQ_int_inhibit(1 downto 0) & '0';
@@ -398,7 +400,7 @@ begin
    begin
       if Reset_s = '0' then
          IORQ_t1 <= '1';
-      elsif CLK_n'event and CLK_n = '0' then 
+      elsif CLK_n'event and CLK_n = '0' and CEN_F = '1' then 
          if TState = "001" then 
             IORQ_t1 <= not IntCycle_n;
          end if;
@@ -413,7 +415,7 @@ begin
    begin
       if RESET_n = '0' then
          IORQ_t2 <= '1';
-      elsif CLK_n'event and CLK_n = '1' then
+      elsif CLK_n'event and CLK_n = '1' and CEN_R = '1' then
          IORQ_t2 <= IORQ_t1;  
       end if;
    end process; 
