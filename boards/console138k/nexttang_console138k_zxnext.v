@@ -1,19 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 NextTang contributors
 //
-// First ZX Spectrum Next image for the Tang Console 138K.
+// ZX Spectrum Next images for the Tang Console 138K.
 //
 // The pinned MiSTer ZXNext core runs on the machine clock tree with the
-// project's diagnostic boot ROM in place of the excluded upstream one. Main
-// memory is a 64 KiB block RAM standing in for the 2 MB SRAM space; addresses
-// alias above it, which is enough for the diagnostic's 16 KiB test window at
-// 0x8000 and nothing more. Layer 2's video port reads zero. The core's own
-// HDMI window is captured at 7 MHz and scaled into the established 720p
-// output, and the status UART reports how far the machine got without HDMI.
+// project's diagnostic boot ROM in place of the excluded upstream one. Layer
+// 2's video port reads zero. The core's own HDMI window is captured at 7 MHz
+// and scaled into the established 720p output, and the status UART reports how
+// far the machine got without HDMI.
+//
+// Main memory depends on the profile. By default it is a 64 KiB block RAM
+// standing in for the 2 MB SRAM space; addresses alias above it, which is
+// enough for the diagnostic's 16 KiB test window at 0x8000 and nothing more.
+// With NEXTTANG_ZXNEXT_DDR3 defined, the whole 2 MB space lives in DDR3
+// behind the hardware-verified CPU memory service, and the machine is held in
+// reset until the controller calibrates.
 
 `default_nettype none
 
-module nexttang_console138k_zxnext (
+`ifndef NEXTTANG_ZXNEXT_TOP
+`define NEXTTANG_ZXNEXT_TOP nexttang_console138k_zxnext
+`endif
+
+module `NEXTTANG_ZXNEXT_TOP (
     input  wire       sys_clk,
     output wire       debug_uart_tx,
     output wire       tmds_clk_p,
@@ -21,6 +30,24 @@ module nexttang_console138k_zxnext (
     output wire [2:0] tmds_d_p,
     output wire [2:0] tmds_d_n,
     output wire       tmds_psv
+`ifdef NEXTTANG_ZXNEXT_DDR3
+    ,
+    output wire [14:0] ddr_addr,
+    output wire [2:0]  ddr_bank,
+    output wire        ddr_cs,
+    output wire        ddr_ras,
+    output wire        ddr_cas,
+    output wire        ddr_we,
+    output wire        ddr_ck,
+    output wire        ddr_ck_n,
+    output wire        ddr_cke,
+    output wire        ddr_odt,
+    output wire        ddr_reset_n,
+    output wire [3:0]  ddr_dm,
+    inout  wire [31:0] ddr_dq,
+    inout  wire [3:0]  ddr_dqs,
+    inout  wire [3:0]  ddr_dqs_n
+`endif
 );
     // ----------------------------------------------------------------- clocks
     wire serial_clock;
@@ -47,11 +74,50 @@ module nexttang_console138k_zxnext (
     wire cpu_contend;
     wire cpu_clock_lsb;
 
+`ifdef NEXTTANG_ZXNEXT_DDR3
+    // ------------------------------------------------------------ DDR3 clocks
+    wire memory_clock;
+    wire memory_reference_clock;
+    wire memory_pll_locked;
+    wire memory_clock_enable;
+    wire controller_clock;
+    wire controller_clock_enable;
+    reg [7:0] controller_reset_shift = 8'b0;
+    wire controller_reset_n = controller_reset_shift[7];
+    wire calibration_complete;
+    wire ddr_reset;
+
+    nexttang_console138k_ddr3_pll memory_pll (
+        .clock_in(sys_clk),
+        .clock_enable(memory_clock_enable),
+        .memory_clock(memory_clock),
+        .reference_clock(memory_reference_clock),
+        .locked(memory_pll_locked)
+    );
+
+    always @(posedge sys_clk or negedge memory_pll_locked) begin
+        if (!memory_pll_locked)
+            controller_reset_shift <= 8'b0;
+        else
+            controller_reset_shift <= {controller_reset_shift[6:0], 1'b1};
+    end
+
+    assign memory_clock_enable = !controller_reset_n || controller_clock_enable;
+
+    wire fault_timeout;
+    wire fault_overrun;
+    wire fault_calibration_lost;
+    wire memory_fault = fault_timeout || fault_overrun || fault_calibration_lost;
+`else
+    wire calibration_complete = 1'b1;
+    wire memory_fault = 1'b0;
+`endif
+
     nexttang_console138k_machine_clock_tree clock_tree (
         .clock_27(sys_clk),
         .force_reset(1'b0),
-        .memory_calibrated(1'b1),
-        .memory_fault(1'b0),
+        .memory_calibrated(calibration_complete),
+        .memory_fault(memory_fault),
         .cpu_clock_lsb(cpu_clock_lsb),
         .cpu_contend(cpu_contend),
         .cpu_speed(cpu_speed),
@@ -69,6 +135,8 @@ module nexttang_console138k_zxnext (
     // ------------------------------------------------------------------- core
     wire [20:0] ram_a_address;
     wire        ram_a_request;
+    wire        ram_a_cycle_request;
+    wire        cpu_wait;
     wire        ram_a_read_n;
     wire [7:0]  ram_a_write_data;
     wire [7:0]  ram_a_read_data;
@@ -179,7 +247,7 @@ module nexttang_console138k_zxnext (
 
         .o_RAM_A_ADDR(ram_a_address),
         .o_RAM_A_REQ(ram_a_request),
-        .o_RAM_A_REQ2(),
+        .o_RAM_A_REQ2(ram_a_cycle_request),
         .i_RAM_A_REQ_ALLOW(1'b0),
         .o_RAM_A_RD_n(ram_a_read_n),
         .i_RAM_A_DI(ram_a_read_data),
@@ -187,7 +255,7 @@ module nexttang_console138k_zxnext (
         .o_RAM_A_CYCLE(),
         .o_RAM_A_RFSH(),
         // Active high. The port defaults to '1', which would hold the CPU.
-        .i_CPU_WAIT(1'b0),
+        .i_CPU_WAIT(cpu_wait),
 
         .o_RAM_B_ADDR(),
         .o_RAM_B_REQ_T(),
@@ -225,10 +293,145 @@ module nexttang_console138k_zxnext (
     );
 
     // ---------------------------------------------------------- main memory
+`ifdef NEXTTANG_ZXNEXT_DDR3
+    // Machine-domain view of calibration. The clock tree already holds the
+    // machine in reset until it rises; the service needs it in its own domain.
+    reg memory_available_meta = 1'b0;
+    reg memory_available = 1'b0;
+
+    always @(posedge clock_28 or negedge machine_locked) begin
+        if (!machine_locked) begin
+            memory_available_meta <= 1'b0;
+            memory_available <= 1'b0;
+        end else begin
+            memory_available_meta <= calibration_complete;
+            memory_available <= memory_available_meta;
+        end
+    end
+
+    wire line_request;
+    wire line_ready;
+    wire line_write;
+    wire [16:0] line_address;
+    wire [127:0] line_write_data;
+    wire [15:0] line_write_enable;
+    wire line_response_valid;
+    wire [127:0] line_read_data;
+
+    nexttang_zxnext_memory_port main_memory (
+        .machine_clock(clock_28),
+        .machine_reset(machine_reset),
+        .memory_available(memory_available),
+        .core_request(ram_a_cycle_request),
+        .core_read_n(ram_a_read_n),
+        .core_address(ram_a_address),
+        .core_write_data(ram_a_write_data),
+        .core_read_data(ram_a_read_data),
+        .core_wait(cpu_wait),
+        .memory_clock(controller_clock),
+        .memory_reset(!controller_reset_n),
+        .line_request(line_request),
+        .line_ready(line_ready),
+        .line_write(line_write),
+        .line_address(line_address),
+        .line_write_data(line_write_data),
+        .line_write_enable(line_write_enable),
+        .line_response_valid(line_response_valid),
+        .line_read_data(line_read_data),
+        .fault_timeout(fault_timeout),
+        .fault_overrun(fault_overrun),
+        .fault_calibration_lost(fault_calibration_lost)
+    );
+
+    wire controller_command_ready;
+    wire [2:0] controller_command;
+    wire controller_command_enable;
+    wire [28:0] controller_address;
+    wire controller_write_data_ready;
+    wire [255:0] controller_write_data;
+    wire controller_write_data_enable;
+    wire controller_write_data_end;
+    wire [31:0] controller_write_data_mask;
+    wire [255:0] controller_read_data;
+    wire controller_read_data_valid;
+    wire controller_read_data_end;
+    wire controller_burst;
+    wire self_refresh_acknowledge;
+    wire refresh_acknowledge;
+
+    nexttang_gowin_ddr3_ui_adapter memory_adapter (
+        .clock(controller_clock),
+        .reset(!controller_reset_n),
+        .line_request(line_request),
+        .line_ready(line_ready),
+        .line_write(line_write),
+        .line_address(line_address),
+        .line_write_data(line_write_data),
+        .line_write_enable(line_write_enable),
+        .line_response_valid(line_response_valid),
+        .line_read_data(line_read_data),
+        .controller_command_ready(controller_command_ready),
+        .controller_command(controller_command),
+        .controller_command_enable(controller_command_enable),
+        .controller_address(controller_address),
+        .controller_write_data_ready(controller_write_data_ready),
+        .controller_write_data(controller_write_data),
+        .controller_write_data_enable(controller_write_data_enable),
+        .controller_write_data_end(controller_write_data_end),
+        .controller_write_data_mask(controller_write_data_mask),
+        .controller_read_data(controller_read_data),
+        .controller_read_data_valid(controller_read_data_valid),
+        .controller_burst(controller_burst)
+    );
+
+    DDR3_Memory_Interface_Top ddr3 (
+        .clk(sys_clk),
+        .pll_stop(controller_clock_enable),
+        .memory_clk(memory_clock),
+        .pll_lock(memory_pll_locked),
+        .rst_n(controller_reset_n),
+        .clk_out(controller_clock),
+        .ddr_rst(ddr_reset),
+        .init_calib_complete(calibration_complete),
+        .cmd_ready(controller_command_ready),
+        .cmd(controller_command),
+        .cmd_en(controller_command_enable),
+        .addr(controller_address),
+        .wr_data_rdy(controller_write_data_ready),
+        .wr_data(controller_write_data),
+        .wr_data_en(controller_write_data_enable),
+        .wr_data_end(controller_write_data_end),
+        .wr_data_mask(controller_write_data_mask),
+        .rd_data(controller_read_data),
+        .rd_data_valid(controller_read_data_valid),
+        .rd_data_end(controller_read_data_end),
+        .sr_req(1'b0),
+        .ref_req(1'b0),
+        .sr_ack(self_refresh_acknowledge),
+        .ref_ack(refresh_acknowledge),
+        .burst(controller_burst),
+        .O_ddr_addr(ddr_addr),
+        .O_ddr_ba(ddr_bank),
+        .O_ddr_cs_n(ddr_cs),
+        .O_ddr_ras_n(ddr_ras),
+        .O_ddr_cas_n(ddr_cas),
+        .O_ddr_we_n(ddr_we),
+        .O_ddr_clk(ddr_ck),
+        .O_ddr_clk_n(ddr_ck_n),
+        .O_ddr_cke(ddr_cke),
+        .O_ddr_odt(ddr_odt),
+        .O_ddr_reset_n(ddr_reset_n),
+        .O_ddr_dqm(ddr_dm),
+        .IO_ddr_dq(ddr_dq),
+        .IO_ddr_dqs(ddr_dqs),
+        .IO_ddr_dqs_n(ddr_dqs_n)
+    );
+`else
     // The core raises o_RAM_A_REQ for exactly one rising 28 MHz edge per
     // memory cycle, so a write lands once. Reads return one 28 MHz cycle after
     // the address, far inside the CPU's own read window at 3.5 MHz.
     wire ram_a_write = ram_a_request && ram_a_read_n;
+    assign cpu_wait = 1'b0;
 
     nexttang_block_ram #(
         .ADDRESS_BITS(16),
@@ -243,6 +446,7 @@ module nexttang_console138k_zxnext (
         .port_b_address(16'b0),
         .port_b_data()
     );
+`endif
 
     // ------------------------------------------------------------------ video
     // The core's RGB and HDMI pixel window leave its 14 MHz pipeline together.
@@ -443,7 +647,7 @@ module nexttang_console138k_zxnext (
                 opcode_count <= opcode_count + 1'b1;
                 opcode_address <= core_bus_address;
             end
-            if (ram_a_write && ram_a_address[15:14] == 2'b10)
+            if (ram_a_request && ram_a_read_n && ram_a_address[15:14] == 2'b10)
                 test_window_write_seen <= 1'b1;
         end
     end
@@ -475,10 +679,16 @@ module nexttang_console138k_zxnext (
         frame_seen, test_window_write_seen, opcode_seen,
         lit_pixel_seen, !machine_reset, video_pll_locked
     };
-    // Last opcode address, border colour, CPU speed, capture and scaler faults.
+    // Last opcode address, border colour, CPU speed, capture and scaler
+    // faults, then the memory service's timeout, overrun and calibration loss.
+`ifdef NEXTTANG_ZXNEXT_DDR3
+    wire [2:0] memory_faults = {fault_timeout, fault_overrun, fault_calibration_lost};
+`else
+    wire [2:0] memory_faults = 3'b0;
+`endif
     wire [31:0] status_value = {
         opcode_address, border_rgb, cpu_speed, capture_protocol_error,
-        scaled_overrun, 3'b0
+        scaled_overrun, memory_faults
     };
 
     nexttang_debug_status_uart #(

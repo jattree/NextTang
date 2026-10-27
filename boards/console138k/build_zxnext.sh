@@ -5,6 +5,11 @@
 # tree with the project's diagnostic boot ROM, a 64 KiB block RAM standing in
 # for main memory, the core's video in the frame-safe 720p scaler and the status
 # UART. It needs no ROM, firmware or vendor source.
+#
+# The `diagnostic-ddr3` profile is the same image with the whole 2 MB main
+# memory in onboard DDR3. It needs --vendor-source: the directory holding
+# Sipeed's generated DDR3 controller, its Gowin_PLL wrapper and PLL_INIT, which
+# carry no redistribution grant and stay outside Git.
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
@@ -13,21 +18,23 @@ repo_root=$(cd -- "$script_dir/../.." && pwd -P)
 toolchain=
 profile=
 output_dir=
+vendor_source=
 print_sources=0
 
 usage() {
-    printf '%s\n' 'usage: boards/console138k/build_zxnext.sh --toolchain vendor --profile diagnostic --output ABSOLUTE_DIRECTORY'
-    printf '%s\n' '       boards/console138k/build_zxnext.sh --profile diagnostic --print-sources'
+    printf '%s\n' 'usage: boards/console138k/build_zxnext.sh --toolchain vendor --profile diagnostic|diagnostic-ddr3 [--vendor-source ABSOLUTE_DIRECTORY] --output ABSOLUTE_DIRECTORY'
+    printf '%s\n' '       boards/console138k/build_zxnext.sh --profile PROFILE [--vendor-source ABSOLUTE_DIRECTORY] --print-sources'
 }
 
 while (($#)); do
     case "$1" in
-        --toolchain|--profile|--output)
+        --toolchain|--profile|--output|--vendor-source)
             [[ $# -ge 2 ]] || { usage >&2; exit 2; }
             case "$1" in
                 --toolchain) toolchain=$2 ;;
                 --profile) profile=$2 ;;
                 --output) output_dir=$2 ;;
+                --vendor-source) vendor_source=$2 ;;
             esac
             shift 2
             ;;
@@ -37,10 +44,26 @@ while (($#)); do
     esac
 done
 
-if [[ "$profile" != diagnostic ]]; then
-    printf 'console138k zxnext build: profile not implemented: %s\n' "$profile" >&2
-    exit 2
-fi
+case "$profile" in
+    diagnostic)
+        base_name=nexttang_console138k_zxnext
+        constraints_base=console138k_zxnext
+        route_option=1
+        ;;
+    diagnostic-ddr3)
+        base_name=nexttang_console138k_zxnext_ddr3
+        constraints_base=console138k_zxnext_ddr3
+        route_option=2
+        if [[ "$vendor_source" != /* || ! -d "$vendor_source" ]]; then
+            printf '%s\n' 'console138k zxnext build: diagnostic-ddr3 requires --vendor-source ABSOLUTE_DIRECTORY' >&2
+            exit 2
+        fi
+        ;;
+    *)
+        printf 'console138k zxnext build: profile not implemented: %s\n' "$profile" >&2
+        exit 2
+        ;;
+esac
 
 core_files=(
     rtl/audio/audio_mixer.vhd rtl/audio/i2s.vhd rtl/audio/i2s/i2s_receive.vhd
@@ -84,9 +107,34 @@ source_files+=(
     "$repo_root/rtl/video/nexttang_video_timing.v"
     "$repo_root/rtl/video/nexttang_tmds_encoder.v"
     "$repo_root/rtl/smoke/nexttang_debug_status_uart.v"
-    "$repo_root/boards/console138k/nexttang_console138k_zxnext.v"
-    "$repo_root/boards/console138k/console138k_zxnext.cst"
-    "$repo_root/boards/console138k/console138k_zxnext.sdc"
+)
+if [[ "$profile" == diagnostic-ddr3 ]]; then
+    source_files+=(
+        "$repo_root/rtl/memory/nexttang_cpu_memory_service.v"
+        "$repo_root/rtl/memory/nexttang_memory_cdc_bridge.v"
+        "$repo_root/rtl/memory/nexttang_byte_line_adapter.v"
+        "$repo_root/rtl/memory/nexttang_cpu_memory_path.v"
+        "$repo_root/rtl/memory/nexttang_zxnext_memory_port.v"
+        "$repo_root/rtl/memory/nexttang_gowin_ddr3_ui_adapter.v"
+        "$repo_root/boards/console138k/nexttang_console138k_ddr3_pll.v"
+        "$vendor_source/ddr3_memory_interface/ddr3_memory_interface.v"
+        "$vendor_source/gowin_pll/gowin_pll.v"
+        "$vendor_source/gowin_pll/gowin_pll_mod.v"
+        "$vendor_source/pll_init.v"
+    )
+fi
+# The DDR3 wrapper textually includes the shared top, so both are build inputs
+# even though Gowin receives only the wrapper.
+included_files=()
+if [[ "$profile" == diagnostic-ddr3 ]]; then
+    source_files+=("$repo_root/boards/console138k/nexttang_console138k_zxnext_ddr3.v")
+    included_files+=("$repo_root/boards/console138k/nexttang_console138k_zxnext.v")
+else
+    source_files+=("$repo_root/boards/console138k/nexttang_console138k_zxnext.v")
+fi
+source_files+=(
+    "$repo_root/boards/console138k/$constraints_base.cst"
+    "$repo_root/boards/console138k/$constraints_base.sdc"
     "$repo_root/boards/console138k/console138k_zxnext.gsc"
 )
 
@@ -111,14 +159,13 @@ if [[ -n $(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
     printf 'console138k zxnext build: output directory is not empty: %s\n' "$output_dir" >&2
     exit 2
 fi
-for source_file in "${source_files[@]}"; do
+for source_file in "${source_files[@]}" "${included_files[@]}"; do
     [[ -s "$source_file" ]] || {
         printf 'console138k zxnext build: missing source: %s\n' "$source_file" >&2
         exit 1
     }
 done
 
-base_name=nexttang_console138k_zxnext
 project_tcl="$output_dir/$base_name.tcl"
 build_log="$output_dir/build.log"
 bitstream="$output_dir/impl/pnr/$base_name.fs"
@@ -132,10 +179,11 @@ source_hashes="$output_dir/source-sha256.txt"
     printf 'set_option -vhdl_std vhd2008\n'
     printf 'set_option -verilog_std sysv2017\n'
     printf 'set_option -gen_text_timing_rpt 1\n'
-    # Measured on the complete core: these add about 0.7 ns of setup margin
-    # over the defaults.
+    # Measured on the complete core. Placement option 2 is what lets the CPU's
+    # half-cycle paths meet 28 MHz. The router option is per profile: with
+    # DDR3, option 2 gives +0.74 ns of setup margin where option 1 gives +0.27.
     printf 'set_option -place_option 2\n'
-    printf 'set_option -route_option 1\n'
+    printf 'set_option -route_option %s\n' "$route_option"
     for source_file in "${source_files[@]}"; do
         printf 'add_file {%s}\n' "$source_file"
     done
@@ -150,7 +198,7 @@ source_hashes="$output_dir/source-sha256.txt"
     exit 1
 }
 
-sha256sum "${source_files[@]}" >"$source_hashes"
+sha256sum "${source_files[@]}" "${included_files[@]}" >"$source_hashes"
 
 if grep -q '^ERROR' "$build_log"; then
     printf 'console138k zxnext build: vendor errors (see %s)\n' "$build_log" >&2
