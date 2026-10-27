@@ -72,7 +72,11 @@ class CoreRamTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(expected, result.stdout + result.stderr)
 
-    def test_synchronous_dual_port_read_first_behaviour(self) -> None:
+    def test_synchronous_dual_port_write_through_behaviour(self) -> None:
+        # MiSTer's dpram sets read_during_write_mode_port_a to
+        # NEW_DATA_NO_NBE_READ, and Gowin dual-port block RAM cannot place
+        # read-before-write, so a same-port read during a write returns the
+        # data being written.
         output = self.run_ghdl(
             r"""
 library ieee;
@@ -112,7 +116,7 @@ begin
         write_a <= '1';
         wait until rising_edge(clock_a);
         wait for 1 ns;
-        assert output_a = x"00" report "port A was not read-first" severity failure;
+        assert output_a = x"a5" report "port A was not write-through" severity failure;
 
         write_a <= '0';
         wait until rising_edge(clock_a);
@@ -270,8 +274,8 @@ begin
         write_b <= '1';
         wait until rising_edge(clock);
         wait for 1 ns;
-        assert output_a = "000000000" and output_b = "000000000"
-            report "true dual-port RAM was not read-first" severity failure;
+        assert output_a = "101010101" and output_b = "010101010"
+            report "true dual-port RAM was not write-through" severity failure;
 
         write_a <= '0';
         write_b <= '0';
