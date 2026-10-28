@@ -8,13 +8,20 @@
 ; NextREG, SPI), contended memory at 3.5 MHz, interrupts taken from HALT, and
 ; speed changes themselves. Results go to RAM so every read shows on the bus.
 ;
+; Each speed runs the exercise twice: once from this ROM, which the core holds
+; on chip, and once from a copy in main memory at $a000. Main memory is where
+; a board may make the CPU wait, so only the second pass puts instruction
+; fetches through it, as NextZXOS does.
+;
 ; Nothing here is a test of the core's correctness: both cores run it, and the
 ; check is that they do the same thing on the same 28 MHz cycle.
 
         org     $0000
 
 NEXTREG_SELECT  equ $243b
-RESULTS         equ $8000               ; 16 bytes per speed
+RESULTS         equ $8000               ; 16 bytes per speed, ROM pass
+RAM_RESULTS     equ $8040               ; 16 bytes per speed, RAM pass
+RAM_CODE        equ $a000
 TICKS           equ $8100
 SCREEN          equ $4000
 SPI_SELECT      equ $e7
@@ -41,6 +48,10 @@ frame_interrupt:
         ret
 
 main:
+        ld      hl,exercise_image
+        ld      de,RAM_CODE
+        ld      bc,exercise_image_end - exercise_image
+        ldir
         xor     a
         ld      (TICKS),a
         ld      ix,RESULTS
@@ -57,6 +68,11 @@ speed_loop:
         ld      (ix+0),a
 
         call    exercise
+        push    ix
+        ld      bc,RAM_RESULTS - RESULTS
+        add     ix,bc
+        call    exercise_ram
+        pop     ix
 
         ld      bc,16
         add     ix,bc
@@ -72,7 +88,7 @@ finished:
         halt
         jr      finished
 
-exercise:
+        macro   EXERCISE_BODY
         ; Uncontended memory: write a pattern, then sum it back.
         ld      hl,$9000
         ld      b,64
@@ -161,5 +177,16 @@ exercise:
         ld      a,(TICKS)
         ld      (ix+8),a
         ret
+        endm
+
+exercise:
+        EXERCISE_BODY
+
+exercise_image:
+        disp    RAM_CODE
+exercise_ram:
+        EXERCISE_BODY
+        ent
+exercise_image_end:
 
         ds      $2000 - $, $ff

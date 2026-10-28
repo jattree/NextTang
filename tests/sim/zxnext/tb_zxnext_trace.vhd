@@ -37,7 +37,21 @@ entity tb_zxnext_trace is
         -- "reference": a real CPU clock into i_CLK_CPU, enables left at '1'.
         -- "enables": i_CLK_CPU is clock_28 and nexttang_zxnext_cpu_enables
         -- drives the enables, checked against the reference rule every edge.
-        MODE       : string := "reference"
+        MODE       : string := "reference";
+        -- 0: memory answers at once and never holds the CPU. Above 0: memory
+        -- behaves like the Console's DDR3 service. It takes the address,
+        -- direction and write data on the first cycle of o_RAM_A_REQ2, holds
+        -- i_CPU_WAIT from the request until WAIT_CYCLES later, then keeps the
+        -- read data until the request ends. Writes whose data or direction
+        -- change after the request starts are counted, since the service
+        -- would store the wrong byte.
+        WAIT_CYCLES : natural := 0;
+        -- When above 0, every LONG_EVERY-th access waits LONG_WAIT_CYCLES
+        -- instead, as a DDR3 refresh or a queued write makes the board wait.
+        LONG_EVERY : natural := 0;
+        LONG_WAIT_CYCLES : natural := 300;
+        -- At the end, print the 128 bytes the clock test ROM keeps at $8000.
+        DUMP_RESULTS : boolean := true
     );
 end entity;
 
@@ -60,6 +74,8 @@ architecture sim of tb_zxnext_trace is
     signal ram_a_do    : std_logic_vector(7 downto 0);
     signal ram_a_di    : std_logic_vector(7 downto 0) := (others => '0');
     signal ram_b_addr  : std_logic_vector(20 downto 0);
+    signal cpu_wait    : std_logic;
+    signal memory_done : std_logic := '0';
 
     signal rgb         : std_logic_vector(8 downto 0);
     signal vs_n, hs_n, vb_n, hb_n, hdmi_pixel, hdmi_lock : std_logic;
@@ -148,16 +164,83 @@ begin
     memory : process (clock_28)
         variable storage : memory_t := (others => (others => '0'));
         variable address : natural;
+        variable pending_address : natural;
+        variable pending_write : boolean := false;
+        variable pending_data : std_logic_vector(7 downto 0);
+        variable active : boolean := false;
+        variable count : natural := 0;
+        variable done : boolean := false;
+        variable unstable : natural := 0;
+        variable accesses : natural := 0;
+        variable this_wait : natural := 0;
+        variable l : line;
     begin
         if rising_edge(clock_28) then
-            address := to_integer(unsigned(ram_a_addr(15 downto 0)));
-            if ram_a_req = '1' and ram_a_rd_n = '1' then
-                storage(address) := ram_a_do;
+            if WAIT_CYCLES = 0 then
+                address := to_integer(unsigned(ram_a_addr(15 downto 0)));
+                if ram_a_req = '1' and ram_a_rd_n = '1' then
+                    storage(address) := ram_a_do;
+                else
+                    ram_a_di <= storage(address);
+                end if;
             else
-                ram_a_di <= storage(address);
+                if ram_a_req2 = '1' and not active then
+                    active := true;
+                    done := false;
+                    count := 0;
+                    pending_address := to_integer(unsigned(ram_a_addr(15 downto 0)));
+                    pending_write := ram_a_rd_n = '1';
+                    pending_data := ram_a_do;
+                    accesses := accesses + 1;
+                    if LONG_EVERY > 0 and accesses mod LONG_EVERY = 0 then
+                        this_wait := LONG_WAIT_CYCLES;
+                    else
+                        this_wait := WAIT_CYCLES;
+                    end if;
+                elsif ram_a_req2 = '1' and active and not done then
+                    if pending_write and (ram_a_rd_n /= '1' or ram_a_do /= pending_data) then
+                        unstable := unstable + 1;
+                        write(l, string'("UNSTABLE_WRITE addr=") & to_hstring(ram_a_addr) &
+                              string'(" latched=") & to_hstring(pending_data) &
+                              string'(" now=") & to_hstring(ram_a_do) &
+                              string'(" rd_n=") & std_logic'image(ram_a_rd_n));
+                        writeline(output, l);
+                    end if;
+                    count := count + 1;
+                    if count >= this_wait then
+                        done := true;
+                        if pending_write then
+                            storage(pending_address) := pending_data;
+                        else
+                            ram_a_di <= storage(pending_address);
+                        end if;
+                    end if;
+                elsif ram_a_req2 = '0' then
+                    active := false;
+                    done := false;
+                end if;
+            end if;
+            if done then
+                memory_done <= '1';
+            else
+                memory_done <= '0';
             end if;
         end if;
+        if DUMP_RESULTS and now >= CYCLES * 2 * HALF - 4 * HALF and now < CYCLES * 2 * HALF - 2 * HALF
+                and rising_edge(clock_28) then
+            write(l, string'("RESULTS"));
+            for i in 0 to 127 loop
+                write(l, string'(" ") & to_hstring(storage(16#8000# + i)));
+            end loop;
+            writeline(output, l);
+            write(l, string'("UNSTABLE_WRITES ") & integer'image(unstable));
+            writeline(output, l);
+        end if;
     end process;
+
+    -- As nexttang_zxnext_memory_port: wait follows the request at once and
+    -- falls when the service completes.
+    cpu_wait <= '1' when WAIT_CYCLES > 0 and ram_a_req2 = '1' and memory_done = '0' else '0';
 
     core : entity work.zxnext
         generic map (
@@ -256,7 +339,7 @@ begin
             o_RAM_A_DO => ram_a_do,
             o_RAM_A_CYCLE => open,
             o_RAM_A_RFSH => open,
-            i_CPU_WAIT => '0',
+            i_CPU_WAIT => cpu_wait,
             o_RAM_B_ADDR => ram_b_addr,
             o_RAM_B_REQ_T => open,
             i_RAM_B_DI => (others => '0'),

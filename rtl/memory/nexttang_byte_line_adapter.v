@@ -5,6 +5,7 @@
 
 // Convert one byte transaction into one 16-byte memory-line transaction.
 // line_write_enable is active high: one bit enables the corresponding byte.
+// A read also returns the whole line in byte_read_line, for a cache above.
 module nexttang_byte_line_adapter (
     input  wire         clock,
     input  wire         reset,
@@ -16,6 +17,7 @@ module nexttang_byte_line_adapter (
     input  wire [7:0]   byte_write_data,
     output reg          byte_response_valid,
     output reg  [7:0]   byte_read_data,
+    output reg  [127:0] byte_read_line,
 
     output reg          line_request,
     input  wire         line_ready,
@@ -41,6 +43,7 @@ module nexttang_byte_line_adapter (
             read_lane <= 0;
             byte_response_valid <= 1'b0;
             byte_read_data <= 0;
+            byte_read_line <= 0;
             line_request <= 1'b0;
             line_write <= 1'b0;
             line_address <= 0;
@@ -69,9 +72,11 @@ module nexttang_byte_line_adapter (
                     if (line_ready) begin
                         line_request <= 1'b0;
                         if (line_response_valid) begin
-                            if (!line_write)
+                            if (!line_write) begin
                                 byte_read_data <=
                                     line_read_data[read_lane * 8 +: 8];
+                                byte_read_line <= line_read_data;
+                            end
                             byte_response_valid <= 1'b1;
                             state <= STATE_IDLE;
                         end else begin
@@ -82,9 +87,11 @@ module nexttang_byte_line_adapter (
 
                 STATE_RESPONSE: begin
                     if (line_response_valid) begin
-                        if (!line_write)
+                        if (!line_write) begin
                             byte_read_data <=
                                 line_read_data[read_lane * 8 +: 8];
+                            byte_read_line <= line_read_data;
+                        end
                         byte_response_valid <= 1'b1;
                         state <= STATE_IDLE;
                     end

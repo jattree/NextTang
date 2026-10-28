@@ -36,7 +36,10 @@ entity zxnext is
       g_version            : unsigned(7 downto 0);
       g_sub_version        : unsigned(7 downto 0);
       --g_board_issue        : unsigned(3 downto 0);
-      g_video_inc          : unsigned(1 downto 0)
+      g_video_inc          : unsigned(1 downto 0);
+      -- NextTang: the 16K units of memory Layer 2 can read, passed to the
+      -- layer2 entity.
+      g_layer2_units        : std_logic_vector(127 downto 0) := (others => '1')
    );
    port
    (
@@ -243,7 +246,16 @@ entity zxnext is
       i_GPIO               : in std_logic_vector(27 downto 0);
       
       o_GPIO               : out std_logic_vector(27 downto 0);
-      o_GPIO_EN            : out std_logic_vector(27 downto 0)   -- 0 = high Z
+      o_GPIO_EN            : out std_logic_vector(27 downto 0);  -- 0 = high Z
+
+      -- NextTang: a debug view of NextREG writes, from the CPU or the copper,
+      -- and of the CPU's I/O cycles, which o_BUS_IORQ_n hides for internal
+      -- ports.
+
+      o_DEBUG_NR_WE        : out std_logic;
+      o_DEBUG_NR_REG       : out std_logic_vector(7 downto 0);
+      o_DEBUG_NR_DAT       : out std_logic_vector(7 downto 0);
+      o_DEBUG_IORQ_n       : out std_logic
    );
 end entity;
 
@@ -1638,6 +1650,11 @@ begin
 
    o_BUS_ADDR <= cpu_a;
    o_BUS_DO <= cpu_do;
+
+   o_DEBUG_NR_WE <= nr_wr_en;
+   o_DEBUG_NR_REG <= nr_wr_reg;
+   o_DEBUG_NR_DAT <= nr_wr_dat;
+   o_DEBUG_IORQ_n <= cpu_iorq_n;
    o_BUS_MREQ_n <= bus_mreq_n;
    o_BUS_IORQ_n <= bus_iorq_n;
    o_BUS_RD_n <= cpu_rd_n;
@@ -1671,7 +1688,12 @@ begin
    process (i_CLK_28)
    begin
       if rising_edge(i_CLK_28) then
-         if nr_02_soft_reset = '1' then
+         -- NextTang: a real Next answers a hard reset by reconfiguring the
+         -- FPGA, which brings this register back to its power-on value. Here a
+         -- hard reset is i_RESET with i_BOOT, so restore that value then.
+         if reset = '1' and i_BOOT = '1' then
+            nr_02_reset_type <= "100";
+         elsif nr_02_soft_reset = '1' then
             nr_02_reset_type <= '0' & nr_02_reset_type(2) & (nr_02_reset_type(1) or nr_02_reset_type(0));
          end if;
       end if;
@@ -1983,13 +2005,18 @@ begin
    end process;
 
    pulse_count_end <= pulse_count(5) and (machine_timing_48 or machine_timing_p3 or pulse_count(2));
-   
+
+   -- NextTang: cycles in which main memory holds the CPU through i_CPU_WAIT
+   -- do not count towards the pulse. The Z80 only samples INT at the end of
+   -- an instruction, and a board memory that waits longer than the pulse would
+   -- otherwise hide it completely. Nothing drives i_CPU_WAIT on a Next, so
+   -- its pulse is unchanged.
    process (i_CLK_CPU)
    begin
       if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          if pulse_int_n = '1' then
             pulse_count <= (others => '0');
-         elsif pulse_count_end = '0' then
+         elsif pulse_count_end = '0' and i_CPU_WAIT = '0' then
             pulse_count <= pulse_count + 1;
          end if;
       end if;
@@ -4159,6 +4186,10 @@ begin
    --
    
    layer2_mod: entity work.layer2
+   generic map
+   (
+      g_unit_visible       => g_layer2_units
+   )
    port map
    (
       i_CLK_7              => i_CLK_7,

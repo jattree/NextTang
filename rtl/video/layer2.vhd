@@ -25,6 +25,13 @@ use ieee.numeric_std.all;
 use ieee.std_logic_unsigned.all;
 
 entity layer2 is
+   generic (
+      -- NextTang: which 16K units of memory this layer can read, one bit per
+      -- unit of the 2MB space. An address in a unit whose bit is clear is
+      -- shown as transparent, as an address past the end of memory already
+      -- is. The default allows every unit.
+      g_unit_visible          : std_logic_vector(127 downto 0) := (others => '1')
+   );
    port (
       i_CLK_7                 : in std_logic;                        -- pixel clock
       i_CLK_28                : in std_logic;
@@ -172,7 +179,7 @@ begin
    layer2_bank_eff <= (('0' & layer2_active_bank_q(6 downto 4)) + 1) & layer2_active_bank_q(3 downto 0);
    layer2_addr_eff <= (layer2_bank_eff + ("00000" & layer2_addr(16 downto 14))) & layer2_addr(13 downto 0);
    
-   layer2_en <= '1' when layer2_en_q = '1' and layer2_clip_en = '1' and layer2_addr_eff(21) = '0' else '0';
+   layer2_en <= '1' when layer2_en_q = '1' and layer2_clip_en = '1' and layer2_addr_eff(21) = '0' and g_unit_visible(to_integer(unsigned(layer2_addr_eff(20 downto 14)))) = '1' else '0';
    
    process (i_CLK_28)
    begin

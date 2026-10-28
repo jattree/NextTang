@@ -70,6 +70,29 @@ in that configuration. The reason, the enable generator and the equivalence
 evidence are in the project wiki under
 `raw/zxnext-single-clock-cpu-2026-10-27.md`.
 
+Later the same day `rtl/zxnext.vhd` gains two more changes:
+
+- **Interrupt pulse.** The pulsed interrupt counts its 32 (or 36) CPU cycles
+  only while `i_CPU_WAIT` is low. The Z80 samples INT at the end of an
+  instruction, and the Console's DDR3 can hold the CPU for longer than the
+  whole pulse, which hid frame interrupts from a halted CPU in simulation. On
+  a board where nothing drives `i_CPU_WAIT` the pulse is unchanged.
+- **Debug outputs.** Four outputs give a debug view: `o_DEBUG_NR_WE`,
+  `o_DEBUG_NR_REG` and `o_DEBUG_NR_DAT` show every NextREG write from the CPU
+  or the copper, and `o_DEBUG_IORQ_n` is the CPU's IORQ, which `o_BUS_IORQ_n`
+  hides for internal ports. Nothing inside the core reads them.
+- **Reset type after a hard reset.** NextREG 0x02's reset type returns to its
+  power-on value while `i_RESET` and `i_BOOT` are both high. A real Next
+  reconfigures the FPGA on a hard reset, which does the same; without it a
+  hard reset after a soft one was reported to software as a soft reset.
+- **Layer 2 window.** A generic, `g_layer2_units`, passes to a new generic
+  of the same purpose in `rtl/video/layer2.vhd`: one bit for each 16K unit
+  of the 2MB space. Layer 2 pixels in a unit whose bit is clear are treated
+  as transparent, as upstream already treats addresses past the end of
+  memory. The Console 138K serves Layer 2 from a block RAM copy of part of
+  memory and clears the bits for the rest. The default sets every bit, which
+  is the upstream behaviour.
+
 ## Reference projects
 
 These are read for their answers to device-specific questions. Nothing is
@@ -87,6 +110,27 @@ line, and that the `ioq` line above has to be rewritten to synthesize. Its
 `t80n.vhd` carries the same replacement text.
 
 No NextNano code is in this repository.
+
+## The Next boot loader, built outside the repository
+
+`rtl/rom/bootrom.vhd` stays excluded, but the program it holds has published
+source. The official System/Next distribution carries the boot loader (the
+IPL) in `src/firmware/loader`, with "Copyright 2020 Garry Lancaster, Fabio
+Belavenuto & Victor Trucco" and GPL-3.0-or-later notices, and a GPL v3
+`LICENSE` beside it. `scripts/build_next_ipl.sh` fetches that directory from
+`https://gitlab.com/thesmog358/tbblue.git` at commit
+`f287c48bf6af3528e32977b913bac2c589d9f973` and compiles it with SDCC 4.0.0 in
+a Debian bullseye container pinned by digest. The published source lags the
+binaries: `main.c` uses `RESET_POWERON`, which `hardware.h` no longer defines,
+so the script defines it as `0x04` on the command line and leaves the source
+untouched. The result is not byte-identical to MiSTer's `bootrom.vhd`, and
+no SDCC version tried (3.8, 4.0, 4.2) reproduces it.
+
+The image and the VHDL `build_zxnext.sh --boot-image` renders from it stay in
+the build directory. Neither is committed, and nothing here distributes them;
+the generated VHDL carries the loader's notice, not this project's. Whether a
+released NextTang image may carry the loader is the open release question in
+the project wiki, not something this build decides.
 
 ## Audit result
 

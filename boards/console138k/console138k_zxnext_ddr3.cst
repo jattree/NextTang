@@ -2,6 +2,10 @@ IO_LOC "sys_clk" V22;
 IO_PORT "sys_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=OFF;
 IO_LOC "debug_uart_tx" E18;
 IO_PORT "debug_uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+// Host commands: the FT232R's TX on PMOD0 IO2, connector pin 9, beside the
+// status UART on pin 8.
+IO_LOC "debug_uart_rx" G21;
+IO_PORT "debug_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 IO_LOC "tmds_clk_p" G15;
 IO_PORT "tmds_clk_p" PULL_MODE=NONE IO_TYPE=LVCMOS33D DRIVE=8;
 IO_LOC "tmds_clk_n" G16;

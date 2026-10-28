@@ -15,6 +15,7 @@ module nexttang_cpu_memory_service #(
     input  wire [20:0] core_address,
     input  wire [7:0]  core_write_data,
     output reg  [7:0]  core_read_data,
+    output reg  [127:0] core_read_line,
     output wire        core_wait,
     output reg         core_complete,
 
@@ -25,6 +26,7 @@ module nexttang_cpu_memory_service #(
     output reg  [7:0]  memory_write_data,
     input  wire        memory_response_valid,
     input  wire [7:0]  memory_read_data,
+    input  wire [127:0] memory_read_line,
 
     output reg         fault_timeout,
     output reg         fault_overrun,
@@ -49,6 +51,7 @@ module nexttang_cpu_memory_service #(
             wait_cycles <= 0;
             previous_core_request <= 1'b0;
             core_read_data <= 0;
+            core_read_line <= 0;
             core_complete <= 1'b0;
             memory_request <= 1'b0;
             memory_write <= 1'b0;
@@ -87,8 +90,10 @@ module nexttang_cpu_memory_service #(
                             memory_request <= 1'b0;
                             wait_cycles <= wait_cycles + 1'b1;
                             if (memory_response_valid) begin
-                                if (!memory_write)
+                                if (!memory_write) begin
                                     core_read_data <= memory_read_data;
+                                    core_read_line <= memory_read_line;
+                                end
                                 core_complete <= 1'b1;
                                 state <= STATE_IDLE;
                             end else begin
@@ -108,8 +113,10 @@ module nexttang_cpu_memory_service #(
                             fault_overrun <= 1'b1;
 
                         if (memory_response_valid) begin
-                            if (!memory_write)
+                            if (!memory_write) begin
                                 core_read_data <= memory_read_data;
+                                core_read_line <= memory_read_line;
+                            end
                             core_complete <= 1'b1;
                             state <= STATE_IDLE;
                         end else if (wait_cycles + 1 >= MAX_WAIT_CYCLES) begin

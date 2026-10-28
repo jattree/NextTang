@@ -4,8 +4,8 @@
 // ZX Spectrum Next images for the Tang Console 138K.
 //
 // The pinned MiSTer ZXNext core runs on the machine clock tree with the
-// project's diagnostic boot ROM in place of the excluded upstream one. Layer
-// 2's video port reads zero. The core's own HDMI window is captured at 7 MHz
+// project's diagnostic boot ROM in place of the excluded upstream one. The
+// core's own HDMI window is captured at 7 MHz
 // and scaled into the established 720p output, and the status UART reports how
 // far the machine got without HDMI.
 //
@@ -14,7 +14,8 @@
 // enough for the diagnostic's 16 KiB test window at 0x8000 and nothing more.
 // With NEXTTANG_ZXNEXT_DDR3 defined, the whole 2 MB space lives in DDR3
 // behind the hardware-verified CPU memory service, and the machine is held in
-// reset until the controller calibrates.
+// reset until the controller calibrates, and Layer 2 reads a block-RAM mirror
+// of RAM banks 8 to 15. Without DDR3, Layer 2's memory port reads zero.
 //
 // With NEXTTANG_ZXNEXT_IO defined, the core's own SPI drives the SD socket and
 // the two USB-A sockets carry the direct USB hosts. A keyboard is scanned into
@@ -29,6 +30,7 @@
 module `NEXTTANG_ZXNEXT_TOP (
     input  wire       sys_clk,
     output wire       debug_uart_tx,
+    input  wire       debug_uart_rx,
     output wire       tmds_clk_p,
     output wire       tmds_clk_n,
     output wire [2:0] tmds_d_p,
@@ -158,7 +160,28 @@ module `NEXTTANG_ZXNEXT_TOP (
     );
 
     // ------------------------------------------------------------------- core
+    // The core asks for its own resets through NextREG 0x02 and restarts when
+    // its video timing changes. The firmware soft-resets after loading the
+    // machine ROMs, so without this it would never start them.
+    wire       core_soft_reset_request;
+    wire       core_hard_reset_request;
+    wire [2:0] core_video_mode;
+    wire       core_reset;
+    wire       core_boot;
+
+    nexttang_zxnext_core_reset core_resets (
+        .clock_28(clock_28),
+        .machine_reset(machine_reset),
+        .soft_request(core_soft_reset_request),
+        .hard_request(core_hard_reset_request),
+        .video_mode(core_video_mode),
+        .core_reset(core_reset),
+        .core_boot(core_boot)
+    );
+
     wire [20:0] ram_a_address;
+    wire [20:0] layer2_address;
+    wire [7:0]  layer2_data;
     wire        ram_a_request;
     wire        ram_a_cycle_request;
     wire        cpu_wait;
@@ -178,13 +201,39 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire        core_hdmi_pixel;
     wire        core_hdmi_lock;
     wire        core_m1_n;
+    wire        core_wr_n;
+    wire [7:0]  core_bus_data;
+    wire        core_nr_write;
+    wire [7:0]  core_nr_register;
+    wire [7:0]  core_nr_data;
+    wire        core_iorq_n;
     wire [15:0] core_bus_address;
+    wire [12:0] core_audio_left;
+    wire [12:0] core_audio_right;
+
+`ifdef NEXTTANG_ZXNEXT_DDR3
+    // Layer 2 reads come from a block RAM mirror of two ranges of 16 KiB
+    // banks: 8 to 12, the default Layer 2 bank with room for a 320x256 or
+    // 640x256 screen, and 18 to 22 for a second screen there. SRAM unit = RAM
+    // bank + 16. The core shows Layer 2 kept anywhere else as transparent.
+    localparam integer LAYER2_FIRST_A = 24;
+    localparam integer LAYER2_BANKS_A = 5;
+    localparam integer LAYER2_FIRST_B = 34;
+    localparam integer LAYER2_BANKS_B = 5;
+    localparam [127:0] LAYER2_UNITS =
+        (((128'd1 << LAYER2_BANKS_A) - 128'd1) << LAYER2_FIRST_A) |
+        (((128'd1 << LAYER2_BANKS_B) - 128'd1) << LAYER2_FIRST_B);
+`else
+    // Nothing serves Layer 2 here, so it is hidden everywhere.
+    localparam [127:0] LAYER2_UNITS = 128'd0;
+`endif
 
     zxnext #(
         .g_video_def(3'b000),
         .g_version(8'h32),
         .g_sub_version(8'h00),
-        .g_video_inc(2'b10)
+        .g_video_inc(2'b10),
+        .g_layer2_units(LAYER2_UNITS)
     ) core (
         .g_machine_id(8'h0A),
         .g_board_issue(4'h2),
@@ -202,10 +251,10 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_CPU_CLK_LSB(cpu_clock_lsb),
 
         // Power-on reset doubles as the boot flag, as MiSTer's HW_RESET does.
-        .i_RESET(machine_reset),
-        .i_BOOT(machine_reset),
-        .o_RESET_SOFT(),
-        .o_RESET_HARD(),
+        .i_RESET(core_reset),
+        .i_BOOT(core_boot),
+        .o_RESET_SOFT(core_soft_reset_request),
+        .o_RESET_HARD(core_hard_reset_request),
         .o_RESET_PERIPHERAL(),
         .o_FLASH_BOOT(),
         .o_CORE_ID(),
@@ -261,7 +310,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_VIDEO_50_60(),
         .o_VIDEO_SCANLINES(),
         .o_VIDEO_SCANDOUBLE(),
-        .o_VIDEO_MODE(),
+        .o_VIDEO_MODE(core_video_mode),
         .o_MACHINE_TIMING(),
         .o_HDMI_RESET(),
         .o_HDMI_PIXEL(core_hdmi_pixel),
@@ -274,8 +323,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .i_AUDIO_EAR(1'b0),
         .o_AUDIO_MIC(),
         .o_AUDIO_EAR(),
-        .o_AUDIO_L(),
-        .o_AUDIO_R(),
+        .o_AUDIO_L(core_audio_left),
+        .o_AUDIO_R(core_audio_right),
 
         .o_RAM_A_ADDR(ram_a_address),
         .o_RAM_A_REQ(ram_a_request),
@@ -289,17 +338,17 @@ module `NEXTTANG_ZXNEXT_TOP (
         // Active high. The port defaults to '1', which would hold the CPU.
         .i_CPU_WAIT(cpu_wait),
 
-        .o_RAM_B_ADDR(),
+        .o_RAM_B_ADDR(layer2_address),
         .o_RAM_B_REQ_T(),
-        .i_RAM_B_DI(8'h00),
+        .i_RAM_B_DI(layer2_data),
 
         .o_BUS_ADDR(core_bus_address),
         .i_BUS_DI(8'hff),
-        .o_BUS_DO(),
+        .o_BUS_DO(core_bus_data),
         .o_BUS_MREQ_n(),
         .o_BUS_IORQ_n(),
         .o_BUS_RD_n(),
-        .o_BUS_WR_n(),
+        .o_BUS_WR_n(core_wr_n),
         .o_BUS_M1_n(core_m1_n),
         .i_BUS_WAIT_n(1'b1),
         .i_BUS_NMI_n(1'b1),
@@ -321,7 +370,12 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_ESP_GPIO_0_EN(),
         .i_GPIO(28'b0),
         .o_GPIO(),
-        .o_GPIO_EN()
+        .o_GPIO_EN(),
+
+        .o_DEBUG_NR_WE(core_nr_write),
+        .o_DEBUG_NR_REG(core_nr_register),
+        .o_DEBUG_NR_DAT(core_nr_data),
+        .o_DEBUG_IORQ_n(core_iorq_n)
     );
 
     // ------------------------------------------------------------ keyboard, SD
@@ -518,6 +572,21 @@ module `NEXTTANG_ZXNEXT_TOP (
         end
     end
 
+    nexttang_layer2_mirror #(
+        .FIRST_A(LAYER2_FIRST_A),
+        .BANKS_A(LAYER2_BANKS_A),
+        .FIRST_B(LAYER2_FIRST_B),
+        .BANKS_B(LAYER2_BANKS_B)
+    ) layer2_memory (
+        .clock_28(clock_28),
+        .write_request(ram_a_cycle_request),
+        .write_n_read(ram_a_read_n),
+        .write_address(ram_a_address),
+        .write_data(ram_a_write_data),
+        .read_address(layer2_address),
+        .read_data(layer2_data)
+    );
+
     wire line_request;
     wire line_ready;
     wire line_write;
@@ -527,7 +596,11 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire line_response_valid;
     wire [127:0] line_read_data;
 
-    nexttang_zxnext_memory_port main_memory (
+    // A 16 KiB line cache answers most CPU and DMA reads in two cycles
+    // instead of the 16 to 26 a DDR3 read takes.
+    nexttang_zxnext_memory_port #(
+        .CACHE(1)
+    ) main_memory (
         .machine_clock(clock_28),
         .machine_reset(machine_reset),
         .memory_available(memory_available),
@@ -568,7 +641,13 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire self_refresh_acknowledge;
     wire refresh_acknowledge;
 
-    nexttang_gowin_ddr3_ui_adapter memory_adapter (
+    // Writes are posted: the CPU carries on as soon as the controller accepts
+    // one, and the adapter lays still-draining writes over any read of their
+    // line. Holding every write for the full drain cost the CPU 10 us a write.
+    nexttang_gowin_ddr3_ui_adapter #(
+        .POSTED_WRITES(1),
+        .PENDING_LINES(8)
+    ) memory_adapter (
         .clock(controller_clock),
         .reset(!controller_reset_n),
         .line_request(line_request),
@@ -641,6 +720,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     // the address, far inside the CPU's own read window at 3.5 MHz.
     wire ram_a_write = ram_a_request && ram_a_read_n;
     assign cpu_wait = 1'b0;
+    assign layer2_data = 8'h00;
 
     nexttang_block_ram #(
         .ADDRESS_BITS(16),
@@ -708,7 +788,17 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [10:0] horizontal_position;
     wire [9:0] vertical_position;
 
-    nexttang_video_timing timing (
+    // 720p50 (CEA mode 19, 1980 x 750). The machine's own frame is 50 Hz in
+    // 48K timing and 49.4 Hz in 128K/+3 timing, so a 50 Hz output repeats a
+    // frame about once a second where 60 Hz repeats ten a second. This
+    // board's pixel clock is 75 MHz, not 74.25, so the output runs at 50.5 Hz.
+    // The HDMI transmitter below keeps its own counters for the same frame.
+    localparam integer FRAME_WIDTH = 1980;
+    localparam integer FRAME_HEIGHT = 750;
+
+    nexttang_video_timing #(
+        .H_FRONT(440)
+    ) timing (
         .pixel_clk(pixel_clock),
         .reset(pixel_reset),
         .hsync(timing_hsync),
@@ -752,77 +842,76 @@ module `NEXTTANG_ZXNEXT_TOP (
         .output_frame_valid(scaled_frame_valid)
     );
 
-    // The 152-block frame store's read multiplexer and the TMDS encoders do
-    // not fit one 75 MHz cycle together, so the pixel and its timing are
-    // registered once between them.
+    // The 152-block frame store's read multiplexer and the HDMI transmitter
+    // do not fit one 75 MHz cycle together, so the pixel is registered once
+    // between them.
     reg [8:0] output_pixel = 9'b0;
-    reg output_hsync = 1'b0;
-    reg output_vsync = 1'b0;
-    reg output_data_enable = 1'b0;
 
-    always @(posedge pixel_clock) begin
+    always @(posedge pixel_clock)
         output_pixel <= scaled_pixel;
-        output_hsync <= hsync;
-        output_vsync <= vsync;
-        output_data_enable <= data_enable;
-    end
 
     // RGB333 to 8 bits per channel by repeating each field's bits.
     wire [7:0] red   = {output_pixel[8:6], output_pixel[8:6], output_pixel[8:7]};
     wire [7:0] green = {output_pixel[5:3], output_pixel[5:3], output_pixel[5:4]};
     wire [7:0] blue  = {output_pixel[2:0], output_pixel[2:0], output_pixel[2:1]};
 
-    wire [9:0] red_symbol;
-    wire [9:0] green_symbol;
-    wire [9:0] blue_symbol;
+    // ------------------------------------------------------------------ audio
+    wire audio_ce;
+    wire signed [15:0] audio_left;
+    wire signed [15:0] audio_right;
+    wire [15:0] audio_sample_words [1:0];
+
+    nexttang_zxnext_audio_pcm audio_pcm (
+        .core_clock(clock_28),
+        .core_left(core_audio_left),
+        .core_right(core_audio_right),
+        .clock(pixel_clock),
+        .reset(pixel_reset),
+        .audio_ce(audio_ce),
+        .left(audio_left),
+        .right(audio_right)
+    );
+
+    assign audio_sample_words[0] = audio_left;
+    assign audio_sample_words[1] = audio_right;
+
+    // ------------------------------------------------------------------- HDMI
+    // The transmitter wants each pixel one cycle after it shows the pixel's
+    // position. The pixel reaching it left the timing counter four cycles
+    // earlier (the timing module's registered position, the scaler's two
+    // stages and the register above), so its counters start three pixels
+    // behind the timing module's, which both leave reset with.
     wire [2:0] serial_data;
+    wire hdmi_serial_clock;
 
-    nexttang_tmds_encoder blue_encoder (
-        .pixel_clk(pixel_clock), .reset(pixel_reset),
-        .video_data(blue), .control_zero(output_hsync), .control_one(output_vsync),
-        .data_enable(output_data_enable), .symbol(blue_symbol)
-    );
-    nexttang_tmds_encoder green_encoder (
-        .pixel_clk(pixel_clock), .reset(pixel_reset),
-        .video_data(green), .control_zero(1'b0), .control_one(1'b0),
-        .data_enable(output_data_enable), .symbol(green_symbol)
-    );
-    nexttang_tmds_encoder red_encoder (
-        .pixel_clk(pixel_clock), .reset(pixel_reset),
-        .video_data(red), .control_zero(1'b0), .control_one(1'b0),
-        .data_enable(output_data_enable), .symbol(red_symbol)
-    );
-
-    OSER10 blue_serializer (
-        .D0(blue_symbol[0]), .D1(blue_symbol[1]),
-        .D2(blue_symbol[2]), .D3(blue_symbol[3]),
-        .D4(blue_symbol[4]), .D5(blue_symbol[5]),
-        .D6(blue_symbol[6]), .D7(blue_symbol[7]),
-        .D8(blue_symbol[8]), .D9(blue_symbol[9]),
-        .PCLK(pixel_clock), .FCLK(serial_clock),
-        .RESET(1'b0), .Q(serial_data[0])
-    );
-    OSER10 green_serializer (
-        .D0(green_symbol[0]), .D1(green_symbol[1]),
-        .D2(green_symbol[2]), .D3(green_symbol[3]),
-        .D4(green_symbol[4]), .D5(green_symbol[5]),
-        .D6(green_symbol[6]), .D7(green_symbol[7]),
-        .D8(green_symbol[8]), .D9(green_symbol[9]),
-        .PCLK(pixel_clock), .FCLK(serial_clock),
-        .RESET(1'b0), .Q(serial_data[1])
-    );
-    OSER10 red_serializer (
-        .D0(red_symbol[0]), .D1(red_symbol[1]),
-        .D2(red_symbol[2]), .D3(red_symbol[3]),
-        .D4(red_symbol[4]), .D5(red_symbol[5]),
-        .D6(red_symbol[6]), .D7(red_symbol[7]),
-        .D8(red_symbol[8]), .D9(red_symbol[9]),
-        .PCLK(pixel_clock), .FCLK(serial_clock),
-        .RESET(1'b0), .Q(serial_data[2])
+    hdmi #(
+        .VIDEO_ID_CODE(19),
+        .VIDEO_REFRESH_RATE(50.0),
+        .AUDIO_RATE(48000),
+        .AUDIO_BIT_WIDTH(16),
+        .VENDOR_NAME({"NextTang"}),
+        .PRODUCT_DESCRIPTION({"ZX Spectrum Next", 8'd0}),
+        .START_X(FRAME_WIDTH - 3),
+        .START_Y(FRAME_HEIGHT - 1)
+    ) hdmi_transmitter (
+        .clk_pixel_x5(serial_clock),
+        .clk_pixel(pixel_clock),
+        .audio_ce(audio_ce),
+        .reset(pixel_reset),
+        .rgb({red, green, blue}),
+        .audio_sample_word(audio_sample_words),
+        .tmds(serial_data),
+        .tmds_clock(hdmi_serial_clock),
+        .cx(),
+        .cy(),
+        .frame_width(),
+        .frame_height(),
+        .screen_width(),
+        .screen_height()
     );
 
     ELVDS_OBUF clock_output (
-        .I(pixel_clock), .O(tmds_clk_p), .OB(tmds_clk_n));
+        .I(hdmi_serial_clock), .O(tmds_clk_p), .OB(tmds_clk_n));
     ELVDS_OBUF data_output_zero (
         .I(serial_data[0]), .O(tmds_d_p[0]), .OB(tmds_d_n[0]));
     ELVDS_OBUF data_output_one (
@@ -901,16 +990,126 @@ module `NEXTTANG_ZXNEXT_TOP (
         capture_protocol_error, scaled_overrun, memory_faults
     };
 
+    wire status_transmit;
+    wire trace_frozen;
+    wire trace_transmit;
+
+    // How long main memory holds the CPU, in 28 MHz cycles: the most recent
+    // completed wait and the longest since the machine started.
+    reg [15:0] wait_cycles = 16'd0;
+    reg [15:0] last_wait_cycles = 16'd0;
+    reg [15:0] longest_wait_cycles = 16'd0;
+
+    always @(posedge clock_28) begin
+        if (machine_reset) begin
+            wait_cycles <= 16'd0;
+            last_wait_cycles <= 16'd0;
+            longest_wait_cycles <= 16'd0;
+        end else if (cpu_wait) begin
+            if (wait_cycles != 16'hffff)
+                wait_cycles <= wait_cycles + 16'd1;
+        end else if (wait_cycles != 16'd0) begin
+            last_wait_cycles <= wait_cycles;
+            if (wait_cycles > longest_wait_cycles)
+                longest_wait_cycles <= wait_cycles;
+            wait_cycles <= 16'd0;
+        end
+    end
+
     nexttang_debug_status_uart #(
         .CLOCK_HZ(7000000),
-        .GAP_CLOCKS(1750000)
+        .GAP_CLOCKS(1750000),
+        .EXTRA_VALUE(1)
     ) status_uart (
         .clock(clock_7),
         .reset(!machine_locked),
         .flags(status_flags),
         .value(status_value),
-        .transmit(debug_uart_tx)
+        .extra({longest_wait_cycles, last_wait_cycles}),
+        .transmit(status_transmit)
     );
+
+    // Instruction-fetch history. It freezes after the CPU's first NMI, which is
+    // how NextZXOS reports access to missing hardware, and then takes over the
+    // UART to send what led up to it.
+    // Commands from the host on the debug UART's other wire: F freezes the
+    // fetch trace now, R re-arms it, and T followed by four hex digits sets the
+    // address whose fetch freezes it, and re-arms.
+    wire [7:0] command_byte;
+    wire command_valid;
+
+    nexttang_uart_receiver #(
+        .CLOCK_HZ(28000000),
+        .BAUD_RATE(115200)
+    ) command_receiver (
+        .clock(clock_28),
+        .reset(!machine_locked),
+        .receive(debug_uart_rx),
+        .data(command_byte),
+        .data_valid(command_valid)
+    );
+
+    reg [2:0]  trigger_digits_left = 3'd0;
+    reg [15:0] trigger_command_address = 16'h0000;
+    reg        trigger_command_done = 1'b0;
+    wire       command_is_digit = (command_byte >= "0" && command_byte <= "9") ||
+                                  (command_byte >= "a" && command_byte <= "f");
+    wire [3:0] command_digit = command_byte <= "9" ? command_byte[3:0]
+                                                   : command_byte[3:0] + 4'd9;
+
+    always @(posedge clock_28) begin
+        trigger_command_done <= 1'b0;
+        if (command_valid) begin
+            if (command_byte == "T") begin
+                trigger_digits_left <= 3'd4;
+            end else if (trigger_digits_left != 3'd0 && command_is_digit) begin
+                trigger_command_address <= {trigger_command_address[11:0], command_digit};
+                trigger_digits_left <= trigger_digits_left - 3'd1;
+                if (trigger_digits_left == 3'd1)
+                    trigger_command_done <= 1'b1;
+            end else begin
+                trigger_digits_left <= 3'd0;
+            end
+        end
+    end
+
+    nexttang_m1_trace fetch_trace (
+        .clock(clock_28),
+        .reset(!machine_locked),
+        .m1_n(core_m1_n),
+        .address(core_bus_address),
+        .freeze_request(command_valid && command_byte == "F"),
+        .rearm_request(command_valid && command_byte == "R"),
+        .set_trigger(trigger_command_done),
+        .new_trigger(trigger_command_address),
+        .frozen(trace_frozen),
+        .transmit(trace_transmit)
+    );
+
+    // Every couple of seconds, between status lines, the NextREGs and the
+    // video and paging ports as software last wrote them.
+    wire log_sending;
+    wire log_transmit;
+
+    nexttang_nextreg_log nextreg_log (
+        .clock(clock_28),
+        .reset(!machine_locked),
+        .nr_write(core_nr_write),
+        .nr_register(core_nr_register),
+        .nr_data(core_nr_data),
+        .iorq_n(core_iorq_n),
+        .wr_n(core_wr_n),
+        .m1_n(core_m1_n),
+        .address(core_bus_address),
+        .data(core_bus_data),
+        .other_transmit(status_transmit),
+        .sending(log_sending),
+        .transmit(log_transmit)
+    );
+
+    assign debug_uart_tx = trace_frozen ? trace_transmit
+                         : log_sending ? log_transmit
+                         : status_transmit;
 endmodule
 
 `default_nettype wire

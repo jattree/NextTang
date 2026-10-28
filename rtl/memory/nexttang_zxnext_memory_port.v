@@ -16,8 +16,12 @@
 // a one-cycle pulse, while the CPU may run eight times slower. A sticky done
 // flag keeps wait released from completion until the core ends the request;
 // without it, wait would rise again after the pulse and hold the CPU forever.
+//
+// With CACHE set, nexttang_cpu_line_cache sits between the core and the path
+// and answers most reads from block RAM in two cycles.
 module nexttang_zxnext_memory_port #(
-    parameter integer MAX_WAIT_CYCLES = 1024
+    parameter integer MAX_WAIT_CYCLES = 1024,
+    parameter integer CACHE = 0
 ) (
     input  wire         machine_clock,
     input  wire         machine_reset,
@@ -46,18 +50,51 @@ module nexttang_zxnext_memory_port #(
     output wire         fault_calibration_lost
 );
     wire path_complete;
-    reg done = 1'b0;
+    wire [7:0] path_read_data;
+    wire [127:0] path_read_line;
+    wire path_request;
+    wire path_read_n;
+    wire [20:0] path_address;
+    wire [7:0] path_write_data;
 
-    always @(posedge machine_clock or posedge machine_reset) begin
-        if (machine_reset)
-            done <= 1'b0;
-        else if (!core_request)
-            done <= 1'b0;
-        else if (path_complete)
-            done <= 1'b1;
-    end
+    generate
+        if (CACHE != 0) begin : cached
+            nexttang_cpu_line_cache cache (
+                .clock(machine_clock),
+                .memory_available(memory_available),
+                .core_request(core_request),
+                .core_read_n(core_read_n),
+                .core_address(core_address),
+                .core_write_data(core_write_data),
+                .core_read_data(core_read_data),
+                .core_wait(core_wait),
+                .down_request(path_request),
+                .down_read_n(path_read_n),
+                .down_address(path_address),
+                .down_write_data(path_write_data),
+                .down_complete(path_complete),
+                .down_read_line(path_read_line)
+            );
+        end else begin : direct
+            reg done = 1'b0;
 
-    assign core_wait = !memory_available || (core_request && !done);
+            always @(posedge machine_clock or posedge machine_reset) begin
+                if (machine_reset)
+                    done <= 1'b0;
+                else if (!core_request)
+                    done <= 1'b0;
+                else if (path_complete)
+                    done <= 1'b1;
+            end
+
+            assign core_wait = !memory_available || (core_request && !done);
+            assign core_read_data = path_read_data;
+            assign path_request = core_request;
+            assign path_read_n = core_read_n;
+            assign path_address = core_address;
+            assign path_write_data = core_write_data;
+        end
+    endgenerate
 
     nexttang_cpu_memory_path #(
         .MAX_WAIT_CYCLES(MAX_WAIT_CYCLES)
@@ -65,11 +102,12 @@ module nexttang_zxnext_memory_port #(
         .machine_clock(machine_clock),
         .machine_reset(machine_reset),
         .memory_available(memory_available),
-        .core_request(core_request),
-        .core_read_n(core_read_n),
-        .core_address(core_address),
-        .core_write_data(core_write_data),
-        .core_read_data(core_read_data),
+        .core_request(path_request),
+        .core_read_n(path_read_n),
+        .core_address(path_address),
+        .core_write_data(path_write_data),
+        .core_read_data(path_read_data),
+        .core_read_line(path_read_line),
         .core_wait(),
         .core_complete(path_complete),
         .memory_clock(memory_clock),
