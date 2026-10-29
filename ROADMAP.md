@@ -329,6 +329,11 @@ capture/restore and is not implied by instruction tracing alone.
 - [ ] Run long-duration NextZXOS, SD, input, HDMI, and audio tests on both boards.
 - [ ] Complete official-hardware comparisons for claims that require them.
 - [ ] Establish maintainers and an upstream-update procedure.
+- [ ] Add an optional boot ident hook to the IPL: when an ident program is
+  present on the SD card, load and run it before the Next firmware, then boot
+  as normal; with no file, boot is unchanged. First use: the Fogjaw ident
+  (animation and jingle) built from Gods' existing player. The loader has
+  about 700 bytes free, enough for the hook but not the player.
 
 **Exit evidence:** a new contributor can build, program, test, recover, and
 diagnose both supported targets using only the published instructions and
