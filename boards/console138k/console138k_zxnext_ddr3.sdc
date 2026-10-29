@@ -55,6 +55,11 @@ set_false_path -to [get_regs {scaler/acknowledge_meta*}]
 set_false_path -to [get_regs {scaler/read_bank_meta*}]
 set_false_path -to [get_regs {scaler/publish_meta*}]
 set_false_path -to [get_regs {scaler/published_bank_meta*}]
+# The DDR3 frame store's line toggles cross into the controller domain the
+# same way; each line's bank and number are held still for a source line or
+# two output lines and read only after the toggle has crossed.
+set_false_path -to [get_regs {scaler/line_done_meta*}]
+set_false_path -to [get_regs {scaler/fetch_meta*}]
 set_false_path -to [get_regs {status_uart/flags_meta*}]
 
 # The ULA samples the NextREG 0x26/0x27 scroll registers on falling 7 MHz edges

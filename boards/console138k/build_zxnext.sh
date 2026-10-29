@@ -154,6 +154,8 @@ if [[ "$profile" == diagnostic-ddr3 ]]; then
         "$repo_root/rtl/memory/nexttang_zxnext_memory_port.v"
         "$repo_root/rtl/video/nexttang_layer2_mirror.v"
         "$repo_root/rtl/memory/nexttang_gowin_ddr3_ui_adapter.v"
+        "$repo_root/rtl/memory/nexttang_ddr3_ui_arbiter.v"
+        "$repo_root/rtl/video/nexttang_ddr3_frame_store.v"
         "$repo_root/boards/console138k/nexttang_console138k_ddr3_pll.v"
         "$vendor_source/ddr3_memory_interface/ddr3_memory_interface.v"
         "$vendor_source/gowin_pll/gowin_pll.v"

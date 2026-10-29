@@ -682,6 +682,33 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire self_refresh_acknowledge;
     wire refresh_acknowledge;
 
+    // Each client's side of the arbiter. Read data goes to both; only the
+    // granted client sees it marked valid.
+    wire cpu_controller_request;
+    wire cpu_controller_command_ready;
+    wire [2:0] cpu_controller_command;
+    wire cpu_controller_command_enable;
+    wire [28:0] cpu_controller_address;
+    wire cpu_controller_write_data_ready;
+    wire [255:0] cpu_controller_write_data;
+    wire cpu_controller_write_data_enable;
+    wire cpu_controller_write_data_end;
+    wire [31:0] cpu_controller_write_data_mask;
+    wire cpu_controller_read_data_valid;
+    wire cpu_controller_burst;
+    wire video_controller_request;
+    wire video_controller_command_ready;
+    wire [2:0] video_controller_command;
+    wire video_controller_command_enable;
+    wire [28:0] video_controller_address;
+    wire video_controller_write_data_ready;
+    wire [255:0] video_controller_write_data;
+    wire video_controller_write_data_enable;
+    wire video_controller_write_data_end;
+    wire [31:0] video_controller_write_data_mask;
+    wire video_controller_read_data_valid;
+    wire video_controller_burst;
+
     // Writes are posted: the CPU carries on as soon as the controller accepts
     // one, and the adapter lays still-draining writes over any read of their
     // line. Holding every write for the full drain cost the CPU 10 us a write.
@@ -699,6 +726,50 @@ module `NEXTTANG_ZXNEXT_TOP (
         .line_write_enable(line_write_enable),
         .line_response_valid(line_response_valid),
         .line_read_data(line_read_data),
+        .controller_request(cpu_controller_request),
+        .controller_command_ready(cpu_controller_command_ready),
+        .controller_command(cpu_controller_command),
+        .controller_command_enable(cpu_controller_command_enable),
+        .controller_address(cpu_controller_address),
+        .controller_write_data_ready(cpu_controller_write_data_ready),
+        .controller_write_data(cpu_controller_write_data),
+        .controller_write_data_enable(cpu_controller_write_data_enable),
+        .controller_write_data_end(cpu_controller_write_data_end),
+        .controller_write_data_mask(cpu_controller_write_data_mask),
+        .controller_read_data(controller_read_data),
+        .controller_read_data_valid(cpu_controller_read_data_valid),
+        .controller_burst(cpu_controller_burst)
+    );
+
+    // The HDMI frame store keeps its frames in DDR3 above the Next's 2 MiB
+    // and shares the controller with the CPU, one transaction at a time.
+    nexttang_ddr3_ui_arbiter memory_arbiter (
+        .clock(controller_clock),
+        .reset(!controller_reset_n),
+        .a_request(cpu_controller_request),
+        .a_command_ready(cpu_controller_command_ready),
+        .a_command(cpu_controller_command),
+        .a_command_enable(cpu_controller_command_enable),
+        .a_address(cpu_controller_address),
+        .a_write_data_ready(cpu_controller_write_data_ready),
+        .a_write_data(cpu_controller_write_data),
+        .a_write_data_enable(cpu_controller_write_data_enable),
+        .a_write_data_end(cpu_controller_write_data_end),
+        .a_write_data_mask(cpu_controller_write_data_mask),
+        .a_read_data_valid(cpu_controller_read_data_valid),
+        .a_burst(cpu_controller_burst),
+        .b_request(video_controller_request),
+        .b_command_ready(video_controller_command_ready),
+        .b_command(video_controller_command),
+        .b_command_enable(video_controller_command_enable),
+        .b_address(video_controller_address),
+        .b_write_data_ready(video_controller_write_data_ready),
+        .b_write_data(video_controller_write_data),
+        .b_write_data_enable(video_controller_write_data_enable),
+        .b_write_data_end(video_controller_write_data_end),
+        .b_write_data_mask(video_controller_write_data_mask),
+        .b_read_data_valid(video_controller_read_data_valid),
+        .b_burst(video_controller_burst),
         .controller_command_ready(controller_command_ready),
         .controller_command(controller_command),
         .controller_command_enable(controller_command_enable),
@@ -708,7 +779,6 @@ module `NEXTTANG_ZXNEXT_TOP (
         .controller_write_data_enable(controller_write_data_enable),
         .controller_write_data_end(controller_write_data_end),
         .controller_write_data_mask(controller_write_data_mask),
-        .controller_read_data(controller_read_data),
         .controller_read_data_valid(controller_read_data_valid),
         .controller_burst(controller_burst)
     );
@@ -889,6 +959,63 @@ module `NEXTTANG_ZXNEXT_TOP (
     always @(posedge clock_7)
         capture_60_sync <= {capture_60_sync[0], core_video_60};
 
+    // DDR3 builds keep the three frames in DDR3, which leaves 171 block RAMs
+    // free; the others keep them in block RAM.
+`ifdef NEXTTANG_ZXNEXT_DDR3
+    wire frame_store_late;
+
+    nexttang_ddr3_frame_store #(
+        .PIXEL_BITS(9),
+        .ALT_SOURCE_HEIGHT(240)
+    ) scaler (
+        .source_clock(clock_7),
+        .source_reset(!machine_locked),
+        .source_frame_start(capture_frame_start),
+        .source_short(capture_60_sync[1]),
+        .source_pixel_valid(capture_pixel_valid),
+        .source_x(capture_x),
+        .source_y(capture_y),
+        .source_pixel(capture_pixel),
+        .source_overrun(scaled_overrun),
+        .output_clock(pixel_clock),
+        .output_reset(pixel_reset),
+        .output_frame_start(output_frame_start),
+        .output_hsync(timing_hsync),
+        .output_vsync(timing_vsync),
+        .output_data_enable(timing_data_enable),
+        .output_x(horizontal_position),
+        .output_y(vertical_position),
+        .scaled_hsync(hsync),
+        .scaled_vsync(vsync),
+        .scaled_data_enable(data_enable),
+        .scaled_pixel(scaled_pixel),
+        .output_frame_valid(scaled_frame_valid),
+        .memory_clock(controller_clock),
+        .memory_reset(!controller_reset_n),
+        .memory_available(calibration_complete),
+        .controller_request(video_controller_request),
+        .controller_command_ready(video_controller_command_ready),
+        .controller_command(video_controller_command),
+        .controller_command_enable(video_controller_command_enable),
+        .controller_address(video_controller_address),
+        .controller_write_data_ready(video_controller_write_data_ready),
+        .controller_write_data(video_controller_write_data),
+        .controller_write_data_enable(video_controller_write_data_enable),
+        .controller_write_data_end(video_controller_write_data_end),
+        .controller_write_data_mask(video_controller_write_data_mask),
+        .controller_read_data(controller_read_data),
+        .controller_read_data_valid(video_controller_read_data_valid),
+        .controller_burst(video_controller_burst),
+        .fetch_late(frame_store_late)
+    );
+
+    // A late line from DDR3 is reported with the frame store's overrun.
+    reg [1:0] frame_store_late_sync = 2'b00;
+    wire frame_store_fault = scaled_overrun || frame_store_late_sync[1];
+
+    always @(posedge clock_7)
+        frame_store_late_sync <= {frame_store_late_sync[0], frame_store_late};
+`else
     nexttang_framebuffer_scaler #(
         .PIXEL_BITS(9),
         .ALT_SOURCE_HEIGHT(240)
@@ -917,9 +1044,12 @@ module `NEXTTANG_ZXNEXT_TOP (
         .output_frame_valid(scaled_frame_valid)
     );
 
-    // The 152-block frame store's read multiplexer and the HDMI transmitter
-    // do not fit one 75 MHz cycle together, so the pixel is registered once
-    // between them.
+    wire frame_store_fault = scaled_overrun;
+`endif
+
+    // The frame store's read multiplexer and the HDMI transmitter do not fit
+    // one 75 MHz cycle together, so the pixel is registered once between
+    // them.
     reg [8:0] output_pixel = 9'b0;
 
     always @(posedge pixel_clock)
@@ -1057,8 +1187,9 @@ module `NEXTTANG_ZXNEXT_TOP (
         lit_pixel_seen, !machine_reset, video_pll_locked
     };
     // Last opcode address, border colour, USB keyboard connected, any key or
-    // joystick input held, capture and scaler faults, then the memory
-    // service's timeout, overrun and calibration loss.
+    // joystick input held, capture and frame store faults (a dropped frame, or
+    // a line late from DDR3), then the memory service's timeout, overrun and
+    // calibration loss.
 `ifdef NEXTTANG_ZXNEXT_DDR3
     wire [2:0] memory_faults = {fault_timeout, fault_overrun, fault_calibration_lost};
 `else
@@ -1066,7 +1197,7 @@ module `NEXTTANG_ZXNEXT_TOP (
 `endif
     wire [31:0] status_value = {
         opcode_address, border_rgb, keyboard_connected, input_active,
-        capture_protocol_error, scaled_overrun, memory_faults
+        capture_protocol_error, frame_store_fault, memory_faults
     };
 
     wire status_transmit;

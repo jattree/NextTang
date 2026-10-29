@@ -36,6 +36,8 @@ module nexttang_gowin_ddr3_ui_adapter #(
     output reg          line_response_valid,
     output reg  [127:0] line_read_data,
 
+    // Waiting to give the controller a command, for an arbiter that shares it.
+    output wire         controller_request,
     input  wire         controller_command_ready,
     output reg  [2:0]   controller_command,
     output wire         controller_command_enable,
@@ -121,6 +123,7 @@ module nexttang_gowin_ddr3_ui_adapter #(
     wire table_has_room = POSTED_WRITES == 0 || free_found;
 
     assign line_ready = state == STATE_IDLE && table_has_room;
+    assign controller_request = state == STATE_WRITE || state == STATE_READ_COMMAND;
     // The exact-C controller only passed hardware readback when command and
     // write data were presented as one paired transaction. Do not let either
     // channel be accepted alone even though the public interface exposes
