@@ -13,7 +13,8 @@
 // clock_28 reached the rest of the machine, by a route Gowin's tools neither
 // analyse nor constrain, and broke hold timing on the CPU's I/O read-back.
 module nexttang_console138k_machine_clock_tree #(
-    parameter integer RESET_RELEASE_STAGES = 4
+    parameter integer RESET_RELEASE_STAGES = 4,
+    parameter integer PLL_DIVIDERS = 0
 ) (
     input  wire       clock_27,
     input  wire       force_reset,
@@ -30,7 +31,9 @@ module nexttang_console138k_machine_clock_tree #(
     wire machine_reset_request = force_reset || !clock_locked ||
                                  !memory_calibrated || memory_fault;
 
-    nexttang_console138k_machine_pll machine_pll (
+    nexttang_console138k_machine_pll #(
+        .PLL_DIVIDERS(PLL_DIVIDERS)
+    ) machine_pll (
         .clock_in(clock_27),
         .clock_28(clock_28),
         .clock_28_n(clock_28_n),

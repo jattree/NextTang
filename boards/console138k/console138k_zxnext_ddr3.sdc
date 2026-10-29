@@ -13,8 +13,14 @@ create_clock -name pixel_clock -period 13.3333 [get_pins {video_pll/pll/CLKOUT1}
 # and carry no exceptions.
 create_clock -name clock_28 -period 35.714 [get_pins {clock_tree/machine_pll/pll/CLKOUT0}]
 create_clock -name clock_28_n -period 35.714 -waveform {17.857 35.714} [get_pins {clock_tree/machine_pll/pll/CLKOUT3}]
-create_generated_clock -name clock_14 -source [get_pins {clock_tree/machine_pll/pll/CLKOUT0}] -divide_by 2 [get_pins {clock_tree/machine_pll/divider_14/CLKOUT}]
-create_generated_clock -name clock_7 -source [get_pins {clock_tree/machine_pll/pll/CLKOUT0}] -divide_by 4 [get_pins {clock_tree/machine_pll/divider_7/CLKOUT}]
+# 14 and 7 MHz are PLL outputs, declared as clocks generated from 28 MHz at
+# their own PLL pins, so the analysis follows all three from the PLL to every
+# register. Taken from CLKDIVs they were declared at the divider pins, where
+# Gowin starts a generated clock at zero; the divider's real delay was never
+# seen, and a 28 to 14 MHz crossing in the core's Layer 2 pipeline failed hold
+# unreported (raw/console138k-zxnext-own-game-full-speed-2026-10-27.md).
+create_generated_clock -name clock_14 -source [get_pins {clock_tree/machine_pll/pll/CLKOUT0}] -divide_by 2 [get_pins {clock_tree/machine_pll/pll/CLKOUT1}]
+create_generated_clock -name clock_7 -source [get_pins {clock_tree/machine_pll/pll/CLKOUT0}] -divide_by 4 [get_pins {clock_tree/machine_pll/pll/CLKOUT2}]
 # There is no CPU clock. The core's CPU runs on clock_28 with clock enables
 # (rtl/clock/nexttang_zxnext_cpu_enables.vhd), so every CPU path is a clock_28
 # path, timed at 28 MHz with the half-cycle paths between its two edges. A CPU
@@ -69,3 +75,4 @@ set_false_path -from [get_regs {core/nr_26_ula_scrollx* core/nr_27_ula_scrolly*}
 # Reset release happens once while nothing is running.
 set_false_path -from [get_regs {pixel_reset_shift*}]
 set_false_path -from [get_regs {clock_tree/reset_release/*}]
+

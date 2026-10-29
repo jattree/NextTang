@@ -24,7 +24,8 @@
 // The trailing field is a free-running tick counter, so a stalled transmitter,
 // a repeated line, or a restarted FPGA are all obvious from the log alone.
 //
-// With EXTRA_VALUE set, a second 32-bit field follows the first:
+// EXTRA_VALUE further 32-bit fields, up to three, follow the first: extra
+// bits 31:0, then 63:32, then 95:64.
 //
 //     NT V+ M+ R- C- 0001a2b3 00000000 00000000
 
@@ -41,10 +42,10 @@ module nexttang_debug_status_uart #(
     input  wire [5:0] flags,
     // {vsync_alive, pixel_clock_alive, calibration, released, memory, video}
     input  wire [31:0] value,   // reported verbatim, for a measured quantity
-    input  wire [31:0] extra,   // reported after value when EXTRA_VALUE is set
+    input  wire [95:0] extra,   // reported after value, EXTRA_VALUE words of it
     output reg  transmit
 );
-    localparam integer MESSAGE_BYTES = EXTRA_VALUE ? 49 : 40;
+    localparam integer MESSAGE_BYTES = 40 + 9 * EXTRA_VALUE;
 
     // Flags may originate in the video, memory or observer clock domains. The
     // reporter owns that boundary, so sticky state only consumes the second
@@ -100,16 +101,20 @@ module nexttang_debug_status_uart #(
         hex_digit(value[7:4]),   hex_digit(value[3:0]),
         8'h0d, 8'h0a
     };
-    wire [9*8-1:0] extra_field = {
-        " ",
-        hex_digit(extra[31:28]), hex_digit(extra[27:24]),
-        hex_digit(extra[23:20]), hex_digit(extra[19:16]),
-        hex_digit(extra[15:12]), hex_digit(extra[11:8]),
-        hex_digit(extra[7:4]),   hex_digit(extra[3:0])
-    };
-    // The extra field goes between the first value and the line ending.
-    wire [MESSAGE_BYTES*8-1:0] message = EXTRA_VALUE
-        ? {base_message[40*8-1:16], extra_field, base_message[15:0]}
+    function [9*8-1:0] field(input [31:0] word);
+        field = {
+            " ",
+            hex_digit(word[31:28]), hex_digit(word[27:24]),
+            hex_digit(word[23:20]), hex_digit(word[19:16]),
+            hex_digit(word[15:12]), hex_digit(word[11:8]),
+            hex_digit(word[7:4]),   hex_digit(word[3:0])
+        };
+    endfunction
+    wire [3*9*8-1:0] extra_fields = {field(extra[31:0]), field(extra[63:32]), field(extra[95:64])};
+    // The extra fields go between the first value and the line ending.
+    wire [MESSAGE_BYTES*8-1:0] message = EXTRA_VALUE != 0
+        ? {base_message[40*8-1:16], extra_fields[3*9*8-1 -: (EXTRA_VALUE == 0 ? 1 : EXTRA_VALUE) * 9 * 8],
+           base_message[15:0]}
         : base_message;
 
     reg [MESSAGE_BYTES*8-1:0] shift_message = 0;

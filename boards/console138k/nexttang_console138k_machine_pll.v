@@ -3,13 +3,16 @@
 //
 // 50 MHz input, 50 MHz PFD and 700 MHz VCO.  One phase-zero output divides the
 // VCO by 25 for an exact 28 MHz, and a second divide-by-25 output is shifted by
-// 180 degrees.  14 and 7 MHz are divided down from 28 in fabric rather than
-// taken as further PLL outputs.
+// 180 degrees.  14 and 7 MHz come either from CLKDIVs on 28 MHz (the default)
+// or, with PLL_DIVIDERS, from PLL outputs 1 and 2 at phase zero.
 //
-// They were PLL outputs, and the three clocks then landed on unrelated clock
-// resources with 405 ps of skew between them, which broke hold timing inside
-// the upstream ULA on its own 7 to 14 MHz paths.  Dividing from one source with
-// one reset makes the relationship the constraints declare a real one.
+// They were PLL outputs once, declared as three unrelated clocks, so the
+// analysis never checked the paths between them and a 7 to 14 MHz path in the
+// upstream ULA failed hold unreported.  CLKDIVs made the relationship real, but
+// Gowin starts a generated clock at zero at the CLKDIV's own pin, so the
+// divider's delay against 28 MHz is never analysed either.  The ZXNext board
+// therefore uses PLL outputs declared as clocks generated from 28 MHz at the
+// PLL's pins, which the analysis follows all the way to each register.
 //
 // Phases are counted in VCO periods against the output divider, so they move
 // whenever the divider does. CLKOUT3's 13 + 4/8 was 180 degrees against the
@@ -23,7 +26,11 @@
 
 `default_nettype none
 
-module nexttang_console138k_machine_pll (
+module nexttang_console138k_machine_pll #(
+    // 1: take 14 and 7 MHz from PLL outputs 1 and 2 instead of CLKDIVs, so the
+    // timing analysis sees where they really arrive against 28 MHz.
+    parameter integer PLL_DIVIDERS = 0
+) (
     input  wire clock_in,
     output wire clock_28,
     output wire clock_28_n,
@@ -33,8 +40,8 @@ module nexttang_console138k_machine_pll (
 );
     wire ground = 1'b0;
     wire power = 1'b1;
-    wire unused_clock_one;
-    wire unused_clock_two;
+    wire pll_clock_14;
+    wire pll_clock_7;
     wire unused_clock_four;
     wire unused_clock_five;
     wire unused_clock_six;
@@ -43,8 +50,8 @@ module nexttang_console138k_machine_pll (
     PLL pll (
         .LOCK(locked),
         .CLKOUT0(clock_28),
-        .CLKOUT1(unused_clock_one),
-        .CLKOUT2(unused_clock_two),
+        .CLKOUT1(pll_clock_14),
+        .CLKOUT2(pll_clock_7),
         .CLKOUT3(clock_28_n),
         .CLKOUT4(unused_clock_four),
         .CLKOUT5(unused_clock_five),
@@ -105,8 +112,8 @@ module nexttang_console138k_machine_pll (
     defparam pll.MDIV_FRAC_SEL = 0;
     defparam pll.ODIV0_FRAC_SEL = 0;
     defparam pll.CLKOUT0_EN = "TRUE";
-    defparam pll.CLKOUT1_EN = "FALSE";
-    defparam pll.CLKOUT2_EN = "FALSE";
+    defparam pll.CLKOUT1_EN = PLL_DIVIDERS ? "TRUE" : "FALSE";
+    defparam pll.CLKOUT2_EN = PLL_DIVIDERS ? "TRUE" : "FALSE";
     defparam pll.CLKOUT3_EN = "TRUE";
     defparam pll.CLKOUT4_EN = "FALSE";
     defparam pll.CLKOUT5_EN = "FALSE";
@@ -122,23 +129,48 @@ module nexttang_console138k_machine_pll (
     defparam pll.CLKOUT3_PE_COARSE = 12;
     defparam pll.CLKOUT3_PE_FINE = 4;
 
-    // Both dividers take the same high speed clock and come out of the same
-    // reset, so their counters start together and 7 MHz keeps a fixed phase
-    // against 14 MHz. A CLKDIV output is not a valid HCLKIN, so 7 is divided
-    // from 28 directly rather than chained off 14.
-    CLKDIV #(.DIV_MODE("2")) divider_14 (
-        .HCLKIN(clock_28),
-        .RESETN(locked),
-        .CALIB(1'b0),
-        .CLKOUT(clock_14)
-    );
+    // Both dividers take the same high speed clock and must leave reset on
+    // the same edge of it, so that 7 MHz rises with 14 MHz: the core and its
+    // timing constraints assume so. PLL lock rises at no particular point in
+    // the 28 MHz cycle, and released straight from it the two dividers could
+    // start one edge apart, differently on each load. The release is
+    // therefore taken through two registers on the falling edge of 28 MHz,
+    // half a cycle from the rising edge both dividers count on. A CLKDIV
+    // output is not a valid HCLKIN, so 7 is divided from 28 directly rather
+    // than chained off 14.
+    reg divider_reset_meta = 1'b0;
+    reg divider_run = 1'b0;
 
-    CLKDIV #(.DIV_MODE("4")) divider_7 (
-        .HCLKIN(clock_28),
-        .RESETN(locked),
-        .CALIB(1'b0),
-        .CLKOUT(clock_7)
-    );
+    always @(negedge clock_28 or negedge locked) begin
+        if (!locked) begin
+            divider_reset_meta <= 1'b0;
+            divider_run <= 1'b0;
+        end else begin
+            divider_reset_meta <= 1'b1;
+            divider_run <= divider_reset_meta;
+        end
+    end
+
+    generate
+        if (PLL_DIVIDERS != 0) begin : pll_outputs
+            assign clock_14 = pll_clock_14;
+            assign clock_7 = pll_clock_7;
+        end else begin : fabric_dividers
+            CLKDIV #(.DIV_MODE("2")) divider_14 (
+                .HCLKIN(clock_28),
+                .RESETN(divider_run),
+                .CALIB(1'b0),
+                .CLKOUT(clock_14)
+            );
+
+            CLKDIV #(.DIV_MODE("4")) divider_7 (
+                .HCLKIN(clock_28),
+                .RESETN(divider_run),
+                .CALIB(1'b0),
+                .CLKOUT(clock_7)
+            );
+        end
+    endgenerate
 endmodule
 
 `default_nettype wire

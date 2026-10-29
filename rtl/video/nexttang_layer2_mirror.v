@@ -39,7 +39,13 @@ module nexttang_layer2_mirror #(
     input  wire [7:0]  write_data,
 
     input  wire [20:0] read_address,
-    output wire [7:0]  read_data
+    output wire [7:0]  read_data,
+
+    // The copy's byte for write_address as it was on the previous edge, and
+    // whether that address is mirrored, for checking the copy against main
+    // memory when it is read.
+    output wire [7:0]  check_data,
+    output reg         check_hit
 );
     localparam integer UNITS = BANKS_A + BANKS_B;
 
@@ -59,10 +65,13 @@ module nexttang_layer2_mirror #(
     wire [6:0] read_unit = read_address[20:14];
 
     reg read_hit_q = 1'b0;
+    initial check_hit = 1'b0;
     wire [7:0] mirror_data;
 
-    always @(posedge clock_28)
+    always @(posedge clock_28) begin
         read_hit_q <= hit(read_unit);
+        check_hit <= hit(write_unit);
+    end
 
     nexttang_block_ram #(
         .ADDRESS_BITS(18),
@@ -73,7 +82,7 @@ module nexttang_layer2_mirror #(
         .write_enable(write_request && write_n_read && hit(write_unit)),
         .write_address({slot(write_unit), write_address[13:0]}),
         .write_data(write_data),
-        .read_data(),
+        .read_data(check_data),
         .port_b_clock(clock_28),
         .port_b_address({slot(read_unit), read_address[13:0]}),
         .port_b_data(mirror_data)

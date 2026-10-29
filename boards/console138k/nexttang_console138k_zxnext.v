@@ -83,6 +83,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire clock_14;
     wire clock_7;
     wire cpu_rising_enable;
+    wire cpu_wait;              // main memory not ready: the Z80 waits
     wire cpu_falling_enable;
     wire cpu_enables_locked;
     wire psg_enable;
@@ -131,7 +132,9 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire memory_fault = 1'b0;
 `endif
 
-    nexttang_console138k_machine_clock_tree clock_tree (
+    nexttang_console138k_machine_clock_tree #(
+        .PLL_DIVIDERS(1)
+    ) clock_tree (
         .clock_27(sys_clk),
         .force_reset(1'b0),
         .memory_calibrated(calibration_complete),
@@ -184,7 +187,6 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [7:0]  layer2_data;
     wire        ram_a_request;
     wire        ram_a_cycle_request;
-    wire        cpu_wait;
     wire [7:0]  keyboard_rows;
     wire [4:0]  keyboard_columns;
     wire [11:0] left_joystick;
@@ -202,6 +204,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire        core_hdmi_lock;
     wire        core_m1_n;
     wire        core_wr_n;
+    wire        core_rd_n;
     wire [7:0]  core_bus_data;
     wire        core_nr_write;
     wire [7:0]  core_nr_register;
@@ -347,7 +350,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_BUS_DO(core_bus_data),
         .o_BUS_MREQ_n(),
         .o_BUS_IORQ_n(),
-        .o_BUS_RD_n(),
+        .o_BUS_RD_n(core_rd_n),
         .o_BUS_WR_n(core_wr_n),
         .o_BUS_M1_n(core_m1_n),
         .i_BUS_WAIT_n(1'b1),
@@ -526,11 +529,14 @@ module `NEXTTANG_ZXNEXT_TOP (
     // at most one cycle late, never as a phantom key.
     reg [39:0] keys_meta = 40'b0;
     reg [39:0] keys_sync = 40'b0;
+    // Keys held from the host over the debug UART (K command below), in the
+    // same order as the USB keyboards' and ORed with them.
+    reg [39:0] host_keys = 40'b0;
     reg [4:0] kempston_meta = 5'b0;
     reg [4:0] kempston_sync = 5'b0;
 
     always @(posedge clock_28) begin
-        keys_meta <= usb1_keys | usb2_keys;
+        keys_meta <= usb1_keys | usb2_keys | host_keys;
         keys_sync <= keys_meta;
         kempston_meta <= usb1_kempston | usb2_kempston;
         kempston_sync <= kempston_meta;
@@ -584,7 +590,9 @@ module `NEXTTANG_ZXNEXT_TOP (
         .write_address(ram_a_address),
         .write_data(ram_a_write_data),
         .read_address(layer2_address),
-        .read_data(layer2_data)
+        .read_data(layer2_data),
+        .check_data(),
+        .check_hit()
     );
 
     wire line_request;
@@ -740,13 +748,26 @@ module `NEXTTANG_ZXNEXT_TOP (
     // ------------------------------------------------------------------ video
     // The core's RGB and HDMI pixel window leave its 14 MHz pipeline together.
     // Standard-resolution pixels last two 14 MHz cycles, so sampling at 7 MHz
-    // takes one whole pixel per sample.
+    // takes one whole pixel per sample. They change on the rising edge of
+    // 14 MHz, which is also where 7 MHz rises, so a 7 MHz register taking them
+    // directly would race the change: Layer 2's halves of a pixel can differ,
+    // and pixels flickered to their right-hand neighbour's colour. They are
+    // taken first on the falling edge of 14 MHz, halfway between changes, and
+    // the 7 MHz register takes that copy, which is the same pixel without the
+    // race.
+    reg [8:0] midpoint_rgb = 9'b0;
+    reg       midpoint_pixel = 1'b0;
     reg [8:0] sampled_rgb = 9'b0;
     reg       sampled_pixel = 1'b0;
 
+    always @(negedge clock_14) begin
+        midpoint_rgb <= core_rgb;
+        midpoint_pixel <= core_hdmi_pixel;
+    end
+
     always @(posedge clock_7) begin
-        sampled_rgb <= core_rgb;
-        sampled_pixel <= core_hdmi_pixel;
+        sampled_rgb <= midpoint_rgb;
+        sampled_pixel <= midpoint_pixel;
     end
 
     wire capture_frame_start;
@@ -1016,16 +1037,115 @@ module `NEXTTANG_ZXNEXT_TOP (
         end
     end
 
+    // Whether the CPU is moving: a running count of its rising clock enables
+    // (it stops if contention or main memory holds the CPU for good), and how
+    // often the joystick input changes, which a boot-time check may be
+    // waiting to see settle.
+    reg [15:0] cpu_enable_count = 16'd0;
+    reg [11:0] joystick_changes = 12'd0;
+`ifdef NEXTTANG_ZXNEXT_IO
+    reg [4:0]  joystick_previous = 5'b0;
+`endif
+
+    always @(posedge clock_28) begin
+        if (cpu_rising_enable)
+            cpu_enable_count <= cpu_enable_count + 16'd1;
+`ifdef NEXTTANG_ZXNEXT_IO
+        joystick_previous <= kempston_sync;
+        if (kempston_sync != joystick_previous && joystick_changes != 12'hfff)
+            joystick_changes <= joystick_changes + 12'd1;
+`endif
+    end
+
+    // Interrupt acknowledges (IORQ with M1) less than 7 ms after the previous
+    // one: at 50 or 60 Hz that means one interrupt was taken twice.
+    reg [11:0] double_interrupts = 12'd0;
+    reg [17:0] since_acknowledge = 18'h3ffff;
+    reg        acknowledge_previous = 1'b0;
+
+    always @(posedge clock_28) begin
+        acknowledge_previous <= !core_iorq_n && !core_m1_n;
+        if (!core_iorq_n && !core_m1_n && !acknowledge_previous) begin
+            if (since_acknowledge < 18'd196000 && double_interrupts != 12'hfff)
+                double_interrupts <= double_interrupts + 12'd1;
+            since_acknowledge <= 18'd0;
+        end else if (since_acknowledge != 18'h3ffff) begin
+            since_acknowledge <= since_acknowledge + 18'd1;
+        end
+    end
+
+    // Every byte the SD card sends: MISO shifted in on each rising SCK while
+    // the card is selected, counted and summed, so boots that read the same
+    // files can be compared.
+    reg [23:0] sd_byte_count = 24'd0;
+    reg [31:0] sd_checksum = 32'd0;
+`ifdef NEXTTANG_ZXNEXT_IO
+    reg        sd_clock_previous = 1'b0;
+    reg        sd_miso_previous = 1'b1;
+    reg [2:0]  sd_bit_count = 3'd0;
+    reg [7:0]  sd_shift = 8'd0;
+
+    always @(posedge clock_28) begin
+        sd_clock_previous <= spi_clock;
+        sd_miso_previous <= sd_miso;
+        if (spi_sd0_select_n) begin
+            sd_bit_count <= 3'd0;
+        end else if (spi_clock && !sd_clock_previous) begin
+            sd_shift <= {sd_shift[6:0], sd_miso_previous};
+            sd_bit_count <= sd_bit_count + 3'd1;
+            // 0xff is what the card sends while it has nothing to say, and how
+            // many of those come varies, so they are left out.
+            if (sd_bit_count == 3'd7 && {sd_shift[6:0], sd_miso_previous} != 8'hff) begin
+                sd_byte_count <= sd_byte_count + 24'd1;
+                sd_checksum <= sd_checksum + {24'd0, sd_shift[6:0], sd_miso_previous};
+            end
+        end
+    end
+`endif
+
+    // The last I/O port the CPU read and the last it wrote, with the value
+    // written, to show what a polling loop is waiting on. Interrupt
+    // acknowledge cycles (IORQ with M1) are not counted.
+    reg [15:0] last_io_read_port = 16'h0000;
+    reg [15:0] last_io_write_port = 16'h0000;
+    reg [7:0]  last_io_write_data = 8'h00;
+
+    always @(posedge clock_28) begin
+        if (!core_iorq_n && core_m1_n && !core_rd_n)
+            last_io_read_port <= core_bus_address;
+        if (!core_iorq_n && core_m1_n && !core_wr_n) begin
+            last_io_write_port <= core_bus_address;
+            last_io_write_data <= core_bus_data;
+        end
+    end
+
+
+    // Which phase 7 MHz rises at against 14 MHz, seen on the falling edge of
+    // 28 MHz, when both are steady: bit 3 when 14 MHz was high as 7 MHz rose
+    // (the phase the core assumes), bit 2 when it was low. Sticky.
+    reg [3:0] divider_phase = 4'b0000;
+    reg       clock_7_seen = 1'b0;
+
+    always @(negedge clock_28) begin
+        clock_7_seen <= clock_7;
+        if (clock_7 && !clock_7_seen)
+            divider_phase <= divider_phase | (clock_14 ? 4'b1000 : 4'b0100);
+    end
+
     nexttang_debug_status_uart #(
         .CLOCK_HZ(7000000),
         .GAP_CLOCKS(1750000),
-        .EXTRA_VALUE(1)
+        .EXTRA_VALUE(3)
     ) status_uart (
         .clock(clock_7),
         .reset(!machine_locked),
         .flags(status_flags),
         .value(status_value),
-        .extra({longest_wait_cycles, last_wait_cycles}),
+        .extra({
+            last_io_write_data, sd_byte_count,
+            sd_checksum,
+            cpu_wait, cpu_contend, 2'b00, double_interrupts, cpu_enable_count
+        }),
         .transmit(status_transmit)
     );
 
@@ -1056,6 +1176,28 @@ module `NEXTTANG_ZXNEXT_TOP (
                                   (command_byte >= "a" && command_byte <= "f");
     wire [3:0] command_digit = command_byte <= "9" ? command_byte[3:0]
                                                    : command_byte[3:0] + 4'd9;
+
+    // K followed by ten hex digits holds the given keys, a 40-bit mask in the
+    // keyboard matrix's order (row * 5 + column), until the next K.
+    reg [3:0]  key_digits_left = 4'd0;
+    reg [39:0] key_command_mask = 40'b0;
+
+    always @(posedge clock_28) begin
+        if (command_valid) begin
+            if (command_byte == "K") begin
+                key_digits_left <= 4'd10;
+            end else if (key_digits_left != 4'd0 && command_is_digit) begin
+                key_command_mask <= {key_command_mask[35:0], command_digit};
+                key_digits_left <= key_digits_left - 4'd1;
+`ifdef NEXTTANG_ZXNEXT_IO
+                if (key_digits_left == 4'd1)
+                    host_keys <= {key_command_mask[35:0], command_digit};
+`endif
+            end else begin
+                key_digits_left <= 4'd0;
+            end
+        end
+    end
 
     always @(posedge clock_28) begin
         trigger_command_done <= 1'b0;
@@ -1107,7 +1249,24 @@ module `NEXTTANG_ZXNEXT_TOP (
         .transmit(log_transmit)
     );
 
-    assign debug_uart_tx = trace_frozen ? trace_transmit
+    // The bytes last read from divMMC RAM bank 1 (SRAM page 0x11), which holds
+    // code NextZXOS calls during boot; D on the command wire dumps them.
+    wire capture_sending;
+    wire capture_transmit;
+
+    nexttang_memory_capture divmmc_capture (
+        .clock(clock_28),
+        .reset(!machine_locked),
+        .read_done(ram_a_cycle_request && !ram_a_read_n && !cpu_wait),
+        .read_address(ram_a_address),
+        .read_data(ram_a_read_data),
+        .dump_request(command_valid && command_byte == "D"),
+        .sending(capture_sending),
+        .transmit(capture_transmit)
+    );
+
+    assign debug_uart_tx = capture_sending ? capture_transmit
+                         : trace_frozen ? trace_transmit
                          : log_sending ? log_transmit
                          : status_transmit;
 endmodule

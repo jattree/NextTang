@@ -21,7 +21,11 @@
 //
 // The core raises its request for the whole of a memory cycle; wait follows
 // the request until the cache has answered, then stays released until the
-// request ends.
+// request ends. A request that is high and not yet answered is served whenever
+// the cache is free, not only on its rising edge, so one that arrives while
+// the cache is still finishing earlier work is not lost. A request withdrawn
+// before its answer has its memory work finished but is not answered, so the
+// answer cannot be taken by the next request.
 module nexttang_cpu_line_cache #(
     parameter integer INDEX_BITS = 10
 ) (
@@ -54,7 +58,7 @@ module nexttang_cpu_line_cache #(
 
     reg [1:0] state = STATE_IDLE;
     reg       done = 1'b0;
-    reg       request_seen = 1'b0;
+    reg       withdrawn = 1'b0;
     reg       down_busy = 1'b0;
 
     wire [INDEX_BITS-1:0] index = core_address[INDEX_BITS+3:4];
@@ -74,6 +78,11 @@ module nexttang_cpu_line_cache #(
     reg                tag_write;
     reg [INDEX_BITS-1:0] write_index;
     reg [TAG_BITS-1:0]   write_tag;
+    // The line a miss belongs to, kept from when it was issued: by the time
+    // memory answers, a withdrawn request's address may have changed.
+    reg [INDEX_BITS-1:0] miss_index;
+    reg [TAG_BITS-1:0]   miss_tag;
+    reg [3:0]            miss_lane;
 
     integer clear;
     initial
@@ -103,6 +112,9 @@ module nexttang_cpu_line_cache #(
     // ------------------------------------------------------- the transaction
     task automatic issue_down;
         begin
+            miss_index <= index;
+            miss_tag <= tag;
+            miss_lane <= lane;
             down_request <= 1'b1;
             down_read_n <= core_read_n;
             down_address <= core_address;
@@ -118,9 +130,11 @@ module nexttang_cpu_line_cache #(
         write_index <= index;
         write_tag <= tag;
 
-        request_seen <= core_request;
-        if (!core_request)
+        if (!core_request) begin
             done <= 1'b0;
+            if (state != STATE_IDLE)
+                withdrawn <= 1'b1;
+        end
 
         if (down_complete) begin
             down_request <= 1'b0;
@@ -129,13 +143,20 @@ module nexttang_cpu_line_cache #(
 
         case (state)
             STATE_IDLE: begin
-                // The line and tag for this address are read on this edge.
-                if (memory_available && core_request && !request_seen && !done)
+                // The line and tag for this address are read on this edge,
+                // so not while a write to the RAMs is still to land: a read on
+                // the edge of a write to the same line returns the old line.
+                withdrawn <= 1'b0;
+                if (memory_available && core_request && !done &&
+                        !data_write && !tag_write)
                     state <= STATE_LOOKUP;
             end
 
             STATE_LOOKUP: begin
-                if (core_read_n) begin
+                if (withdrawn || !core_request) begin
+                    // Withdrawn before it was looked at: nothing to do.
+                    state <= STATE_IDLE;
+                end else if (core_read_n) begin
                     // A write updates a line it hits, on the same edge as
                     // this lookup's result is used.
                     if (hit)
@@ -162,7 +183,9 @@ module nexttang_cpu_line_cache #(
             STATE_STALL: begin
                 // An earlier write is still on its way; this access goes to
                 // memory once it is through, the cycle after its request drops.
-                if (!down_busy && !down_request) begin
+                if (withdrawn || !core_request) begin
+                    state <= STATE_IDLE;
+                end else if (!down_busy && !down_request) begin
                     issue_down;
                     if (core_read_n) begin
                         done <= 1'b1;
@@ -174,12 +197,18 @@ module nexttang_cpu_line_cache #(
             end
 
             STATE_MISS: begin
+                // The line is kept even if the request was withdrawn; only
+                // the answer is not given.
                 if (down_complete) begin
                     data_write <= 1'b1;
                     data_write_line <= down_read_line;
                     tag_write <= 1'b1;
-                    core_read_data <= down_read_line[lane * 8 +: 8];
-                    done <= 1'b1;
+                    write_index <= miss_index;
+                    write_tag <= miss_tag;
+                    if (!withdrawn && core_request) begin
+                        core_read_data <= down_read_line[miss_lane * 8 +: 8];
+                        done <= 1'b1;
+                    end
                     state <= STATE_IDLE;
                 end
             end
@@ -196,6 +225,9 @@ module nexttang_cpu_line_cache #(
         tag_write = 1'b0;
         write_index = 0;
         write_tag = 0;
+        miss_index = 0;
+        miss_tag = 0;
+        miss_lane = 0;
     end
 endmodule
 

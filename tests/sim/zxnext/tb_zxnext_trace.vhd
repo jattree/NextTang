@@ -51,7 +51,19 @@ entity tb_zxnext_trace is
         LONG_EVERY : natural := 0;
         LONG_WAIT_CYCLES : natural := 300;
         -- At the end, print the 128 bytes the clock test ROM keeps at $8000.
-        DUMP_RESULTS : boolean := true
+        DUMP_RESULTS : boolean := true;
+        -- At the end, compare memory with a copy written as the board's
+        -- Layer 2 mirror writes: on every cycle of a write request, so the
+        -- byte kept is the one present on its last cycle. Memory itself takes
+        -- the first cycle's, as the board's memory path does.
+        CHECK_MIRROR : boolean := false;
+        -- Print every NextREG write the core performs, from the CPU or the
+        -- copper, with the 28 MHz cycle it happened on.
+        LOG_NEXTREG : boolean := false;
+        -- Check that every CPU write to RAM bank 5, as main memory receives it,
+        -- also lands in the core's own screen RAM, with the same offset and
+        -- data and in the same order.
+        CHECK_VRAM : boolean := false
     );
 end entity;
 
@@ -70,6 +82,8 @@ architecture sim of tb_zxnext_trace is
     signal cpu_lsb     : std_logic;
 
     signal ram_a_addr  : std_logic_vector(20 downto 0);
+    signal debug_nr_we : std_logic;
+    signal debug_nr_reg, debug_nr_dat : std_logic_vector(7 downto 0);
     signal ram_a_req, ram_a_req2, ram_a_rd_n : std_logic;
     signal ram_a_do    : std_logic_vector(7 downto 0);
     signal ram_a_di    : std_logic_vector(7 downto 0) := (others => '0');
@@ -163,6 +177,8 @@ begin
 
     memory : process (clock_28)
         variable storage : memory_t := (others => (others => '0'));
+        variable mirror : memory_t := (others => (others => '0'));
+        variable mismatches : natural := 0;
         variable address : natural;
         variable pending_address : natural;
         variable pending_write : boolean := false;
@@ -184,6 +200,9 @@ begin
                     ram_a_di <= storage(address);
                 end if;
             else
+                if ram_a_req2 = '1' and ram_a_rd_n = '1' then
+                    mirror(to_integer(unsigned(ram_a_addr(15 downto 0)))) := ram_a_do;
+                end if;
                 if ram_a_req2 = '1' and not active then
                     active := true;
                     done := false;
@@ -235,12 +254,95 @@ begin
             writeline(output, l);
             write(l, string'("UNSTABLE_WRITES ") & integer'image(unstable));
             writeline(output, l);
+            if CHECK_MIRROR then
+                mismatches := 0;
+                for i in 0 to 65535 loop
+                    if storage(i) /= mirror(i) then
+                        if mismatches < 16 then
+                            write(l, string'("MIRROR_DIFFERS ") & to_hstring(to_unsigned(i, 16)) &
+                                  string'(" memory=") & to_hstring(storage(i)) &
+                                  string'(" mirror=") & to_hstring(mirror(i)));
+                            writeline(output, l);
+                        end if;
+                        mismatches := mismatches + 1;
+                    end if;
+                end loop;
+                write(l, string'("MIRROR_MISMATCHES ") & integer'image(mismatches));
+                writeline(output, l);
+            end if;
         end if;
     end process;
 
     -- As nexttang_zxnext_memory_port: wait follows the request at once and
     -- falls when the service completes.
     cpu_wait <= '1' when WAIT_CYCLES > 0 and ram_a_req2 = '1' and memory_done = '0' else '0';
+
+    vram_check : process (clock_28)
+        alias bank5_sched is << signal .tb_zxnext_trace.core.cpu_bank5_sched : std_logic >>;
+        alias bank5_we is << signal .tb_zxnext_trace.core.cpu_bank5_we : std_logic >>;
+        alias bank5_a0 is << signal .tb_zxnext_trace.core.vram_bank5_a0 : std_logic_vector(13 downto 0) >>;
+        alias core_do is << signal .tb_zxnext_trace.core.cpu_do : std_logic_vector(7 downto 0) >>;
+        type queue_t is array (0 to 4095) of std_logic_vector(21 downto 0);
+        variable queue : queue_t;
+        variable head, tail : natural := 0;
+        variable expected_writes, screen_writes, mismatches, missing : natural := 0;
+        variable req_previous : std_logic := '0';
+        variable l : line;
+    begin
+        if rising_edge(clock_28) and CHECK_VRAM then
+            if ram_a_req2 = '1' and req_previous = '0' and ram_a_rd_n = '1' and
+                    ram_a_addr(20 downto 14) = "0010101" then
+                queue(tail mod 4096) := ram_a_addr(13 downto 0) & ram_a_do;
+                tail := tail + 1;
+                expected_writes := expected_writes + 1;
+            end if;
+            req_previous := ram_a_req2;
+            if bank5_sched = '1' and bank5_we = '1' then
+                write(l, string'("SCREEN_WRITE ") & to_hstring(bank5_a0) & string'(" ") & to_hstring(core_do));
+                writeline(output, l);
+                screen_writes := screen_writes + 1;
+                if head = tail then
+                    if mismatches < 8 then
+                        write(l, string'("VRAM_UNEXPECTED ") & to_hstring(bank5_a0) & string'("=") & to_hstring(core_do));
+                        writeline(output, l);
+                    end if;
+                    mismatches := mismatches + 1;
+                else
+                    if queue(head mod 4096) /= bank5_a0 & core_do then
+                        if mismatches < 8 then
+                            write(l, string'("VRAM_MISMATCH memory ") & to_hstring(queue(head mod 4096)) &
+                                  string'(" screen ") & to_hstring(bank5_a0 & core_do));
+                            writeline(output, l);
+                        end if;
+                        mismatches := mismatches + 1;
+                    end if;
+                    head := head + 1;
+                end if;
+            end if;
+        end if;
+        if CHECK_VRAM and now >= CYCLES * 2 * HALF - 4 * HALF and now < CYCLES * 2 * HALF - 2 * HALF
+                and rising_edge(clock_28) then
+            write(l, string'("VRAM_CHECK expected ") & integer'image(expected_writes) &
+                  string'(" screen ") & integer'image(screen_writes) &
+                  string'(" mismatches ") & integer'image(mismatches) &
+                  string'(" unmatched ") & integer'image(tail - head));
+            writeline(output, l);
+        end if;
+    end process;
+
+    nextreg_log : process (clock_28)
+        variable l : line;
+        variable cycle : natural := 0;
+    begin
+        if rising_edge(clock_28) then
+            cycle := cycle + 1;
+            if LOG_NEXTREG and debug_nr_we = '1' then
+                write(l, string'("NR ") & integer'image(cycle) & string'(" ") &
+                      to_hstring(debug_nr_reg) & string'("=") & to_hstring(debug_nr_dat));
+                writeline(output, l);
+            end if;
+        end if;
+    end process;
 
     core : entity work.zxnext
         generic map (
@@ -339,6 +441,9 @@ begin
             o_RAM_A_DO => ram_a_do,
             o_RAM_A_CYCLE => open,
             o_RAM_A_RFSH => open,
+            o_DEBUG_NR_WE => debug_nr_we,
+            o_DEBUG_NR_REG => debug_nr_reg,
+            o_DEBUG_NR_DAT => debug_nr_dat,
             i_CPU_WAIT => cpu_wait,
             o_RAM_B_ADDR => ram_b_addr,
             o_RAM_B_REQ_T => open,

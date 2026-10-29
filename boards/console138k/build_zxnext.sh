@@ -140,6 +140,7 @@ source_files+=(
     "$repo_root/rtl/video/hdmi/hdmi.sv"
     "$repo_root/rtl/smoke/nexttang_debug_status_uart.v"
     "$repo_root/rtl/smoke/nexttang_m1_trace.v"
+    "$repo_root/rtl/smoke/nexttang_memory_capture.v"
     "$repo_root/rtl/smoke/nexttang_nextreg_log.v"
     "$repo_root/rtl/input/nexttang_uart_receiver.v"
 )

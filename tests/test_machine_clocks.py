@@ -145,8 +145,20 @@ module PLL #(
     input wire ENCLK4, ENCLK5, ENCLK6, SSCPOL, SSCON
 );
     assign CLKOUT0 = testbench.source_28;
-    assign CLKOUT1 = 1'b0;
-    assign CLKOUT2 = 1'b0;
+    // Outputs 1 and 2, when enabled, divide the same VCO by 2 and 4 of
+    // CLKOUT0's divider and start together with it, so 7 MHz rises with 14.
+    reg pll_14 = 1'b0;
+    reg pll_7 = 1'b0;
+    reg [1:0] pll_count = 2'd0;
+    always @(posedge testbench.source_28)
+        if (testbench.source_lock) begin
+            pll_14 <= ~pll_14;
+            pll_count <= pll_count + 2'd1;
+            if (!pll_count[0])
+                pll_7 <= ~pll_7;
+        end
+    assign CLKOUT1 = CLKOUT1_EN == "TRUE" ? pll_14 : 1'b0;
+    assign CLKOUT2 = CLKOUT2_EN == "TRUE" ? pll_7 : 1'b0;
     assign CLKOUT3 = testbench.source_28_n;
     assign CLKOUT4 = 0;
     assign CLKOUT5 = 0;
@@ -182,11 +194,18 @@ module PLL #(
             $fatal(1, "the shifted output must divide the same as CLKOUT0");
         if (CLKOUT0_EN != "TRUE" || CLKOUT3_EN != "TRUE")
             $fatal(1, "a machine-clock output was disabled");
-        // 14 and 7 are divided from 28 in fabric. Taking them as further PLL
-        // outputs put them on unrelated clock resources, and the skew between
-        // them broke hold timing inside the ULA.
-        if (CLKOUT1_EN != "FALSE" || CLKOUT2_EN != "FALSE")
-            $fatal(1, "14 and 7 MHz must not be separate PLL outputs");
+        // 14 and 7 MHz are either both divided in fabric or both PLL outputs
+        // dividing the same VCO exactly, at phase zero like 28 MHz.
+        if (CLKOUT1_EN != CLKOUT2_EN)
+            $fatal(1, "14 and 7 MHz must come from the same place");
+        if (CLKOUT1_EN == "TRUE") begin
+            if (vco_mhz / ODIV1_SEL != 14.0 || vco_mhz / ODIV2_SEL != 7.0)
+                $fatal(1, "PLL outputs are %f and %f MHz, not 14 and 7",
+                       vco_mhz / ODIV1_SEL, vco_mhz / ODIV2_SEL);
+            if (CLKOUT1_PE_COARSE != 0 || CLKOUT1_PE_FINE != 0 ||
+                    CLKOUT2_PE_COARSE != 0 || CLKOUT2_PE_FINE != 0)
+                $fatal(1, "14 or 7 MHz phase was not zero");
+        end
         if (CLKOUT0_PE_COARSE != 0 || CLKOUT0_PE_FINE != 0)
             $fatal(1, "machine-clock phase was not zero");
         // The phase is counted in VCO periods, so it has to be derived from the
@@ -246,10 +265,19 @@ module testbench;
     integer edges_14 = 0;
     integer edges_7 = 0;
 
-    nexttang_console138k_machine_pll dut (
+    nexttang_console138k_machine_pll #(.PLL_DIVIDERS(PLL_DIVIDERS_UNDER_TEST)) dut (
         .clock_in(clock_in), .clock_28(clock_28), .clock_28_n(clock_28_n),
         .clock_14(clock_14), .clock_7(clock_7), .locked(locked)
     );
+
+    // From PLL outputs, 7 MHz must rise with 14 MHz, as the core assumes.
+    // (The CLKDIV model here does not reproduce the hardware's divider phase,
+    // which the board reports on its status UART instead.)
+    always @(posedge clock_7) begin
+        #1;
+        if (PLL_DIVIDERS_UNDER_TEST && locked && !clock_14)
+            $fatal(1, "7 MHz rose while 14 MHz was low");
+    end
 
     always #5 source_28 = ~source_28;
     always @(*) source_28_n = ~source_28;
@@ -290,8 +318,11 @@ module testbench;
     end
 endmodule
 """
-        output = run_testbench(testbench, PLL_RTL)
-        self.assertIn("CONSOLE138K_MACHINE_PLL_PASS", output)
+        for pll_dividers in (0, 1):
+            with self.subTest(pll_dividers=pll_dividers):
+                output = run_testbench(
+                    testbench.replace("PLL_DIVIDERS_UNDER_TEST", str(pll_dividers)), PLL_RTL)
+                self.assertIn("CONSOLE138K_MACHINE_PLL_PASS", output)
 
     def test_console_clock_tree_reset_and_core_contract(self) -> None:
         testbench = r"""

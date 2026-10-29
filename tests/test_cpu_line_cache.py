@@ -3,7 +3,9 @@
 rtl/memory/nexttang_cpu_line_cache.v sits in nexttang_zxnext_memory_port when
 CACHE is set. The test drives the port as the core does, with random reads and
 writes over lines chosen so that several share each cache index, against a
-DDR3-like line memory with a delay. Every read is checked against a reference
+DDR3-like line memory with a delay. Some reads are withdrawn before they are
+answered, as the core can do when divMMC paging changes under an access; the
+next access must still be served, promptly and with the right data. Every read is checked against a reference
 copy of memory. It runs once with wait examined every cycle, as a 28 MHz CPU
 does, and once every eighth cycle, as at 3.5 MHz, and checks that a read the
 cache can answer waits exactly two cycles.
@@ -135,6 +137,24 @@ module testbench;
         end
     endtask
 
+    // A read the core withdraws before it is answered, as divMMC paging can
+    // make it do: the request drops after a few cycles whatever wait says.
+    task withdrawn_read;
+        input [20:0] address;
+        integer hold;
+        begin
+            @(negedge machine_clock);
+            core_read_n = 1'b0;
+            core_address = address;
+            core_request = 1;
+            for (hold = $urandom %% 13; hold > 0; hold = hold - 1)
+                @(negedge machine_clock);
+            core_request = 0;
+            core_address = 21'hxxxxxx;
+            repeat ($urandom %% 3) @(negedge machine_clock);
+        end
+    endtask
+
     // Eight cache indices, four lines on each: addresses 16 KiB apart share
     // an index.
     function [20:0] random_address;
@@ -162,6 +182,8 @@ module testbench;
         repeat (4) @(posedge machine_clock);
 
         for (step = 0; step < 4000; step = step + 1) begin
+            if ($urandom %% 6 == 0)
+                withdrawn_read(random_address(0));
             address = random_address(0);
             was_read = 1'b0;
             if ($urandom %% 3 == 0) begin
