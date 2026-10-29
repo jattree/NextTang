@@ -763,9 +763,6 @@ architecture rtl of zxnext is
    signal sram_memcycle          : std_logic;
    signal sram_romcs             : std_logic;
    
-   signal memcycle_complete      : std_logic;
-   signal memcycle_count         : std_logic_vector(2 downto 0);
-   signal memcycle_count_max     : std_logic_vector(2 downto 0);
 
    signal cpu_bank5_rd           : std_logic;
    signal cpu_bank5_we           : std_logic;
@@ -2997,6 +2994,8 @@ begin
 
          if cpu_mreq_n = '1' then
          
+            -- NextTang: official core 3.02.03 (3a5ba97f) samples romcs here
+            sram_pre_romcs_n <= i_BUS_ROMCS_n and expbus_eff_en and not expbus_eff_disable_mem;
             sram_pre_romcs_replace <= expbus_romcs_replace;
          
             sram_pre_alt_en <= nr_8c_altrom_en;
@@ -3116,57 +3115,18 @@ begin
    -- divmmc automap disabled for most entry points if rom3 is not present
    
    sram_divmmc_automap_en <= sram_pre_override(2);
-   sram_divmmc_automap_rom3_en <= memcycle_complete and sram_pre_override(2) and sram_pre_override(0) and (not sram_layer2_map_en) and (not sram_romcs) and ((sram_altrom_en and sram_pre_alt_128_n) or (sram_pre_rom3 and not sram_altrom_en));
+   sram_divmmc_automap_rom3_en <= sram_pre_override(2) and sram_pre_override(0) and (not sram_layer2_map_en) and (not sram_romcs) and ((sram_altrom_en and sram_pre_alt_128_n) or (sram_pre_rom3 and not sram_altrom_en));
 
    --
    -- generate memory cycle
    --
    
-   sram_memcycle <= '1' when cpu_mreq_n = '0' and cpu_rfsh_n = '1' and memcycle_complete = '1' else '0';
-   
-   -- memory cycle may go to expansion bus if the lower 16K is accessed and romcs is active
-   -- memory read of internal memory is harmless with cpu_di taken from internal memory or expansion bus depending on romcs at the end of the read cycle
-   -- memory write is potentially harmful however a write cycle gives much more time for romcs to be asserted so is fine to act on when /wr goes low
-
-   -- memory cycle is delayed to allow time for romcs from slow devices (divmmc)
-
- --  memcycle_complete <= '1' when memcycle_count = memcycle_count_max else '0';
-    memcycle_complete <= '1' when memcycle_count = memcycle_count_max or i_RAM_A_REQ_ALLOW = '1' else '0';
-   
-   process (i_CLK_28_n)
-   begin
---    if falling_edge(i_CLK_28) then    -- xst bug: creates rising edge flip flop with clock passed through inverter which generates a synthesis error
-      if rising_edge(i_CLK_28_n) then   -- temporary fix but the builds aren't as good, see if it goes away later
-         if cpu_mreq_n = '1' then
-            memcycle_count <= (others => '0');
-         elsif memcycle_complete = '0' then
-            memcycle_count <= memcycle_count + 1;
-         end if;
-      end if;
-   end process;
-
-   process (cpu_speed)
-   begin
-      case cpu_speed is
-         when "00"   =>
-            memcycle_count_max <= "111";   -- before wr goes low
-         when "01"   =>
-            memcycle_count_max <= "011";
-         when "10" =>
-            memcycle_count_max <= "001";
-         when others =>
-            memcycle_count_max <= (others => '0');
-      end case;
-   end process;
-   
-   process (i_CLK_28)
-   begin
-      if falling_edge(i_CLK_28) then
-         if cpu_mreq_n = '1' or memcycle_complete = '0' then
-            sram_pre_romcs_n <= i_BUS_ROMCS_n and expbus_eff_en and not expbus_eff_disable_mem;
-         end if;
-      end if;
-   end process;
+   -- NextTang: official core 3.02.03 (3a5ba97f, "DMA and LDPIRX work at all
+   -- speeds", official issues 4 and 23) removed the memory-cycle delay that
+   -- held the request back 7/3/1 cycles of 28 MHz at 3.5/7/14 MHz. The MiSTer
+   -- baseline still had it; i_RAM_A_REQ_ALLOW, which only shortened it, is
+   -- now unused.
+   sram_memcycle <= '1' when cpu_mreq_n = '0' and cpu_rfsh_n = '1' else '0';
    
    -- memory signals
    
