@@ -201,6 +201,7 @@ module `NEXTTANG_ZXNEXT_TOP (
 
     wire [8:0]  core_rgb;
     wire        core_vsync_n;
+    wire        core_video_60;   // the core's 50/60 Hz setting: 1 for 60 Hz
     wire        core_hdmi_pixel;
     wire        core_hdmi_lock;
     wire        core_m1_n;
@@ -309,7 +310,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_RGB_VS_n(core_vsync_n),
         .o_RGB_BK_n(),
         .o_RGB_HS_n(),
-        .o_VIDEO_50_60(),
+        .o_VIDEO_50_60(core_video_60),
         .o_VIDEO_SCANLINES(),
         .o_VIDEO_SCANDOUBLE(),
         .o_VIDEO_MODE(core_video_mode),
@@ -841,19 +842,31 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [10:0] horizontal_position;
     wire [9:0] vertical_position;
 
-    // 720p50 (CEA mode 19, 1980 x 750). The machine's own frame is 50 Hz in
-    // 48K timing and 49.4 Hz in 128K/+3 timing, so a 50 Hz output repeats a
-    // frame about once a second where 60 Hz repeats ten a second. This
-    // board's pixel clock is 75 MHz, not 74.25, so the output runs at 50.5 Hz.
-    // The HDMI transmitter below keeps its own counters for the same frame.
+    // 720p50 (CEA mode 19, 1980 x 750) while the core runs 50 Hz timing, and
+    // 720p60 (CEA mode 4, 1650 x 750) while it runs 60 Hz, as the Next's own
+    // F3 and NextREG 0x05 select. The modes share the pixel clock and differ
+    // only in the horizontal front porch, so the output changes mode at a
+    // frame boundary without touching the clocks; the frame store absorbs any
+    // difference in rate. This board's pixel clock is 75 MHz, not 74.25, so
+    // the outputs run at 50.5 and 60.6 Hz. The HDMI transmitter keeps its own
+    // counters for the same frame and takes the mode from the timing module.
     localparam integer FRAME_WIDTH = 1980;
     localparam integer FRAME_HEIGHT = 750;
 
+    reg [1:0] video_60_sync = 2'b00;
+    wire output_60;
+
+    always @(posedge pixel_clock)
+        video_60_sync <= {video_60_sync[0], core_video_60};
+
     nexttang_video_timing #(
-        .H_FRONT(440)
+        .H_FRONT(440),
+        .H_FRONT_ALT(110)
     ) timing (
         .pixel_clk(pixel_clock),
         .reset(pixel_reset),
+        .alt_select(video_60_sync[1]),
+        .alt_active(output_60),
         .hsync(timing_hsync),
         .vsync(timing_vsync),
         .data_enable(timing_data_enable),
@@ -869,12 +882,21 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire scaled_overrun;
     wire output_frame_start = horizontal_position == 0 && vertical_position == 0;
 
+    // In 60 Hz timing the core's HDMI window is 360 x 240 instead of 360 x 288,
+    // so frames captured then end 48 lines sooner and are shown centred.
+    reg [1:0] capture_60_sync = 2'b00;
+
+    always @(posedge clock_7)
+        capture_60_sync <= {capture_60_sync[0], core_video_60};
+
     nexttang_framebuffer_scaler #(
-        .PIXEL_BITS(9)
+        .PIXEL_BITS(9),
+        .ALT_SOURCE_HEIGHT(240)
     ) scaler (
         .source_clock(clock_7),
         .source_reset(!machine_locked),
         .source_frame_start(capture_frame_start),
+        .source_short(capture_60_sync[1]),
         .source_pixel_valid(capture_pixel_valid),
         .source_x(capture_x),
         .source_y(capture_y),
@@ -945,12 +967,16 @@ module `NEXTTANG_ZXNEXT_TOP (
         .VENDOR_NAME({"NextTang"}),
         .PRODUCT_DESCRIPTION({"ZX Spectrum Next", 8'd0}),
         .START_X(FRAME_WIDTH - 3),
-        .START_Y(FRAME_HEIGHT - 1)
+        .START_Y(FRAME_HEIGHT - 1),
+        .ALT_VIDEO_ID_CODE(4)
     ) hdmi_transmitter (
         .clk_pixel_x5(serial_clock),
         .clk_pixel(pixel_clock),
         .audio_ce(audio_ce),
         .reset(pixel_reset),
+        // The timing module changes mode three pixels before this counter
+        // wraps, so the transmitter takes the same frame's mode.
+        .alt_mode(output_60),
         .rgb({red, green, blue}),
         .audio_sample_word(audio_sample_words),
         .tmds(serial_data),

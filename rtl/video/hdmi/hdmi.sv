@@ -60,7 +60,13 @@ module hdmi
     // generating a signal from scratch instead of processing an
     // external signal.
     parameter int START_X = 0,
-    parameter int START_Y = 0
+    parameter int START_Y = 0,
+
+    // NextTang: a second mode the output can switch to at a frame boundary,
+    // selected by alt_mode. Only 19 (720p50) with 4 (720p60) is supported;
+    // they share the pixel clock and differ in line length and sync position.
+    // 0 keeps the single fixed mode, and alt_mode is then ignored.
+    parameter int ALT_VIDEO_ID_CODE = 0
 )
 (
     input logic clk_pixel_x5,
@@ -68,6 +74,7 @@ module hdmi
     input logic audio_ce,
     // synchronous reset back to 0,0
     input logic reset,
+    input logic alt_mode,   // NextTang: see ALT_VIDEO_ID_CODE
     input logic [23:0] rgb,
     input logic [AUDIO_BIT_WIDTH-1:0] audio_sample_word [1:0],
 
@@ -95,6 +102,8 @@ logic hsync;
 logic vsync;
 
 logic [BIT_WIDTH-1:0] hsync_pulse_start, hsync_pulse_size;
+// NextTang: the mode in effect this frame, taken from alt_mode as a frame ends.
+logic alt_active = 1'b0;
 logic [BIT_HEIGHT-1:0] vsync_pulse_start, vsync_pulse_size;
 logic invert;
 
@@ -163,11 +172,20 @@ generate
         end
         19:
         begin
-            assign frame_width = 1980;
+            if (ALT_VIDEO_ID_CODE == 4)
+            begin
+                // NextTang: 720p60 (VIC 4) shares everything but these two.
+                assign frame_width = alt_active ? 1650 : 1980;
+                assign hsync_pulse_start = alt_active ? 110 : 440;
+            end
+            else
+            begin
+                assign frame_width = 1980;
+                assign hsync_pulse_start = 440;
+            end
             assign frame_height = 750;
             assign screen_width = 1280;
             assign screen_height = 720;
-            assign hsync_pulse_start = 440;
             assign hsync_pulse_size = 40;
             assign vsync_pulse_start = 5;
             assign vsync_pulse_size = 5;
@@ -217,9 +235,12 @@ begin
     begin
         cx <= BIT_WIDTH'(START_X);
         cy <= BIT_HEIGHT'(START_Y);
+        alt_active <= 1'b0;
     end
     else
     begin
+        if (cx == frame_width-1'b1 && cy == frame_height-1'b1)
+            alt_active <= ALT_VIDEO_ID_CODE != 0 && alt_mode;
         cx <= cx == frame_width-1'b1 ? BIT_WIDTH'(0) : cx + 1'b1;
         cy <= cx == frame_width-1'b1 ? cy == frame_height-1'b1 ? BIT_HEIGHT'(0) : cy + 1'b1 : cy;
     end
@@ -307,6 +328,7 @@ generate
         logic [4:0] packet_pixel_counter;
         packet_picker #(
             .VIDEO_ID_CODE(VIDEO_ID_CODE),
+            .ALT_VIDEO_ID_CODE(ALT_VIDEO_ID_CODE),
             .VIDEO_RATE(VIDEO_RATE),
             .IT_CONTENT(IT_CONTENT),
             .AUDIO_RATE(AUDIO_RATE),
@@ -314,7 +336,7 @@ generate
             .VENDOR_NAME(VENDOR_NAME),
             .PRODUCT_DESCRIPTION(PRODUCT_DESCRIPTION),
             .SOURCE_DEVICE_INFORMATION(SOURCE_DEVICE_INFORMATION)
-        ) packet_picker (.clk_pixel(clk_pixel), .audio_ce(audio_ce), .reset(reset), .video_field_end(video_field_end), .packet_enable(packet_enable), .packet_pixel_counter(packet_pixel_counter), .audio_sample_word(audio_sample_word), .header(header), .sub(sub));
+        ) packet_picker (.clk_pixel(clk_pixel), .audio_ce(audio_ce), .reset(reset), .alt_mode(alt_active), .video_field_end(video_field_end), .packet_enable(packet_enable), .packet_pixel_counter(packet_pixel_counter), .audio_sample_word(audio_sample_word), .header(header), .sub(sub));
         logic [8:0] packet_data;
         packet_assembler packet_assembler (.clk_pixel(clk_pixel), .reset(reset), .data_island_period(data_island_period), .header(header), .sub(sub), .packet_data(packet_data), .counter(packet_pixel_counter));
 
