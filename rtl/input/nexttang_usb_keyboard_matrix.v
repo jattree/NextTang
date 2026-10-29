@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 NextTang contributors
 //
-// Translate a USB boot-keyboard report into the forty-key Spectrum matrix.
+// Translate a USB boot-keyboard report into the forty-key Spectrum matrix,
+// and F1-F10 into the ZX Next's function keys (bit n is Fn).
 // The HID host retains the four currently pressed usage codes, so this path is
 // combinational and releases a key as soon as it disappears from the report.
 
@@ -16,7 +17,8 @@ module nexttang_usb_keyboard_matrix (
     input  wire [7:0] key4,
     input  wire [7:0] key5,
     input  wire [7:0] key6,
-    output wire [39:0] keys
+    output wire [39:0] keys,
+    output wire [10:1] function_keys
 );
     localparam [1:0] TYPE_KEYBOARD = 2'd1;
 
@@ -78,6 +80,15 @@ module nexttang_usb_keyboard_matrix (
         end
     endfunction
 
+    // F1-F10 are HID usages 3a-43.
+    function automatic [10:1] decode_function(input [7:0] code);
+        begin
+            decode_function = 10'b0;
+            if (code >= 8'h3a && code <= 8'h43)
+                decode_function[code - 8'h39] = 1'b1;
+        end
+    endfunction
+
     wire [39:0] pressed = decode_key(key1) | decode_key(key2) |
                           decode_key(key3) | decode_key(key4) |
                           decode_key(key5) | decode_key(key6);
@@ -90,6 +101,11 @@ module nexttang_usb_keyboard_matrix (
 
     assign keys = device_type == TYPE_KEYBOARD
         ? pressed | modifier_keys : 40'b0;
+
+    wire [10:1] functions = decode_function(key1) | decode_function(key2) |
+                            decode_function(key3) | decode_function(key4) |
+                            decode_function(key5) | decode_function(key6);
+    assign function_keys = device_type == TYPE_KEYBOARD ? functions : 10'b0;
 endmodule
 
 `default_nettype wire

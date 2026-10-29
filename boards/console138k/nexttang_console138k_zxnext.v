@@ -188,6 +188,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire        ram_a_request;
     wire        ram_a_cycle_request;
     wire [7:0]  keyboard_rows;
+    wire [10:1] function_keys;   // F1-F10 for the core's hot keys
     wire [4:0]  keyboard_columns;
     wire [11:0] left_joystick;
     wire        spi_clock;
@@ -262,7 +263,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_FLASH_BOOT(),
         .o_CORE_ID(),
 
-        .i_SPKEY_FUNCTION(10'b0),
+        .i_SPKEY_FUNCTION(function_keys),   // F10 down to F1
         .i_SPKEY_BUTTONS(2'b0),
 
         .o_KBD_CANCEL(),
@@ -513,17 +514,20 @@ module `NEXTTANG_ZXNEXT_TOP (
     );
 
     wire [39:0] usb1_keys, usb2_keys;
+    wire [10:1] usb1_functions, usb2_functions;
     wire [4:0] usb1_kempston, usb2_kempston;
 
     nexttang_usb_keyboard_matrix usb1_key_decode (
         .device_type(usb1_type), .modifiers(usb1_modifiers),
         .key1(usb1_key1), .key2(usb1_key2), .key3(usb1_key3),
-        .key4(usb1_key4), .key5(usb1_key5), .key6(usb1_key6), .keys(usb1_keys)
+        .key4(usb1_key4), .key5(usb1_key5), .key6(usb1_key6), .keys(usb1_keys),
+        .function_keys(usb1_functions)
     );
     nexttang_usb_keyboard_matrix usb2_key_decode (
         .device_type(usb2_type), .modifiers(usb2_modifiers),
         .key1(usb2_key1), .key2(usb2_key2), .key3(usb2_key3),
-        .key4(usb2_key4), .key5(usb2_key5), .key6(usb2_key6), .keys(usb2_keys)
+        .key4(usb2_key4), .key5(usb2_key5), .key6(usb2_key6), .keys(usb2_keys),
+        .function_keys(usb2_functions)
     );
     nexttang_usb_gamepad_kempston usb1_game_decode (
         .device_type(usb1_type),
@@ -552,10 +556,18 @@ module `NEXTTANG_ZXNEXT_TOP (
     reg [39:0] host_keys = 40'b0;
     reg [4:0] kempston_meta = 5'b0;
     reg [4:0] kempston_sync = 5'b0;
+    // F1-F10 for the core's hot keys (F1 hard reset, F3 50/60 Hz, F4 soft
+    // reset, F8 CPU speed, F9 Multiface NMI, F10 divMMC NMI); the core acts on
+    // a press, so a held key does not repeat.
+    reg [10:1] host_functions = 10'b0;
+    reg [10:1] functions_meta = 10'b0;
+    reg [10:1] functions_sync = 10'b0;
 
     always @(posedge clock_28) begin
         keys_meta <= usb1_keys | usb2_keys | host_keys;
         keys_sync <= keys_meta;
+        functions_meta <= usb1_functions | usb2_functions | host_functions;
+        functions_sync <= functions_meta;
         kempston_meta <= usb1_kempston | usb2_kempston;
         kempston_sync <= kempston_meta;
     end
@@ -569,10 +581,12 @@ module `NEXTTANG_ZXNEXT_TOP (
     // Kempston's fire, up, down, left and right already sit where the core's
     // joystick word puts B, U, D, L and R.
     assign left_joystick = {7'b0, kempston_sync};
+    assign function_keys = functions_sync;
     wire keyboard_connected = usb1_type == 2'd1 || usb2_type == 2'd1;
     wire input_active = |keys_sync || |kempston_sync;
 `else
     assign keyboard_columns = 5'b11111;
+    assign function_keys = 10'b0;
     assign left_joystick = 12'b0;
     assign spi_sd_miso = 1'b1;
     wire keyboard_connected = 1'b0;
@@ -1199,6 +1213,10 @@ module `NEXTTANG_ZXNEXT_TOP (
     // keyboard matrix's order (row * 5 + column), until the next K.
     reg [3:0]  key_digits_left = 4'd0;
     reg [39:0] key_command_mask = 40'b0;
+    // J followed by three hex digits holds function keys, bit 0 for F1, until
+    // the next J.
+    reg [1:0]  function_digits_left = 2'd0;
+    reg [11:0] function_command_mask = 12'b0;
 
     always @(posedge clock_28) begin
         if (command_valid) begin
@@ -1213,6 +1231,19 @@ module `NEXTTANG_ZXNEXT_TOP (
 `endif
             end else begin
                 key_digits_left <= 4'd0;
+            end
+
+            if (command_byte == "J") begin
+                function_digits_left <= 2'd3;
+            end else if (function_digits_left != 2'd0 && command_is_digit) begin
+                function_command_mask <= {function_command_mask[7:0], command_digit};
+                function_digits_left <= function_digits_left - 2'd1;
+`ifdef NEXTTANG_ZXNEXT_IO
+                if (function_digits_left == 2'd1)
+                    host_functions <= {function_command_mask[5:0], command_digit};
+`endif
+            end else begin
+                function_digits_left <= 2'd0;
             end
         end
     end

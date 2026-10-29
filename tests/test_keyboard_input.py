@@ -499,5 +499,39 @@ endmodule
 """
         self.assertIn("USB_MATRIX_PASS", run(testbench, USB_MATRIX_RTL))
 
+    def test_hid_report_maps_function_keys_for_the_next(self) -> None:
+        testbench = r"""
+module testbench;
+    reg [1:0] device_type = 1;
+    reg [7:0] modifiers = 0;
+    reg [7:0] key1 = 0, key2 = 0, key3 = 0, key4 = 0, key5 = 0, key6 = 0;
+    wire [39:0] keys;
+    wire [10:1] function_keys;
+
+    nexttang_usb_keyboard_matrix dut (
+        .device_type(device_type), .modifiers(modifiers),
+        .key1(key1), .key2(key2), .key3(key3), .key4(key4),
+        .key5(key5), .key6(key6), .keys(keys), .function_keys(function_keys)
+    );
+
+    initial begin
+        key1 = 8'h3a; #1;   // F1
+        if (function_keys != 10'b0000000001) $fatal(1, "F1 wrong: %b", function_keys);
+        if (keys != 0) $fatal(1, "F1 reached the matrix: %010x", keys);
+        key1 = 8'h3c; key2 = 8'h3d; #1;   // F3 and F4 together
+        if (function_keys != 10'b0000001100) $fatal(1, "F3+F4 wrong: %b", function_keys);
+        key1 = 8'h43; key2 = 8'h04; #1;   // F10 with A
+        if (function_keys != 10'b1000000000 || !keys[5]) $fatal(1, "F10+A wrong: %b %010x", function_keys, keys);
+        key1 = 8'h44; key2 = 0; #1;       // F11 is not a Next hot key
+        if (function_keys != 0) $fatal(1, "F11 leaked: %b", function_keys);
+        key1 = 8'h3a; device_type = 0; #1;
+        if (function_keys != 0) $fatal(1, "non-keyboard report leaked: %b", function_keys);
+        $display("USB_FUNCTION_KEYS_PASS");
+        $finish;
+    end
+endmodule
+"""
+        self.assertIn("USB_FUNCTION_KEYS_PASS", run(testbench, USB_MATRIX_RTL))
+
 if __name__ == "__main__":
     unittest.main()
