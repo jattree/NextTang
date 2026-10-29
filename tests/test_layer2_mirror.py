@@ -100,7 +100,41 @@ endmodule
 """
 
 
+# The board's mirror: one range of 24 banks, 8 to 31 (SRAM 0x060000 to
+# 0x0bffff), which needs a five-bit slot.
+WIDE_TESTBENCH = (
+    TESTBENCH
+    .replace("nexttang_layer2_mirror dut (",
+             "nexttang_layer2_mirror #(.FIRST_A(24), .BANKS_A(24), .FIRST_B(0), .BANKS_B(0)) dut (")
+    .split("    initial begin\n        // Range A")[0]
+    + r"""    initial begin
+        cpu_cycle(21'h060000, 8'h11, 1);     // bank 8, first byte
+        cpu_cycle(21'h088000, 8'h22, 1);     // bank 18
+        cpu_cycle(21'h0a1234, 8'h33, 1);     // bank 24, slot 16
+        cpu_cycle(21'h0bffff, 8'h44, 1);     // bank 31, last byte
+        cpu_cycle(21'h05ffff, 8'h55, 1);     // bank 7
+        cpu_cycle(21'h0c0000, 8'h66, 1);     // bank 32
+        cpu_cycle(21'h0e1234, 8'h77, 1);     // bank 40, aliases bank 24 in 5 bits
+        expect_read(21'h060000, 8'h11);
+        expect_read(21'h088000, 8'h22);
+        expect_read(21'h0a1234, 8'h33);
+        expect_read(21'h0bffff, 8'h44);
+        expect_read(21'h05ffff, 8'he3);
+        expect_read(21'h0c0000, 8'he3);
+        expect_read(21'h0e1234, 8'he3);
+        $display("LAYER2_MIRROR_WIDE_PASS");
+        $finish;
+    end
+endmodule
+"""
+)
+
+
 class Layer2MirrorTest(unittest.TestCase):
+    def test_board_mirror_covers_banks_8_to_31(self) -> None:
+        output = run_testbench(WIDE_TESTBENCH, *SOURCES)
+        self.assertIn("LAYER2_MIRROR_WIDE_PASS", output)
+
     def test_mirror_copies_writes_in_range_and_serves_reads(self) -> None:
         output = run_testbench(TESTBENCH, *SOURCES)
         self.assertIn("LAYER2_MIRROR_PASS", output)

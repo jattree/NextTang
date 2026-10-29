@@ -12,8 +12,8 @@
 // the core's memory request, so the byte kept is the one present when the
 // request ends.
 //
-// Two ranges of 16 KiB SRAM units are mirrored, A and B, so a game can keep
-// two Layer 2 screens apart, for example one in bank 8 and one in bank 18.
+// Up to two ranges of 16 KiB SRAM units are mirrored, A and B, so a copy can
+// cover two places a game keeps Layer 2 screens without the banks between.
 // Reads outside both return OUTSIDE. That byte is not reliably transparent:
 // the core decides transparency after the palette, and in 640x256 each nibble
 // is a pixel. The board therefore tells the core which units are mirrored, and
@@ -23,8 +23,7 @@
 
 module nexttang_layer2_mirror #(
     // First unit and number of units of each range. SRAM unit = RAM bank + 16,
-    // so unit 24 is bank 8. The ranges must not overlap and hold at most 16
-    // units between them.
+    // so unit 24 is bank 8. The ranges must not overlap; B may be empty.
     parameter integer FIRST_A = 24,
     parameter integer BANKS_A = 5,
     parameter integer FIRST_B = 34,
@@ -48,6 +47,7 @@ module nexttang_layer2_mirror #(
     output reg         check_hit
 );
     localparam integer UNITS = BANKS_A + BANKS_B;
+    localparam integer SLOT_BITS = UNITS > 1 ? $clog2(UNITS) : 1;
 
     // Where a unit lives in the copy: range A first, then range B.
     function hit(input [6:0] unit);
@@ -55,7 +55,7 @@ module nexttang_layer2_mirror #(
               (unit >= FIRST_B && unit < FIRST_B + BANKS_B);
     endfunction
 
-    function [3:0] slot(input [6:0] unit);
+    function [SLOT_BITS-1:0] slot(input [6:0] unit);
         slot = (unit >= FIRST_A && unit < FIRST_A + BANKS_A)
             ? unit - FIRST_A
             : BANKS_A + unit - FIRST_B;
@@ -74,7 +74,7 @@ module nexttang_layer2_mirror #(
     end
 
     nexttang_block_ram #(
-        .ADDRESS_BITS(18),
+        .ADDRESS_BITS(SLOT_BITS + 14),
         .DATA_BITS(8),
         .DEPTH(UNITS * 16384)
     ) mirror (

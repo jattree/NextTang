@@ -217,14 +217,16 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [12:0] core_audio_right;
 
 `ifdef NEXTTANG_ZXNEXT_DDR3
-    // Layer 2 reads come from a block RAM mirror of two ranges of 16 KiB
-    // banks: 8 to 12, the default Layer 2 bank with room for a 320x256 or
-    // 640x256 screen, and 18 to 22 for a second screen there. SRAM unit = RAM
-    // bank + 16. The core shows Layer 2 kept anywhere else as transparent.
+    // Layer 2 reads come from a block RAM mirror of 16 KiB banks 8 to 31:
+    // the banks NextREG 0x12 and 0x13 reset to (8 and 11), each with room
+    // for a 320x256 or 640x256 screen, and space above for games that keep
+    // further screens there. SRAM unit = RAM bank + 16. The core shows
+    // Layer 2 kept anywhere else as transparent. The frame store's move to
+    // DDR3 made room for the 192 blocks this takes.
     localparam integer LAYER2_FIRST_A = 24;
-    localparam integer LAYER2_BANKS_A = 5;
-    localparam integer LAYER2_FIRST_B = 34;
-    localparam integer LAYER2_BANKS_B = 5;
+    localparam integer LAYER2_BANKS_A = 24;
+    localparam integer LAYER2_FIRST_B = 0;
+    localparam integer LAYER2_BANKS_B = 0;
     localparam [127:0] LAYER2_UNITS =
         (((128'd1 << LAYER2_BANKS_A) - 128'd1) << LAYER2_FIRST_A) |
         (((128'd1 << LAYER2_BANKS_B) - 128'd1) << LAYER2_FIRST_B);
