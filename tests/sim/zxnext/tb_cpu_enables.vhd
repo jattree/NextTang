@@ -46,8 +46,7 @@ begin
     process
         variable position : natural range 0 to 3 := PHASE mod 4;
         variable first_7  : natural := (4 - PHASE mod 4) mod 4;
-        variable selected : std_logic_vector(1 downto 0) := "00";
-        variable level    : std_logic := '0';
+        variable state    : cpu_clock_state := CPU_CLOCK_START;
         variable at_28, rises, falls : boolean;
         variable fall_due : boolean := false;
         variable seed_1   : positive := SEED;
@@ -61,7 +60,7 @@ begin
             -- the reference decision for this edge.
             if cycle >= first_7 then
                 cpu_clock_rising_edge(cycle - first_7, position, speed, lsb, contend,
-                                      selected, level, at_28, rises, falls);
+                                      state, at_28, rises, falls);
             else
                 at_28 := false; rises := false; falls := false;
             end if;
@@ -71,9 +70,8 @@ begin
                 severity failure;
             if rises then checked_rises := checked_rises + 1; end if;
             fall_due := falls or at_28;
-            if at_28 then level := '0'; end if;
             if cycle >= first_7 + START_CYCLE then
-                speeds_seen(to_integer(unsigned(selected))) := '1';
+                speeds_seen(to_integer(unsigned(state.selected))) := '1';
             end if;
 
             clock_28 <= '1';
@@ -93,6 +91,9 @@ begin
             if fall_due then checked_falls := checked_falls + 1; end if;
 
             clock_28 <= '0';
+            if cycle >= first_7 then
+                cpu_clock_falling_edge(cycle - first_7, state);
+            end if;
             uniform(seed_1, seed_2, draw);
             if draw < 0.02 then
                 uniform(seed_1, seed_2, draw);

@@ -965,6 +965,15 @@ module `NEXTTANG_ZXNEXT_TOP (
     // free; the others keep them in block RAM.
 `ifdef NEXTTANG_ZXNEXT_DDR3
     wire frame_store_late;
+    // V0 from the debug UART stops the frame store's DDR3 traffic and V1
+    // restarts it, so the CPU's wait for main memory can be measured with
+    // and without it under one workload. The picture is stale while it is
+    // off.
+    reg video_memory_enable = 1'b1;
+    reg [1:0] video_memory_sync = 2'b11;
+
+    always @(posedge controller_clock)
+        video_memory_sync <= {video_memory_sync[0], video_memory_enable};
 
     nexttang_ddr3_frame_store #(
         .PIXEL_BITS(9),
@@ -994,7 +1003,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .output_frame_valid(scaled_frame_valid),
         .memory_clock(controller_clock),
         .memory_reset(!controller_reset_n),
-        .memory_available(calibration_complete),
+        .memory_available(calibration_complete && video_memory_sync[1]),
         .controller_request(video_controller_request),
         .controller_command_ready(video_controller_command_ready),
         .controller_command(video_controller_command),
@@ -1206,25 +1215,43 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire trace_frozen;
     wire trace_transmit;
 
-    // How long main memory holds the CPU, in 28 MHz cycles: the most recent
-    // completed wait and the longest since the machine started.
-    reg [15:0] wait_cycles = 16'd0;
-    reg [15:0] last_wait_cycles = 16'd0;
-    reg [15:0] longest_wait_cycles = 16'd0;
+    // How much main memory holds the CPU, measured over windows of 2^24
+    // 28 MHz cycles (0.6 s): the cycles held, the holds begun and the longest
+    // hold, each reported for the last complete window.
+    reg [23:0] wait_window = 24'd0;
+    reg [23:0] wait_window_cycles = 24'd0;
+    reg [15:0] wait_window_holds = 16'd0;
+    reg [15:0] wait_window_longest = 16'd0;
+    reg [15:0] wait_hold_cycles = 16'd0;
+    reg        cpu_wait_previous = 1'b0;
+    reg [23:0] wait_cycles_reported = 24'd0;
+    reg [15:0] wait_holds_reported = 16'd0;
+    reg [15:0] wait_longest_reported = 16'd0;
 
     always @(posedge clock_28) begin
-        if (machine_reset) begin
-            wait_cycles <= 16'd0;
-            last_wait_cycles <= 16'd0;
-            longest_wait_cycles <= 16'd0;
-        end else if (cpu_wait) begin
-            if (wait_cycles != 16'hffff)
-                wait_cycles <= wait_cycles + 16'd1;
-        end else if (wait_cycles != 16'd0) begin
-            last_wait_cycles <= wait_cycles;
-            if (wait_cycles > longest_wait_cycles)
-                longest_wait_cycles <= wait_cycles;
-            wait_cycles <= 16'd0;
+        cpu_wait_previous <= cpu_wait;
+        wait_window <= wait_window + 24'd1;
+        if (cpu_wait) begin
+            if (wait_hold_cycles != 16'hffff)
+                wait_hold_cycles <= wait_hold_cycles + 16'd1;
+        end else begin
+            wait_hold_cycles <= 16'd0;
+        end
+
+        if (wait_window == 24'hffffff) begin
+            wait_cycles_reported <= wait_window_cycles;
+            wait_holds_reported <= wait_window_holds;
+            wait_longest_reported <= wait_window_longest;
+            wait_window_cycles <= 24'd0;
+            wait_window_holds <= 16'd0;
+            wait_window_longest <= 16'd0;
+        end else begin
+            if (cpu_wait)
+                wait_window_cycles <= wait_window_cycles + 24'd1;
+            if (cpu_wait && !cpu_wait_previous && wait_window_holds != 16'hffff)
+                wait_window_holds <= wait_window_holds + 16'd1;
+            if (cpu_wait && wait_hold_cycles >= wait_window_longest)
+                wait_window_longest <= wait_hold_cycles + 16'd1;
         end
     end
 
@@ -1326,13 +1353,15 @@ module `NEXTTANG_ZXNEXT_TOP (
     nexttang_debug_status_uart #(
         .CLOCK_HZ(7000000),
         .GAP_CLOCKS(1750000),
-        .EXTRA_VALUE(3)
+        .EXTRA_VALUE(5)
     ) status_uart (
         .clock(clock_7),
         .reset(!machine_locked),
         .flags(status_flags),
         .value(status_value),
         .extra({
+            wait_holds_reported, wait_longest_reported,
+            8'h00, wait_cycles_reported,
             last_io_write_data, sd_byte_count,
             sd_checksum,
             cpu_wait, cpu_contend, 2'b00, double_interrupts, cpu_enable_count
@@ -1406,6 +1435,18 @@ module `NEXTTANG_ZXNEXT_TOP (
             end
         end
     end
+
+`ifdef NEXTTANG_ZXNEXT_DDR3
+    reg video_command = 1'b0;
+
+    always @(posedge clock_28) begin
+        if (command_valid) begin
+            video_command <= command_byte == "V";
+            if (video_command && (command_byte == "0" || command_byte == "1"))
+                video_memory_enable <= command_byte[0];
+        end
+    end
+`endif
 
     always @(posedge clock_28) begin
         trigger_command_done <= 1'b0;

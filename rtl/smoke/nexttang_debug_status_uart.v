@@ -24,8 +24,8 @@
 // The trailing field is a free-running tick counter, so a stalled transmitter,
 // a repeated line, or a restarted FPGA are all obvious from the log alone.
 //
-// EXTRA_VALUE further 32-bit fields, up to three, follow the first: extra
-// bits 31:0, then 63:32, then 95:64.
+// EXTRA_VALUE further 32-bit fields, up to five, follow the first: extra
+// bits 31:0, then 63:32, and so on.
 //
 //     NT V+ M+ R- C- 0001a2b3 00000000 00000000
 
@@ -42,7 +42,7 @@ module nexttang_debug_status_uart #(
     input  wire [5:0] flags,
     // {vsync_alive, pixel_clock_alive, calibration, released, memory, video}
     input  wire [31:0] value,   // reported verbatim, for a measured quantity
-    input  wire [95:0] extra,   // reported after value, EXTRA_VALUE words of it
+    input  wire [159:0] extra,  // reported after value, EXTRA_VALUE words of it
     output reg  transmit
 );
     localparam integer MESSAGE_BYTES = 40 + 9 * EXTRA_VALUE;
@@ -110,10 +110,11 @@ module nexttang_debug_status_uart #(
             hex_digit(word[7:4]),   hex_digit(word[3:0])
         };
     endfunction
-    wire [3*9*8-1:0] extra_fields = {field(extra[31:0]), field(extra[63:32]), field(extra[95:64])};
+    wire [5*9*8-1:0] extra_fields = {field(extra[31:0]), field(extra[63:32]), field(extra[95:64]),
+                                     field(extra[127:96]), field(extra[159:128])};
     // The extra fields go between the first value and the line ending.
     wire [MESSAGE_BYTES*8-1:0] message = EXTRA_VALUE != 0
-        ? {base_message[40*8-1:16], extra_fields[3*9*8-1 -: (EXTRA_VALUE == 0 ? 1 : EXTRA_VALUE) * 9 * 8],
+        ? {base_message[40*8-1:16], extra_fields[5*9*8-1 -: (EXTRA_VALUE == 0 ? 1 : EXTRA_VALUE) * 9 * 8],
            base_message[15:0]}
         : base_message;
 

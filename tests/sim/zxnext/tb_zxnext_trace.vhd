@@ -105,8 +105,7 @@ architecture sim of tb_zxnext_trace is
 begin
     clocks : process
         variable position : natural range 0 to 3 := 0;  -- 0: a 7 MHz rising edge
-        variable selected : std_logic_vector(1 downto 0) := "00";
-        variable level    : std_logic := '0';
+        variable state    : cpu_clock_state := CPU_CLOCK_START;
         variable at_28, rises, falls : boolean;
         variable fall_due : boolean := false;
         variable divider  : unsigned(3 downto 0) := (others => '0');
@@ -117,7 +116,7 @@ begin
             -- Rising edge of clock_28. Decide the CPU clock from values that
             -- settled during the last cycle.
             cpu_clock_rising_edge(cycle, position, cpu_speed, cpu_lsb, cpu_contend,
-                                  selected, level, at_28, rises, falls);
+                                  state, at_28, rises, falls);
             if MODE = "enables" then
                 assert (generator_cen_r = '1') = rises
                     report "cycle " & integer'image(cycle) & ": rising enable " &
@@ -132,7 +131,7 @@ begin
             if position = 0 or position = 2 then clock_14 <= '1'; else clock_14 <= '0'; end if;
             -- In enables mode i_CLK_CPU is clock_28 itself, changed in the same
             -- statement group so it carries no delta of its own.
-            if MODE = "enables" then cpu_clock <= '1'; else cpu_clock <= level; end if;
+            if MODE = "enables" then cpu_clock <= '1'; else cpu_clock <= state.level; end if;
             wait for HALF;
 
             -- Falling edge.
@@ -144,11 +143,11 @@ begin
             end if;
             clock_28 <= '0';
             clock_28_n <= '1';
-            if at_28 then
-                level := '0';
-            end if;
-            if MODE = "enables" or at_28 then
+            cpu_clock_falling_edge(cycle, state);
+            if MODE = "enables" then
                 cpu_clock <= '0';
+            else
+                cpu_clock <= state.level;
             end if;
             divider := divider + 1;
             if divider = "1110" then psg_enable <= '1'; else psg_enable <= '0'; end if;

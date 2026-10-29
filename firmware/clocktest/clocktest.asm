@@ -6,7 +6,8 @@
 ; enables can be traced side by side. It touches what the conversion changes:
 ; the CPU's falling-edge I/O read-back (border, keyboard, paging, Timex, AY,
 ; NextREG, SPI), contended memory at 3.5 MHz, interrupts taken from HALT, and
-; speed changes themselves. Results go to RAM so every read shows on the bus.
+; speed changes themselves, upwards and then out of 28 MHz and back. Results
+; go to RAM so every read shows on the bus.
 ;
 ; Each speed runs the exercise twice: once from this ROM, which the core holds
 ; on chip, and once from a copy in main memory at $a000. Main memory is where
@@ -21,6 +22,7 @@
 NEXTREG_SELECT  equ $243b
 RESULTS         equ $8000               ; 16 bytes per speed, ROM pass
 RAM_RESULTS     equ $8040               ; 16 bytes per speed, RAM pass
+SWITCH_RESULTS  equ $8080               ; 16 bytes per switch from or to 28 MHz
 RAM_CODE        equ $a000
 TICKS           equ $8100
 SCREEN          equ $4000
@@ -81,12 +83,39 @@ speed_loop:
         cp      4
         jr      nz,speed_loop
 
+        ; Then out of 28 MHz and back, running from main memory straight
+        ; after each change, as NextZXOS does when it drops to the speed a
+        ; program asked for: 28 to 3.5, 3.5 to 28, 28 to 7, 7 to 28, 28 to
+        ; 14. The CPU clock changes source on each of these.
+        ld      ix,SWITCH_RESULTS
+        ld      hl,switch_speeds
+switch_loop:
+        ld      e,(hl)
+        inc     hl
+        push    hl
+        ld      bc,NEXTREG_SELECT
+        ld      a,$07
+        out     (c),a
+        inc     b
+        ld      a,e
+        out     (c),a
+        call    exercise_ram
+        ld      bc,16
+        add     ix,bc
+        pop     hl
+        ld      a,(hl)
+        cp      $ff
+        jr      nz,switch_loop
+
         ld      a,7                     ; white border: finished
         out     ($fe),a
         di
 finished:
         halt
         jr      finished
+
+switch_speeds:
+        db      0, 3, 1, 3, 2, $ff
 
         macro   EXERCISE_BODY
         ; Uncontended memory: write a pattern, then sum it back.

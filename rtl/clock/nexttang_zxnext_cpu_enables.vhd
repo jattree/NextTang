@@ -27,11 +27,19 @@
 -- clock_28, clock_14 or clock_7 sees the same values on the same edge, because
 -- the earliest it could look is the next rising edge.
 --
--- The rules are MiSTer's zxnext_top. At 3.5 MHz, on each 7 MHz rising edge,
--- the clock falls if the pixel counter's low bit is set and the CPU is not
--- contended, and rises if the bit is clear. 7 and 14 MHz follow clock_7 and
--- clock_14. 28 MHz rises and falls with clock_28. A requested speed is adopted
--- on the 28 MHz edge before a 7 MHz edge.
+-- The rules are MiSTer's zxnext_top. A slow clock is made from the adopted
+-- speed: at 3.5 MHz, on each 7 MHz rising edge, it falls if the pixel
+-- counter's low bit is set and the CPU is not contended, and rises if the bit
+-- is clear; 7 and 14 MHz follow clock_7 and clock_14. A requested speed is
+-- adopted on the 28 MHz edge before a 7 MHz edge. The CPU gets the slow clock
+-- or clock_28 through zxnext_top's glitch-free multiplexer, which follows the
+-- requested speed at once: leaving 28 MHz, the clock is held high from the
+-- next clock_28 rising edge until the slow clock has fallen and risen again;
+-- entering it, the clock rises with the slow clock, is held high, and follows
+-- clock_28 from the rising edge after the next falling one. Without the hold,
+-- the CPU kept stepping at 28 MHz for up to four cycles after the core had
+-- switched its memory timing to the slow speed, and could take an opcode
+-- before memory had answered.
 --
 -- clock_7 comes from a divider whose phase against clock_28 is set at
 -- configuration and is not predictable, so it is measured. clock_7 flips a
@@ -65,7 +73,21 @@ architecture rtl of nexttang_zxnext_cpu_enables is
     -- 0 is a 7 MHz rising edge, 2 a 7 MHz falling edge.
     signal position       : unsigned(1 downto 0) := "00";
     signal selected       : std_logic_vector(1 downto 0) := "00";
-    signal level          : std_logic := '0';
+    -- The slow clock's level, and its level after the next rising edge.
+    signal slow           : std_logic := '0';
+    signal slow_next      : std_logic;
+    -- The multiplexer: q0 passes the slow clock, q1 clock_28, neither holds
+    -- the CPU clock high. q0 may be set again once the slow clock has fallen
+    -- with q1 clear.
+    signal q0             : std_logic := '0';
+    signal q1             : std_logic := '0';
+    signal q0_enable      : std_logic := '0';
+    signal is28           : std_logic;
+    signal q0_next        : std_logic;
+    signal q1_next        : std_logic;
+    -- The CPU clock's level after the last falling edge of clock_28, and
+    -- after the next rising one.
+    signal level          : std_logic := '1';
     signal level_next     : std_logic;
     signal falling_due    : std_logic := '0';
 begin
@@ -83,35 +105,39 @@ begin
         end if;
     end process;
 
-    -- The CPU clock's level after the next rising edge of clock_28.
-    process (selected, position, level, i_CPU_CLK_LSB, i_CPU_CONTEND)
+    process (selected, position, slow, i_CPU_CLK_LSB, i_CPU_CONTEND)
     begin
-        level_next <= level;
+        slow_next <= slow;
         case selected is
             when "00" =>
                 if position = 0 then
                     if i_CPU_CLK_LSB = '1' and i_CPU_CONTEND = '0' then
-                        level_next <= '0';
+                        slow_next <= '0';
                     elsif i_CPU_CLK_LSB = '0' then
-                        level_next <= '1';
+                        slow_next <= '1';
                     end if;
                 end if;
             when "01" =>
-                if position = 0 then
-                    level_next <= '1';
-                elsif position = 2 then
-                    level_next <= '0';
-                end if;
-            when "10" =>
-                if position = 0 or position = 2 then
-                    level_next <= '1';
+                if position = 0 or position = 1 then
+                    slow_next <= '1';
                 else
-                    level_next <= '0';
+                    slow_next <= '0';
                 end if;
             when others =>
-                level_next <= '1';
+                if position = 0 or position = 2 then
+                    slow_next <= '1';
+                else
+                    slow_next <= '0';
+                end if;
         end case;
     end process;
+
+    is28 <= '1' when i_CPU_SPEED = "11" else '0';
+    -- q1's enable is set on every falling edge of clock_28 unless q0 is set,
+    -- so at a rising edge it is simply q0's inverse.
+    q1_next <= is28 and not q0;
+    q0_next <= (not is28) and q0_enable when slow = '0' and slow_next = '1' else q0;
+    level_next <= slow_next when q0_next = '1' else '1';
 
     o_CEN_R <= locked and not level and level_next;
 
@@ -128,13 +154,23 @@ begin
             end if;
 
             if locked = '1' then
-                if selected = "11" then
-                    -- Rises on this edge and falls on the next falling edge.
-                    falling_due <= '1';
+                slow <= slow_next;
+                q0 <= q0_next;
+                q1 <= q1_next;
+                if q1_next = '1' then
+                    q0_enable <= '0';
+                elsif slow = '1' and slow_next = '0' then
+                    q0_enable <= '1';
+                end if;
+                -- Falls on this edge (run on the falling edge after it), or
+                -- with clock_28 on that falling edge.
+                falling_due <= (level and not level_next) or (q1_next and not q0_next);
+                if q0_next = '1' then
+                    level <= slow_next;
+                elsif q1_next = '1' then
                     level <= '0';
                 else
-                    falling_due <= level and not level_next;
-                    level <= level_next;
+                    level <= '1';
                 end if;
                 if position = 3 then
                     selected <= i_CPU_SPEED;
