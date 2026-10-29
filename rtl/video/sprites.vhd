@@ -265,8 +265,6 @@ architecture rtl of sprites is
    signal spr_pattern_addr_delta : std_logic_vector((TOTAL_PATTERN_BITS+8-1) downto 0);
    
    signal spr_cur_hcount_valid   : std_logic;
-   signal spr_cur_notime_mask    : std_logic_vector(4 downto 0);
-   signal spr_cur_notime         : std_logic;
    
    signal spr_cur_index          : std_logic_vector((TOTAL_SPRITES_BITS-1) downto 0);
    signal spr_cur_index_is_zero  : std_logic;
@@ -822,9 +820,6 @@ begin
                              "00" & X"001";
    
    spr_cur_hcount_valid <= '1' when spr_cur_hcount < 320 else '0';
-   
-   spr_cur_notime_mask <= spr_cur_x_wrap(2 downto 0) & "00";
-   spr_cur_notime <= '1' when hcounter_i_valid = '1' and hcounter_i(8) = '1' and hcounter_i(5) = '1' and ((std_logic_vector(hcounter_i(4 downto 0)) and spr_cur_notime_mask) = spr_cur_notime_mask) else '0';
 
    -- state
    
@@ -846,13 +841,11 @@ begin
    spr_cur_index_is_zero <= '1' when spr_cur_index = 0 else '0';
    spr_cur_draw_it <= '1' when spr_cur_visible = '1' and spr_cur_yoff = 0 else '0';
    
-   process (state_s, spr_cur_draw_it, spr_cur_index_is_zero, spr_width_count, spr_cur_hcount_valid, spr_cur_hcount, spr_cur_x_wrap, spr_cur_notime)
+   process (state_s, spr_cur_draw_it, spr_cur_index_is_zero, spr_width_count, spr_cur_hcount_valid, spr_cur_hcount, spr_cur_x_wrap)
    begin
       case state_s is
          when S_START   => state_next_s <= S_QUALIFY;
-         when S_QUALIFY => if spr_cur_draw_it = '1' and spr_cur_notime = '1' then
-                              state_next_s <= S_IDLE;
-                           elsif spr_cur_draw_it = '1' then
+         when S_QUALIFY => if spr_cur_draw_it = '1' then
                               state_next_s <= S_PROCESS;
                            elsif spr_cur_index_is_zero = '1' then
                               state_next_s <= S_IDLE;
@@ -981,18 +974,7 @@ begin
    -- status register
    -- bits(7:2) = 0, bit 1 = max sprites per line, bit 0 = collision 
 
-   process (clock_master_i)
-   begin
-      if rising_edge(clock_master_i) then
-         if reset_i = '1' then
-            sprites_overtime <= '0';
-         elsif (state_s /= S_IDLE and line_reset_re = "01") or (state_s = S_QUALIFY and spr_cur_notime = '1' and spr_cur_draw_it = '1') then
-            sprites_overtime <= '1';
-         else
-            sprites_overtime <= '0';
-         end if;
-      end if;
-   end process;
+   sprites_overtime <= '1' when state_s /= S_IDLE and line_reset_re = "01" else '0';
    
    process (clock_master_180o_i)
    begin

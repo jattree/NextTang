@@ -1,6 +1,6 @@
 
 -- ZX Spectrum Next Implementation
--- Copyright 2020-2022 Alvin Albrecht, Victor Trucco and Fabio Belavenuto
+-- Copyright 2020-2025 Alvin Albrecht, Victor Trucco and Fabio Belavenuto
 --
 -- TBBlue - Victor Trucco & Fabio Belavenuto
 -- ZXNext Refactor - Alvin Albrecht
@@ -31,11 +31,11 @@ use work.Z80N_pack.all;
 entity zxnext is
    generic
    (
-      --g_machine_id         : unsigned(7 downto 0);
+      g_machine_id         : unsigned(7 downto 0);
       g_video_def          : unsigned(2 downto 0);
       g_version            : unsigned(7 downto 0);
       g_sub_version        : unsigned(7 downto 0);
-      --g_board_issue        : unsigned(3 downto 0);
+      g_board_issue        : unsigned(3 downto 0);
       g_video_inc          : unsigned(1 downto 0);
       -- NextTang: the 16K units of memory Layer 2 can read, passed to the
       -- layer2 entity.
@@ -43,10 +43,6 @@ entity zxnext is
    );
    port
    (
-      g_machine_id         : in unsigned(7 downto 0);
-	  g_board_issue        : in unsigned(3 downto 0);
-      -- CLOCK
-      
       i_CLK_28             : in std_logic;      -- 28MHz for machine logic
       i_CLK_28_n           : in std_logic;      -- 28MHz inverted
       i_CLK_14             : in std_logic;      -- 14MHz hi-res pixel clock
@@ -67,6 +63,8 @@ entity zxnext is
       -- RESET
 
       i_RESET              : in std_logic;      -- asserted for some number of cycles
+      -- NextTang (from MiSTer): with i_RESET, a hard reset that returns the
+      -- machine to its power-on state. A Next does this by reloading the FPGA.
       i_BOOT               : in std_logic;
       
       o_RESET_SOFT         : out std_logic;     -- asserted for one cycle at 28MHz
@@ -151,11 +149,9 @@ entity zxnext is
       -- synchronized to i_CLK_14
       
       o_RGB                : out std_logic_vector(8 downto 0);    -- RGB333
-      o_RGB_CS_n           : out std_logic;                       -- csync
       o_RGB_VS_n           : out std_logic;                       -- vsync
       o_RGB_HS_n           : out std_logic;                       -- hsync
-      o_RGB_VB_n           : out std_logic;                       -- vblank spilt for mister
-      o_RGB_HB_n           : out std_logic;                       -- hblank split for mister
+      o_RGB_BK_n           : out std_logic;                       -- blank
       
       o_VIDEO_50_60        : out std_logic;                       -- 0 = 50Hz, 1 = 60Hz
       o_VIDEO_SCANLINES    : out std_logic_vector(1 downto 0);    -- 
@@ -167,7 +163,7 @@ entity zxnext is
       o_HDMI_RESET         : out std_logic;
       o_HDMI_PIXEL         : out std_logic;                       -- pixel available
       o_HDMI_LOCK          : out std_logic;                       -- frame lock
-      center			   : in std_logic;
+      
       -- AUDIO
       
       o_AUDIO_HDMI_AUDIO_EN : out std_logic;
@@ -176,6 +172,10 @@ entity zxnext is
       o_AUDIO_SPEAKER_EXCL : out std_logic;     -- only beeps go to speaker
       
       i_AUDIO_EAR          : in std_logic;      -- tape input
+      
+      o_AUDIO_PI_FE_EAR     : out std_logic;    -- tape audio from pi
+      o_AUDIO_ISSUE2_FE_MIC : out std_logic;    -- issue 2 mic bit
+      
       o_AUDIO_MIC          : out std_logic;     -- tape output
       o_AUDIO_EAR          : out std_logic;     -- beep output
 
@@ -186,18 +186,17 @@ entity zxnext is
       -- memory transactions complete after one cycle, data read is registered a cycle later but is available asap
       
       -- Port A is read/write and highest priority (CPU)
-      
+
+      o_RAM_A_ADDR_21      : out std_logic;                       -- 4MB memory space on Issue 5 in config mode
       o_RAM_A_ADDR         : out std_logic_vector(20 downto 0);   -- 2MB memory space
       o_RAM_A_REQ          : out std_logic;                       -- '1' indicates memory request on next rising edge
-      o_RAM_A_REQ2         : out std_logic :='0';                   -- '1' indicates memory request on next rising edge (active for full cycle)
-      i_RAM_A_REQ_ALLOW    : in  std_logic :='0';															
+      -- NextTang (from MiSTer): the request held for the whole memory cycle,
+      -- and the board's wait while its slower main memory answers.
+      o_RAM_A_REQ2         : out std_logic;
+      i_CPU_WAIT           : in std_logic := '0';
       o_RAM_A_RD_n         : out std_logic;                       -- '0' for read, '1' for write
-																																	  
       i_RAM_A_DI           : in std_logic_vector(7 downto 0);     -- data read from memory
       o_RAM_A_DO           : out std_logic_vector(7 downto 0);    -- data written to memory
-      o_RAM_A_CYCLE          : out std_logic;   
-	  o_RAM_A_RFSH         : out std_logic;
-      i_CPU_WAIT           : in std_logic := '1';
       
       -- Port B is read only (LAYER 2)
       
@@ -228,7 +227,11 @@ entity zxnext is
       i_BUS_ROMCS_n        : in std_logic;                        -- 1 disables internal rom
 --    i_BUS_RAMCS_n        : in std_logic;
       i_BUS_IORQULA_n      : in std_logic;                        -- 1 disables port fe
-      
+
+      o_BUS_P3_MTR_n       : out std_logic;                       -- 0 to turn on +3 disk motor
+      o_BUS_P3_DRD_n       : out std_logic;                       -- 0 to read +3 fdc register
+      o_BUS_P3_DWR_n       : out std_logic;                       -- 0 to write +3 fdc register
+
       o_BUS_EN             : out std_logic;                       -- enable the expansion bus, changes on rising edge of cpu clock
       o_BUS_CLKEN          : out std_logic;                       -- 1 to keep 3.5MHz clock on the expansion bus even when off
       
@@ -246,8 +249,29 @@ entity zxnext is
       i_GPIO               : in std_logic_vector(27 downto 0);
       
       o_GPIO               : out std_logic_vector(27 downto 0);
-      o_GPIO_EN            : out std_logic_vector(27 downto 0);  -- 0 = high Z
+      o_GPIO_EN            : out std_logic_vector(27 downto 0);   -- 0 = high Z
 
+      -- XILINX PERIPHERALS
+      
+      o_XDNA_LOAD          : out std_logic;
+      o_XDNA_SHIFT         : out std_logic;
+      i_XDNA_DO            : in std_logic;
+      
+      o_XADC_RESET         : out std_logic;
+      
+      o_XADC_DEN           : out std_logic;
+      o_XADC_DADDR         : out std_logic_vector(6 downto 0);
+      o_XADC_DWE           : out std_logic;
+      i_XADC_DRDY          : in std_logic;
+      o_XADC_DI            : out std_logic_vector(15 downto 0);
+      i_XADC_DO            : in std_logic_vector(15 downto 0);
+      
+      i_XADC_BUSY          : in std_logic;
+      i_XADC_EOC           : in std_logic;
+      i_XADC_EOS           : in std_logic;
+      o_XADC_CONVST        : out std_logic;
+
+      o_XADC_CONTROL       : out std_logic;
       -- NextTang: a debug view of NextREG writes, from the CPU or the copper,
       -- and of the CPU's I/O cycles, which o_BUS_IORQ_n hides for internal
       -- ports.
@@ -294,7 +318,6 @@ architecture rtl of zxnext is
    signal dma_rd_n               : std_logic;
    signal dma_wr_n               : std_logic;
    signal dma_mreq_n             : std_logic;
-   signal dma_mreq_n_d           : std_logic;											 
    signal dma_iorq_n             : std_logic;
    
    signal port_dma_dat_0         : std_logic_vector(7 downto 0);
@@ -738,8 +761,8 @@ architecture rtl of zxnext is
    signal sram_pre_layer2_rd_en  : std_logic;
    signal sram_pre_layer2_wr_en  : std_logic;
    signal sram_pre_layer2_A21_A13: std_logic_vector(8 downto 0);
-   
-   signal sram_pre_A20_A13       : std_logic_vector(7 downto 0);
+
+   signal sram_pre_A21_A13       : std_logic_vector(8 downto 0);
    signal sram_pre_active        : std_logic;
    signal sram_pre_bank5         : std_logic;
    signal sram_pre_bank7         : std_logic;
@@ -748,8 +771,8 @@ architecture rtl of zxnext is
    
    signal sram_layer2_map_en     : std_logic;
    signal sram_altrom_en         : std_logic;
-   
-   signal sram_A20_A13           : std_logic_vector(7 downto 0);
+
+   signal sram_A21_A13           : std_logic_vector(8 downto 0);
    signal sram_active            : std_logic;
    signal sram_bank5             : std_logic;
    signal sram_bank7             : std_logic;
@@ -762,13 +785,12 @@ architecture rtl of zxnext is
    
    signal sram_memcycle          : std_logic;
    signal sram_romcs             : std_logic;
-   
 
    signal cpu_bank5_rd           : std_logic;
    signal cpu_bank5_we           : std_logic;
    signal cpu_bank7_we           : std_logic;
    
-   signal sram_addr              : std_logic_vector(20 downto 0);
+   signal sram_addr              : std_logic_vector(21 downto 0);
    signal sram_rd_n              : std_logic;
    signal sram_req               : std_logic;
    signal sram_req_d             : std_logic := '1';
@@ -878,8 +900,8 @@ architecture rtl of zxnext is
    signal port_dffd_reg          : std_logic_vector(4 downto 0);
    signal port_dffd_reg_6        : std_logic;
    
-   signal port_1ffd_reg          : std_logic_vector(7 downto 0);
-   signal port_1ffd_dat          : std_logic_vector(7 downto 0);
+   signal port_1ffd_reg          : std_logic_vector(2 downto 0);
+   signal port_1ffd_mtr_n        : std_logic;
    signal port_1ffd_special      : std_logic;
    signal port_1ffd_special_old  : std_logic;
    signal port_1ffd_rom          : std_logic_vector(1 downto 0);
@@ -1046,6 +1068,7 @@ architecture rtl of zxnext is
    signal nr_wr_dat              : std_logic_vector(7 downto 0);
    
    signal nr_02_we               : std_logic;
+   signal nr_04_we               : std_logic;
    signal nr_05_we               : std_logic;
    signal nr_07_we               : std_logic;
    signal nr_08_we               : std_logic;
@@ -1102,7 +1125,7 @@ architecture rtl of zxnext is
    signal bootrom_en             : std_logic := '1';
    signal nr_03_config_mode      : std_logic := '1';
    signal nr_03_machine_type     : std_logic_vector(2 downto 0) := "011";
-   signal nr_04_romram_bank      : std_logic_vector(6 downto 0) := (others => '0');
+   signal nr_04_romram_bank      : std_logic_vector(7 downto 0) := (others => '0');
    signal nr_05_joy0             : std_logic_vector(2 downto 0) := "001";
    signal nr_05_joy1             : std_logic_vector(2 downto 0) := "000";
    signal nr_06_hotkey_cpu_speed_en          : std_logic := '1';
@@ -1123,6 +1146,7 @@ architecture rtl of zxnext is
    signal nr_09_hdmi_audio_en    : std_logic := '1';
    signal nr_09_sprite_tie       : std_logic := '0';
    signal nr_0a_mf_type          : std_logic_vector(1 downto 0) := "00";
+   signal nr_0a_sd_swap          : std_logic := '0';
    signal nr_0a_divmmc_automap_en            : std_logic := '0';
    signal nr_0a_mouse_button_reverse         : std_logic := '0';
    signal nr_0a_mouse_dpi        : std_logic_vector(1 downto 0) := "01";
@@ -1221,6 +1245,7 @@ architecture rtl of zxnext is
    signal nr_81_expbus_ula_override          : std_logic := '0';
    signal nr_81_expbus_nmi_debounce_disable  : std_logic := '0';
    signal nr_81_expbus_clken     : std_logic := '0';
+   signal nr_81_expbus_fdc       : std_logic := '0';
    signal nr_81_expbus_speed     : std_logic_vector(1 downto 0) := "00";
    signal nr_82_internal_port_enable         : std_logic_vector(7 downto 0) := (others => '1');
    signal nr_83_internal_port_enable         : std_logic_vector(7 downto 0) := (others => '1');
@@ -1262,7 +1287,17 @@ architecture rtl of zxnext is
    signal nr_d8_io_trap_fdc_en   : std_logic;
    signal nr_d9_iotrap_write     : std_logic_vector(7 downto 0);
    signal nr_da_iotrap_cause     : std_logic_vector(1 downto 0);
-
+   signal nr_f0_select           : std_logic := '1';
+   signal nr_f0_xdna_en          : std_logic := '0';
+   signal nr_f0_xadc_en          : std_logic := '0';
+   signal nr_f0_xdev_cmd         : std_logic_vector(7 downto 0) := (others => '0');
+   signal nr_f0_xadc_eoc         : std_logic := '0';
+   signal nr_f0_xadc_eos         : std_logic := '0';
+   signal nr_f8_xadc_dwe         : std_logic := '0';
+   signal nr_f8_xadc_daddr       : std_logic_vector(6 downto 0) := (others => '0');
+   signal nr_f8_xadc_den         : std_logic := '0';
+   signal nr_f9_xadc_d0          : std_logic_vector(7 downto 0) := (others => '0');
+   signal nr_fa_xadc_d1          : std_logic_vector(7 downto 0) := (others => '0');
 
    signal machine_type_48        : std_logic;
    signal machine_type_128       : std_logic;
@@ -1360,7 +1395,7 @@ architecture rtl of zxnext is
    signal vram_bank7_do          : std_logic_vector(7 downto 0);
    
    signal video_timing_change    : std_logic;
-   signal video_timing_change_d  : std_logic := '1';
+   signal video_timing_change_d  : std_logic := '0';
    signal video_frame_sync       : std_logic;
    
    signal eff_nr_03_machine_timing           : std_logic_vector(2 downto 0) := "011";
@@ -1378,8 +1413,9 @@ architecture rtl of zxnext is
    signal cvc                    : unsigned(8 downto 0);
    signal rgb_hsync_n            : std_logic;
    signal rgb_vsync_n            : std_logic;
-   signal rgb_hblank_n           : std_logic;
-   signal rgb_vblank_n           : std_logic;
+   signal rgb_blank_n            : std_logic;
+   signal ula_vblank_n           : std_logic;   -- NextTang
+   signal ula_hblank_n           : std_logic;
    signal hdmi_pixel_en          : std_logic;
    signal hdmi_frame_lock        : std_logic;
    
@@ -1422,8 +1458,7 @@ architecture rtl of zxnext is
    signal layer_priorities_1     : std_logic_vector(2 downto 0);
    signal video_blank_n_1        : std_logic;
    signal rgb_vsync_n_1          : std_logic;
-   signal rgb_vblank_n_1         : std_logic;
-   signal rgb_hblank_n_1         : std_logic;
+   signal rgb_blank_n_1          : std_logic;
    signal rgb_hsync_n_1          : std_logic;
    signal ula_en_1               : std_logic;
    signal ula_en_1a              : std_logic;
@@ -1491,8 +1526,7 @@ architecture rtl of zxnext is
    signal layer_priorities_2     : std_logic_vector(2 downto 0);
    signal video_blank_n_2        : std_logic;
    signal rgb_vsync_n_2          : std_logic;
-   signal rgb_vblank_n_2         : std_logic;
-   signal rgb_hblank_n_2         : std_logic;
+   signal rgb_blank_n_2          : std_logic;
    signal rgb_hsync_n_2          : std_logic;
    
    signal ula_mix_transparent    : std_logic;
@@ -1521,20 +1555,15 @@ architecture rtl of zxnext is
    signal mix_rgb                : std_logic_vector(8 downto 0);
    signal mix_rgb_transparent    : std_logic;
    signal rgb_out_2              : std_logic_vector(8 downto 0);
-   signal rgb_out_2a             : std_logic_vector(8 downto 0);
 
    signal rgb_vsync_n_6          : std_logic;
    signal rgb_vsync_n_5          : std_logic;
    signal rgb_vsync_n_4          : std_logic;
    signal rgb_vsync_n_3          : std_logic;
-   signal rgb_vblank_n_6         : std_logic;
-   signal rgb_vblank_n_5         : std_logic;
-   signal rgb_vblank_n_4         : std_logic;
-   signal rgb_vblank_n_3         : std_logic;
-   signal rgb_hblank_n_6         : std_logic;
-   signal rgb_hblank_n_5         : std_logic;
-   signal rgb_hblank_n_4         : std_logic;
-   signal rgb_hblank_n_3         : std_logic;
+   signal rgb_blank_n_6          : std_logic;
+   signal rgb_blank_n_5          : std_logic;
+   signal rgb_blank_n_4          : std_logic;
+   signal rgb_blank_n_3          : std_logic;
    signal rgb_hsync_n_6          : std_logic;
    signal rgb_hsync_n_5          : std_logic;
    signal rgb_hsync_n_4          : std_logic;
@@ -1552,11 +1581,14 @@ architecture rtl of zxnext is
    signal hdmi_pixel_en_1        : std_logic;
 
    signal rgb_vsync_n_o          : std_logic;
-   signal rgb_vblank_n_o         : std_logic;
-   signal rgb_hblank_n_o         : std_logic;
+   signal rgb_blank_n_o          : std_logic;
    signal rgb_hsync_n_o          : std_logic;
    signal rgb_out_o              : std_logic_vector(8 downto 0);
-   signal rgb_csync_n_o          : std_logic;
+
+   signal xdna_load              : std_logic := '0';
+   signal xdna_shift             : std_logic := '0';
+   signal xadc_reset             : std_logic := '0';
+   signal xadc_convst            : std_logic := '0';
 
 begin
 
@@ -1606,11 +1638,9 @@ begin
    o_UART0_RTR_n <= esp_uart_rtr_n;
 
    o_RGB <= rgb_out_o;
-   o_RGB_CS_n <= rgb_csync_n_o;
    o_RGB_VS_n <= rgb_vsync_n_o;
    o_RGB_HS_n <= rgb_hsync_n_o;
-   o_RGB_VB_n <= rgb_vblank_n_o;
-   o_RGB_HB_n <= rgb_hblank_n_o;
+   o_RGB_BK_n <= rgb_blank_n_o;
       
    o_VIDEO_50_60 <= eff_nr_05_5060;
    o_VIDEO_SCANLINES <= eff_nr_09_scanlines;
@@ -1628,19 +1658,36 @@ begin
    o_AUDIO_SPEAKER_EN <= nr_08_internal_speaker_en;
    o_AUDIO_SPEAKER_EXCL <= beep_spkr_excl;
 
+   o_AUDIO_PI_FE_EAR <= pi_fe_ear;
+   o_AUDIO_ISSUE2_FE_MIC <= port_fe_mic and nr_08_keyboard_issue2;
+   
    o_AUDIO_MIC <= beep_mic_final;
    o_AUDIO_EAR <= port_fe_ear;
 
    o_AUDIO_L <= pcm_audio_L;
    o_AUDIO_R <= pcm_audio_R;
 
-   o_RAM_A_ADDR <= sram_addr;
+gen_sram_234: if (g_board_issue <= 2) generate
+
+   -- ZX Next Issue 2, 3, 4 PCB
+
+   o_RAM_A_ADDR_21 <= '0';
+
+end generate;
+
+gen_sram_5: if (g_board_issue >= 3) generate
+
+   -- ZX Next Issue 5 PCB
+
+   o_RAM_A_ADDR_21 <= sram_addr(21);
+
+end generate;
+
+   o_RAM_A_ADDR <= sram_addr(20 downto 0);
    o_RAM_A_REQ <= sram_req_t;
-   o_RAM_A_REQ2 <= sram_req;							
+   o_RAM_A_REQ2 <= sram_req;   -- NextTang (from MiSTer)
    o_RAM_A_RD_n <= sram_rd_n;
    o_RAM_A_DO <= cpu_do;
-   o_RAM_A_CYCLE <= sram_memcycle and sram_active;
-   o_RAM_A_RFSH <= dma_mreq_n and not dma_mreq_n_d when dma_holds_bus = '1' else not z80_rfsh_n;
 
    o_RAM_B_ADDR <= layer2_addr_eff;
    o_RAM_B_REQ_T <= layer2_req_t;
@@ -1663,6 +1710,26 @@ begin
    o_BUS_RFSH_n <= cpu_rfsh_n;
    o_BUS_IEO <= im2_ieo;
 
+gen_fdc_234: if (g_board_issue <= 2) generate
+
+   -- ZX Next Issue 2, 3, 4 PCB
+
+   o_BUS_P3_MTR_n <= '1';
+   o_BUS_P3_DRD_n <= '1';
+   o_BUS_P3_DWR_n <= '1';
+
+end generate;
+
+gen_fdc_5: if (g_board_issue >= 3) generate
+
+   -- ZX Next Issue 5 PCB
+
+   o_BUS_P3_MTR_n <= port_1ffd_mtr_n;
+   o_BUS_P3_DRD_n <= not (nr_81_expbus_fdc and port_xffd and cpu_a(13) and iord);
+   o_BUS_P3_DWR_n <= not (nr_81_expbus_fdc and port_xffd and cpu_a(13) and cpu_a(12) and iowr and not port_fd_conflict_wr);
+
+end generate;
+
    o_BUS_EN <= expbus_eff_en;
    o_BUS_CLKEN <= expbus_eff_clken;
    
@@ -1673,6 +1740,18 @@ begin
 
    o_GPIO <= pi_gpio_o(27 downto 22) & gpio_21 & gpio_20 & gpio_19 & gpio_18 & gpio_17 & gpio_16 & gpio_15 & gpio_14 & pi_gpio_o(13 downto 12) & gpio_11 & gpio_10 & pi_gpio_o(9) & gpio_08 & gpio_07 & pi_gpio_o(6 downto 4) & gpio_03 & gpio_02 & pi_gpio_o(1 downto 0);
    o_GPIO_EN <= pi_gpio_en(27 downto 22) & gpio_21_en & gpio_20_en & gpio_19_en & gpio_18_en & gpio_17_en & gpio_16_en & gpio_15_en & gpio_14_en & pi_gpio_en(13 downto 12) & gpio_11_en & gpio_10_en & gpio_09_en & gpio_08_en & gpio_07_en & pi_gpio_en(6 downto 4) & gpio_03_en & gpio_02_en & pi_gpio_en(1 downto 0);
+
+   o_XDNA_LOAD <= xdna_load;
+   o_XDNA_SHIFT <= xdna_shift;
+
+   o_XADC_RESET <= xadc_reset;
+   o_XADC_DEN <= nr_f8_xadc_den;
+   o_XADC_DADDR <= nr_f8_xadc_daddr;
+   o_XADC_DWE <= nr_f8_xadc_dwe;
+   o_XADC_DI <= nr_fa_xadc_d1 & nr_f9_xadc_d0;
+   o_XADC_CONVST <= xadc_convst;
+
+   o_XADC_CONTROL <= '0';
 
    ------------------------------------------------------------
    -- RESET ---------------------------------------------------
@@ -1729,13 +1808,6 @@ begin
       Z80N_data_o       => Z80N_data_s,
       Z80N_command_o    => Z80N_command_s
    );
-
---   process (i_CLK_CPU)
---   begin
---      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
---         dma_mreq_n_d <= dma_mreq_n;
---      end if;
---   end process;
    dma_mod: entity work.z80dma
    port map (
       reset_i        => reset,
@@ -1804,7 +1876,7 @@ begin
 
    expbus_disable_int <= '1' when expbus_eff_en = '0' or expbus_eff_disable_io = '1' or nr_c4_int_en_0_expbus = '0' else '0';
 
-   z80_wait_n <= '0' when (ula_wait_n = '0') or (ulap_wait_n = '0') or (sram_wait_n = '0') or (i_BUS_WAIT_n = '0' and expbus_eff_en = '1') or (i_CPU_WAIT = '1') else '1';
+   z80_wait_n <= '0' when (ula_wait_n = '0') or (ulap_wait_n = '0') or (sram_wait_n = '0') or (i_BUS_WAIT_n = '0' and expbus_eff_en = '1') or (i_CPU_WAIT = '1') else '1';   -- NextTang: i_CPU_WAIT from MiSTer
    z80_int_n <= ((pulse_int_n and im2_int_n) or not expbus_disable_int) and (i_BUS_INT_n or expbus_disable_int);
    z80_nmi_n <= nmi_generate_n;
    z80_busrq_n <= dma_busrq_n;
@@ -2229,7 +2301,7 @@ begin
       if rising_edge(i_CLK_28) then
          if reset = '1' then
             nr_8c_altrom(7 downto 4) <= nr_8c_altrom(3 downto 0);
-            if i_BOOT = '1' then
+            if i_BOOT = '1' then   -- NextTang (from MiSTer)
                nr_8c_altrom <= X"00";
             end if;
          elsif nr_8c_we = '1' then
@@ -3008,28 +3080,28 @@ begin
 
             if cpu_a(15 downto 14) = "00" then
                if mf_mem_en = '1' then
-                  sram_pre_A20_A13 <= "0000101" & cpu_a(13);
+                  sram_pre_A21_A13 <= "00000101" & cpu_a(13);
                   sram_pre_active <= '1';
                   sram_pre_bank5 <= '0';
                   sram_pre_bank7 <= '0';
                   sram_pre_rdonly <= not cpu_a(13);
                   sram_pre_override <= "000";   -- divmmc & layer 2 & romcs
                elsif mmu_A21_A13(8) = '0' then
-                  sram_pre_A20_A13 <= mmu_A21_A13(7 downto 0);
+                  sram_pre_A21_A13 <= '0' & mmu_A21_A13(7 downto 0);
                   sram_pre_active <= (not mem_active_bank5) and (not mem_active_bank7);
                   sram_pre_bank5 <= mem_active_bank5;
                   sram_pre_bank7 <= mem_active_bank7;
                   sram_pre_rdonly <= '0';
                   sram_pre_override <= "110";   -- divmmc & layer 2 & romcs
                elsif nr_03_config_mode = '1' then
-                  sram_pre_A20_A13 <= nr_04_romram_bank & cpu_a(13);
+                  sram_pre_A21_A13 <= nr_04_romram_bank & cpu_a(13);
                   sram_pre_active <= '1';
                   sram_pre_bank5 <= '0';
                   sram_pre_bank7 <= '0';
                   sram_pre_rdonly <= '0';
                   sram_pre_override <= "110";   -- divmmc & layer 2 & romcs
                else
-                  sram_pre_A20_A13 <= "00000" & sram_rom & cpu_a(13);
+                  sram_pre_A21_A13 <= "000000" & sram_rom & cpu_a(13);
                   sram_pre_active <= '1';
                   sram_pre_bank5 <= '0';
                   sram_pre_bank7 <= '0';
@@ -3037,7 +3109,7 @@ begin
                   sram_pre_override <= "111";   -- divmmc & layer 2 & romcs
                end if;
             else
-               sram_pre_A20_A13 <= mmu_A21_A13(7 downto 0);
+               sram_pre_A21_A13 <= '0' & mmu_A21_A13(7 downto 0);
                sram_pre_active <= (not mmu_A21_A13(8)) and (not mem_active_bank5) and (not mem_active_bank7);
                sram_pre_bank5 <= mem_active_bank5;
                sram_pre_bank7 <= mem_active_bank7;
@@ -3059,10 +3131,10 @@ begin
    sram_romcs <= sram_pre_override(0) and sram_pre_romcs_n;
    
    process (sram_pre_override, divmmc_rom_en, divmmc_ram_en, divmmc_bank, divmmc_rdonly, sram_layer2_map_en, sram_pre_layer2_A21_A13,
-            sram_romcs, sram_pre_A20_A13, sram_altrom_en, sram_pre_alt_128_n, sram_pre_rdonly, sram_pre_active, sram_pre_bank5, sram_pre_bank7)
+            sram_romcs, sram_pre_A21_A13, sram_altrom_en, sram_pre_alt_128_n, sram_pre_rdonly, sram_pre_active, sram_pre_bank5, sram_pre_bank7)
    begin
       if sram_pre_override(2) = '1' and divmmc_rom_en = '1' then
-         sram_A20_A13 <= "00001000";
+         sram_A21_A13 <= "000001000";
          sram_active <= '1';
          sram_bank5 <= '0';
          sram_bank7 <= '0';
@@ -3070,7 +3142,7 @@ begin
          sram_romcs_en <= '0';
          sram_mem_hide_n <= '0';
       elsif sram_pre_override(2) = '1' and divmmc_ram_en = '1' then
-         sram_A20_A13 <= "0001" & divmmc_bank;
+         sram_A21_A13 <= "00001" & divmmc_bank;
          sram_active <= '1';
          sram_bank5 <= '0';
          sram_bank7 <= '0';
@@ -3078,7 +3150,7 @@ begin
          sram_romcs_en <= '0';
          sram_mem_hide_n <= '0';
       elsif sram_layer2_map_en = '1' then
-         sram_A20_A13 <= sram_pre_layer2_A21_A13(7 downto 0);
+         sram_A21_A13 <= '0' & sram_pre_layer2_A21_A13(7 downto 0);
          sram_active <= not sram_pre_layer2_A21_A13(8);
          sram_bank5 <= '0';
          sram_bank7 <= '0';
@@ -3086,7 +3158,7 @@ begin
          sram_romcs_en <= '0';
          sram_mem_hide_n <= '0';
       elsif sram_romcs = '1' then
-         sram_A20_A13 <= "0001111" & sram_pre_A20_A13(0);    -- divmmc banks 14 and 15
+         sram_A21_A13 <= "00001111" & sram_pre_A21_A13(0);    -- divmmc banks 14 and 15
          sram_active <= '1';
          sram_bank5 <= '0';
          sram_bank7 <= '0';
@@ -3094,7 +3166,7 @@ begin
          sram_romcs_en <= '1';   -- expbus romcs override
          sram_mem_hide_n <= '1';
       elsif sram_altrom_en = '1' then
-         sram_A20_A13 <= "000011" & sram_pre_alt_128_n & sram_pre_A20_A13(0);
+         sram_A21_A13 <= "0000011" & sram_pre_alt_128_n & sram_pre_A21_A13(0);
          sram_active <= '1';
          sram_bank5 <= '0';
          sram_bank7 <= '0';
@@ -3102,7 +3174,7 @@ begin
          sram_romcs_en <= '0';
          sram_mem_hide_n <= '1';
       else
-         sram_A20_A13 <= sram_pre_A20_A13;
+         sram_A21_A13 <= sram_pre_A21_A13;
          sram_active <= sram_pre_active;
          sram_bank5 <= sram_pre_bank5;
          sram_bank7 <= sram_pre_bank7;
@@ -3124,8 +3196,7 @@ begin
    -- NextTang: official core 3.02.03 (3a5ba97f, "DMA and LDPIRX work at all
    -- speeds", official issues 4 and 23) removed the memory-cycle delay that
    -- held the request back 7/3/1 cycles of 28 MHz at 3.5/7/14 MHz. The MiSTer
-   -- baseline still had it; i_RAM_A_REQ_ALLOW, which only shortened it, is
-   -- now unused.
+   -- baseline still had it.
    sram_memcycle <= '1' when cpu_mreq_n = '0' and cpu_rfsh_n = '1' else '0';
    
    -- memory signals
@@ -3134,7 +3205,7 @@ begin
    cpu_bank5_we <= sram_memcycle and sram_bank5 and not cpu_wr_n;
    cpu_bank7_we <= sram_memcycle and sram_bank7 and not cpu_wr_n;   
 
-   sram_addr <= sram_A20_A13 & cpu_a(12 downto 0);
+   sram_addr <= sram_A21_A13 & cpu_a(12 downto 0);
    sram_rd_n <= cpu_rd_n;
    sram_req <= sram_memcycle and sram_active and ((not cpu_rd_n) or ((not sram_rdonly) and not cpu_wr_n));
 
@@ -3167,7 +3238,8 @@ begin
 
 -- signals must be delivered before the next rising edge of i_CLK_28
 --
--- o_RAM_A_ADDR <= sram_addr;
+-- o_RAM_A_ADDR_21 <= sram_addr(21);
+-- o_RAM_A_ADDR <= sram_addr(20 downto 0);
 -- o_RAM_A_REQ <= sram_req_t;
 -- o_RAM_A_RD_n <= sram_rd_n;
 -- o_RAM_A_DO <= cpu_do;
@@ -3175,14 +3247,17 @@ begin
    --
    -- BOOT ROM
    --
-   
+
+   -- NextTang: the official core also selects an anti-brick boot ROM
+   -- (bootrom_ab) for machine ID 0xFA, a core NextTang does not build.
+
    bootrom_mod: entity work.bootrom
    port map (
       clk      => i_CLK_28,
       addr     => cpu_a(12 downto 0),
       data     => bootrom_do
    );
-   
+
    ------------------------------------------------------------
    -- SERIAL COMMS --------------------------------------------
    ------------------------------------------------------------
@@ -3243,7 +3318,9 @@ begin
                pi_spi0_miso     when spi_ss_rpi1_n = '0' or spi_ss_rpi0_n = '0' else
                i_SPI_SD_MISO    when spi_ss_sd1_n = '0' or spi_ss_sd0_n = '0' else '1';
 
-   spi_master_mod: entity work.spi_master   --not changed for 3.02 . not needed in mister the changes
+   -- NextTang: the MiSTer-era SPI master, with clock enables; the official
+   -- core's rewritten one (for 3.02) is not adopted yet.
+   spi_master_mod: entity work.spi_master
    port map (
       clock_i        => i_CLK_CPU,
       cen_r_i        => i_CPU_CEN_R,   -- NextTang
@@ -3275,9 +3352,9 @@ begin
             port_e7_reg <= (others => '1');
          elsif port_e7_wr = '1' then
             if cpu_do(1 downto 0) = "10" then
-               port_e7_reg <= X"FE";
+               port_e7_reg <= "111111" & not nr_0a_sd_swap & nr_0a_sd_swap;
             elsif cpu_do(1 downto 0) = "01" then
-               port_e7_reg <= X"FD";
+               port_e7_reg <= "111111" & nr_0a_sd_swap & not nr_0a_sd_swap;
             elsif cpu_do = X"FB" then
                port_e7_reg <= X"FB";
             elsif cpu_do = X"F7" then
@@ -3422,7 +3499,7 @@ begin
    begin
       if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          if expbus_eff_en = '0' or port_propagate_fe = '0' or port_fe_override = '0' then
-            port_fe_dat_0 <= '1' & ((i_AUDIO_EAR xor pi_fe_ear) or (port_fe_ear or (port_fe_mic and nr_08_keyboard_issue2))) & '1' & i_KBD_COL;
+            port_fe_dat_0 <= '1' & (i_AUDIO_EAR or port_fe_ear) & '1' & i_KBD_COL;  -- i_AUDIO_EAR includes pi_fe_ear and issue 2 mic
          else
             port_fe_dat_0 <= X"FF";
          end if;
@@ -3687,7 +3764,7 @@ begin
                port_1ffd_special_old <= port_1ffd_special;
             end if;
             
-            port_1ffd_reg <= cpu_do;
+            port_1ffd_reg <= cpu_do(2 downto 0);
          
          elsif nr_8e_we = '1' then
             
@@ -3706,8 +3783,25 @@ begin
          end if;
       end if;
    end process;
-   
-   port_1ffd_dat <= port_1ffd_reg;
+
+   process (i_CLK_28)
+   begin
+      if rising_edge(i_CLK_28) then
+         if reset = '1' then
+
+            port_1ffd_mtr_n <= '1';   -- disk motor off
+
+         elsif nr_81_expbus_fdc = '0' then
+
+            port_1ffd_mtr_n <= '1';   -- disk motor off
+
+         elsif port_xffd = '1' and cpu_a(13 downto 12) = "01" and iowr = '1' and port_fd_conflict_wr = '0' then
+
+            port_1ffd_mtr_n <= not cpu_do(3);
+
+         end if;
+      end if;
+   end process;
 
    port_7ffd_bank(2 downto 0) <= port_7ffd_reg(2 downto 0);
    port_7ffd_bank(4 downto 3) <= port_7ffd_reg(7 downto 6) when nr_8f_mapping_mode_pentagon = '1' else port_dffd_reg(1 downto 0);
@@ -3736,8 +3830,8 @@ begin
    process (i_CLK_28)
    begin
       if rising_edge(i_CLK_28) then
-         if reset = '1' and i_BOOT = '1' then
-				nr_8f_mapping_mode <= "00";
+         if reset = '1' and i_BOOT = '1' then   -- NextTang (from MiSTer)
+            nr_8f_mapping_mode <= "00";
          elsif nr_8f_we = '1' then
             nr_8f_mapping_mode <= nr_wr_dat(1 downto 0);
          end if;
@@ -4034,7 +4128,7 @@ begin
       
       i_clk_trg      => ctc_zc_to(2 downto 0) & ctc_zc_to(3),
       
-      o_im2_vector_wr  => open,
+      o_vector_wr    => open,
       
       o_zc_to        => ctc_zc_to(3 downto 0),
       o_int_en       => ctc_int_en(3 downto 0)
@@ -4264,7 +4358,7 @@ begin
       if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
          if nr_0a_mf_type = "00" then     -- mf +3
             case cpu_a(15 downto 12) is
-               when "0001" => mf_port_dat <= port_1ffd_reg;
+               when "0001" => mf_port_dat <= "0000" & (not port_1ffd_mtr_n) & port_1ffd_reg;
                when "0111" => mf_port_dat <= port_7ffd_reg;
                when "1101" => mf_port_dat <= '0' & port_dffd_reg_6 & '0' & port_dffd_reg;
                when "1110" => mf_port_dat <= "0000" & port_eff7_reg_3 & port_eff7_reg_2 & "00";
@@ -4743,6 +4837,7 @@ begin
    begin
    
       nr_02_we <= '0';
+      nr_04_we <= '0';
       nr_05_we <= '0';
       nr_07_we <= '0';
       nr_08_we <= '0';
@@ -4792,6 +4887,7 @@ begin
          case nr_wr_reg is
          
             when X"02"  => nr_02_we <= '1';
+            when X"04"  => nr_04_we <= '1';
             when X"05"  => nr_05_we <= '1';
             when X"07"  => nr_07_we <= '1';
             when X"08"  => nr_08_we <= '1';
@@ -5059,7 +5155,9 @@ begin
             nr_ce_dma_int_en_2_210 <= (others => '0');
             
             nr_d8_io_trap_fdc_en <= '0';
-
+            
+            -- NextTang (from MiSTer): a hard reset (i_BOOT) restores power-on values,
+            -- as reloading the FPGA does on a Next.
             if i_BOOT = '1' then
                bootrom_en                  <= '1';
                nr_03_config_mode           <= '1';
@@ -5067,7 +5165,6 @@ begin
                nr_03_machine_timing        <= "000";
                nr_03_user_dt_lock          <= '0';
                nr_03_machine_type          <= "000";
-               nr_04_romram_bank           <= (others => '0');
                nr_05_joy0                  <= "001";
                nr_05_joy1                  <= "000";
                nr_06_button_drive_nmi_en   <= '0';
@@ -5088,8 +5185,6 @@ begin
                nr_0a_divmmc_automap_en     <= '0';
                nr_0a_mouse_button_reverse  <= '0';
                nr_0a_mouse_dpi             <= "01";
-               nr_10_flashboot             <= '0';
-               nr_10_coreid                <= "00001";
                nr_11_video_timing          <= "000";
                nr_7f_user_register_0       <= X"FF";
                nr_81_expbus_ula_override   <= '0';
@@ -5113,9 +5208,14 @@ begin
                nr_93_pi_gpio_o_en          <= (others => '0');
                nr_a8_esp_gpio0_en          <= '0';
                nr_a9_esp_gpio0             <= '1';
-            end if;
-            
-            if nr_03_config_mode = '1' then
+               -- NextTang: nr_04_romram_bank and nr_10 are reset in their own
+               -- processes below, where the official core drives them;
+               -- nr_0a_sd_swap and nr_81_expbus_fdc are registers the official
+               -- core added since MiSTer's copy. The Xilinx XADC/DNA registers are
+               -- left to their own processes.
+               nr_0a_sd_swap               <= '0';
+               nr_81_expbus_fdc            <= '0';
+            elsif nr_03_config_mode = '1' then
                bootrom_en <= '1';
             end if;
 
@@ -5159,8 +5259,8 @@ begin
                      nr_03_config_mode <= '0';
                   end if;
                
-               when X"04" =>
-                  nr_04_romram_bank <= nr_wr_dat(6 downto 0);
+--             when X"04" =>
+--                nr_04_we <= '1';
                
                when X"05" =>
                   nr_05_joy0 <= nr_wr_dat(3) & nr_wr_dat(7 downto 6);
@@ -5200,6 +5300,7 @@ begin
                when X"0A" =>
                   if nr_03_config_mode = '1' then
                      nr_0a_mf_type <= nr_wr_dat(7 downto 6);
+                     nr_0a_sd_swap <= nr_wr_dat(5);
                   end if;
                   nr_0a_divmmc_automap_en <= nr_wr_dat(4);
                   nr_0a_mouse_button_reverse <= nr_wr_dat(3);
@@ -5209,13 +5310,10 @@ begin
                   nr_0b_joy_iomode_en <= nr_wr_dat(7);
                   nr_0b_joy_iomode <= nr_wr_dat(5 downto 4);
                   nr_0b_joy_iomode_0 <= nr_wr_dat(0);
-               
-              when X"10" =>
-                 nr_10_flashboot <= nr_wr_dat(7);  
-                  if nr_03_config_mode = '1' then
-                     nr_10_coreid <= nr_wr_dat(4 downto 0);
-                  end if;
-               
+
+--             when X"10" =>
+--                nr_10_we <= '1';
+
                when X"11" =>
                   if nr_03_config_mode = '1' then
                      if nr_wr_dat(2 downto 0) = "111" then
@@ -5503,6 +5601,7 @@ begin
                   nr_81_expbus_ula_override <= nr_wr_dat(6);
                   nr_81_expbus_nmi_debounce_disable <= nr_wr_dat(5);
                   nr_81_expbus_clken <= nr_wr_dat(4);
+                  nr_81_expbus_fdc <= nr_wr_dat(3);
                   nr_81_expbus_speed <= "00";   -- nr_wr_dat(1 downto 0);
                
                when X"82" =>
@@ -5680,20 +5779,81 @@ begin
       end if;
    end process;
 
- --     process (i_CLK_28)
---      begin
---         if rising_edge(i_CLK_28) then
---            if nr_10_we = '1' then
---               nr_10_flashboot <= nr_wr_dat(7);     
---               if nr_03_config_mode = '1' then
---                  nr_10_coreid <= nr_wr_dat(4 downto 0);
---               end if;
---            end if;
---         end if;
---      end process;
+   gen_coreid_23: if (g_board_issue <= 1) generate
+   
+      -- ZX Next Issue 2 or Issue 3 PCB
 
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if reset = '1' and i_BOOT = '1' then   -- NextTang (from MiSTer)
+               nr_10_flashboot <= '0';
+               nr_10_coreid <= "00001";
+            elsif nr_10_we = '1' then
+               nr_10_flashboot <= nr_wr_dat(7);     
+               if nr_03_config_mode = '1' then
+                  nr_10_coreid <= nr_wr_dat(4 downto 0);
+               end if;
+            end if;
+         end if;
+      end process;
 
+   end generate;
 
+   gen_coreid_45: if (g_board_issue >= 2) generate
+
+      -- ZX Next Issue 4 or Issue 5 PCB
+
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if reset = '1' and i_BOOT = '1' then   -- NextTang (from MiSTer)
+               nr_10_flashboot <= '0';
+               nr_10_coreid <= "00001";
+            elsif nr_10_we = '1' then
+               nr_10_flashboot <= nr_wr_dat(7);      
+               if nr_03_config_mode = '1' and nr_wr_dat(4) = '0' and nr_wr_dat(3 downto 0) /= "1111" then
+                  nr_10_coreid <= '0' & nr_wr_dat(3 downto 0);
+               end if;
+            end if;
+         end if;
+      end process;
+   
+   end generate;
+
+   gen_romram_234: if (g_board_issue <= 2) generate
+
+      -- ZX Next Issue 2, Issue 3 or Issue 4 PCB
+
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if reset = '1' and i_BOOT = '1' then   -- NextTang (from MiSTer)
+               nr_04_romram_bank <= (others => '0');
+            elsif nr_04_we = '1' then
+               nr_04_romram_bank <= '0' & nr_wr_dat(6 downto 0);
+            end if;
+         end if;
+      end process;
+
+   end generate;
+
+   gen_romram_5: if (g_board_issue >= 3) generate
+
+      -- ZX Next Issue 5 PCB
+
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if reset = '1' and i_BOOT = '1' then   -- NextTang (from MiSTer)
+               nr_04_romram_bank <= (others => '0');
+            elsif nr_04_we = '1' then
+               nr_04_romram_bank <= nr_wr_dat;
+            end if;
+         end if;
+      end process;
+
+   end generate;
 
    -- Machine Type (roms present)
 
@@ -5868,7 +6028,7 @@ begin
                port_253b_dat <= nr_09_psg_mono & nr_09_sprite_tie & '0' & (not nr_09_hdmi_audio_en) & eff_nr_09_scanlines;
 
             when X"0A" =>
-               port_253b_dat <= nr_0a_mf_type & '0' & nr_0a_divmmc_automap_en & nr_0a_mouse_button_reverse & '0' & nr_0a_mouse_dpi;
+               port_253b_dat <= nr_0a_mf_type & nr_0a_sd_swap & nr_0a_divmmc_automap_en & nr_0a_mouse_button_reverse & '0' & nr_0a_mouse_dpi;
 
             when X"0B" =>
                port_253b_dat <= nr_0b_joy_iomode_en & '0' & nr_0b_joy_iomode & "000" & nr_0b_joy_iomode_0;
@@ -6082,7 +6242,7 @@ begin
                port_253b_dat <= nr_80_expbus;
             
             when X"81" =>
-               port_253b_dat <= i_BUS_ROMCS_n & nr_81_expbus_ula_override & nr_81_expbus_nmi_debounce_disable & nr_81_expbus_clken & "00" & nr_81_expbus_speed;
+               port_253b_dat <= i_BUS_ROMCS_n & nr_81_expbus_ula_override & nr_81_expbus_nmi_debounce_disable & nr_81_expbus_clken & nr_81_expbus_fdc & '0' & nr_81_expbus_speed;
             
             when X"82" =>
                port_253b_dat <= nr_82_internal_port_enable;
@@ -6230,17 +6390,17 @@ begin
             when X"DA" =>
                port_253b_dat <= "000000" & nr_da_iotrap_cause;
 
-            --when X"F0" =>
-            --   port_253b_dat <= nr_f0_xdev_cmd;
+            when X"F0" =>
+               port_253b_dat <= nr_f0_xdev_cmd;
 
-            --when X"F8" =>
-            --   port_253b_dat <= '0' & nr_f8_xadc_daddr;
+            when X"F8" =>
+               port_253b_dat <= '0' & nr_f8_xadc_daddr;
 
-            --when X"F9" =>
-            --   port_253b_dat <= nr_f9_xadc_d0;
+            when X"F9" =>
+               port_253b_dat <= nr_f9_xadc_d0;
             
-            --when X"FA" =>
-            --   port_253b_dat <= nr_fa_xadc_d1;
+            when X"FA" =>
+               port_253b_dat <= nr_fa_xadc_d1;
 
             when others =>
                port_253b_dat <= (others => '0');
@@ -6292,6 +6452,7 @@ begin
       end if;
    end process;
 
+   gen_reset: if (g_machine_id /= X"FA") generate
 
       -- ZX Spectrum Next Core
       
@@ -6306,10 +6467,28 @@ begin
       hotkey_m1 <= hotkeys_0(9) and not hotkeys_1(9);                                             -- F9
       hotkey_drive <= hotkeys_0(10) and not hotkeys_1(10) and port_divmmc_io_en;                  -- F10
 
+   end generate;
+   
+   gen_reset_ab: if (g_machine_id = X"FA") generate
+
+      -- Anti Brick Core
+      
+      hotkey_hard_reset <= '0';                                                                   -- F1
+      hotkey_scandouble <= hotkeys_0(2) and not hotkeys_1(2);                                     -- F2
+      hotkey_5060 <= hotkeys_0(3) and not hotkeys_1(3);                                           -- F3
+      hotkey_soft_reset <= '0';                                                                   -- F4
+      hotkey_expbus_enable <= '0';                                                                -- F5
+      hotkey_expbus_disable <= '0';                                                               -- F6
+      hotkey_scanlines <= '0';                                                                    -- F7
+      hotkey_cpu_speed <= '0';                                                                    -- F8
+      hotkey_m1 <= '0';                                                                           -- F9
+      hotkey_drive <= '0';                                                                        -- F10
+
+   end generate;
+
    nr_02_soft_reset <= (hotkey_soft_reset and not nr_03_config_mode) or (nr_02_we and nr_wr_dat(0));
    nr_02_hard_reset <= hotkey_hard_reset or (nr_02_we and nr_wr_dat(1));
-
-
+   
    ------------------------------------------------------------
    -- AUDIO ---------------------------------------------------
    ------------------------------------------------------------
@@ -6403,7 +6582,7 @@ begin
    
    -- i2s pi audio
    
-   i2s_mod : entity work.i2s_transmiter
+   i2s_mod : entity work.i2s
    port map
    (
       i_reset        => reset or not pi_i2s_en,
@@ -6440,7 +6619,7 @@ begin
    -- todo: switch to signed audio
    -- todo: power of two volume adjustment on all inputs (?)
    
-   beep_mic_final <= port_fe_mic xor i_AUDIO_EAR xor pi_fe_ear;
+   beep_mic_final <= i_AUDIO_EAR xor (port_fe_mic and nr_08_keyboard_issue2) xor port_fe_mic;
    beep_spkr_excl <= nr_06_internal_speaker_beep and nr_08_internal_speaker_en;
    
    audio_mixer_mod: entity work.audio_mixer
@@ -6568,7 +6747,7 @@ begin
    end process;
    
    lores_vram_ack <= '1' when cpu_bank5_sched = '0' and lores_vram_req = '1' else '0'; 
-   vram_bank5_a0 <= (sram_A20_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr;
+   vram_bank5_a0 <= (sram_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr;
    
    -- Arbitrate ula,tilemap on second port in both banks 5 and 7
    
@@ -6666,9 +6845,9 @@ begin
    
       i_CLK_7            => i_CLK_7,
 
-      --o_blank_n          => rgb_blank_n,
-      o_hblank_n     => rgb_hblank_n,-- split hblank y vblank for mister
-      o_vblank_n     => rgb_vblank_n,-- split hblank y vblank for mister
+      o_vblank_n         => ula_vblank_n,   -- NextTang: MiSTer-derived zxula_timing
+      o_hblank_n         => ula_hblank_n,
+      center             => '1',
       o_hsync_n          => rgb_hsync_n,
       o_vsync_n          => rgb_vsync_n,
       o_frame_sync       => video_frame_sync,
@@ -6684,7 +6863,6 @@ begin
       o_wvc              => wvc,
       
       o_phc              => phc,
-      center			 => center,
       
       -- 28 MHz domain
       
@@ -6700,6 +6878,8 @@ begin
       o_int_ula          => ula_int_pulse,
       o_int_line         => line_int_pulse
    );
+
+   rgb_blank_n <= ula_vblank_n and ula_hblank_n;   -- NextTang: the official core's single blank
 
    --
    -- VIDEO PIPELINE STAGE 0 - gather pixels
@@ -6822,11 +7002,10 @@ begin
 
          layer_priorities_1 <= layer_priorities_0;
 
-         rgb_vsync_n_1 <= rgb_vsync_n;
-         rgb_vblank_n_1 <= rgb_vblank_n;
-         rgb_hblank_n_1 <= rgb_hblank_n;
-         rgb_hsync_n_1 <= rgb_hsync_n;
-		 hdmi_pixel_en_1 <= hdmi_pixel_en;
+         rgb_vsync_n_1   <= rgb_vsync_n;
+         rgb_blank_n_1   <= rgb_blank_n;
+         rgb_hsync_n_1   <= rgb_hsync_n;
+         hdmi_pixel_en_1 <= hdmi_pixel_en;
       
       end if;
    end process;
@@ -7025,10 +7204,9 @@ begin
          layer_priorities_2 <= layer_priorities_1;
          
          rgb_vsync_n_2   <= rgb_vsync_n_1;
-         rgb_vblank_n_2   <= rgb_vblank_n_1;
-		 rgb_hblank_n_2   <= rgb_hblank_n_1;
+         rgb_blank_n_2   <= rgb_blank_n_1;
          rgb_hsync_n_2   <= rgb_hsync_n_1;
-		 hdmi_pixel_en_2 <= hdmi_pixel_en_1;
+         hdmi_pixel_en_2 <= hdmi_pixel_en_1;
       
       end if;
    end process;
@@ -7299,8 +7477,6 @@ begin
       end case;
 
    end process;
-
-   rgb_out_2a <= (others => '0') when (rgb_vblank_n_2 = '0' or rgb_hblank_n_2 = '0') else rgb_out_2;
    
    --
    -- VIDEO PIPELINE STAGE 3 - generate rgb signals
@@ -7316,15 +7492,10 @@ begin
          rgb_vsync_n_4 <= rgb_vsync_n_3;
          rgb_vsync_n_3 <= rgb_vsync_n_2;
 
-         rgb_vblank_n_6 <= rgb_vblank_n_5;
-         rgb_vblank_n_5 <= rgb_vblank_n_4;
-         rgb_vblank_n_4 <= rgb_vblank_n_3;
-         rgb_vblank_n_3 <= rgb_vblank_n_2;
-
-         rgb_hblank_n_6 <= rgb_hblank_n_5;
-         rgb_hblank_n_5 <= rgb_hblank_n_4;
-         rgb_hblank_n_4 <= rgb_hblank_n_3;
-         rgb_hblank_n_3 <= rgb_hblank_n_2;
+         rgb_blank_n_6 <= rgb_blank_n_5;
+         rgb_blank_n_5 <= rgb_blank_n_4;
+         rgb_blank_n_4 <= rgb_blank_n_3;
+         rgb_blank_n_3 <= rgb_blank_n_2;
 
          rgb_hsync_n_6 <= rgb_hsync_n_5;
          rgb_hsync_n_5 <= rgb_hsync_n_4;
@@ -7334,7 +7505,8 @@ begin
          rgb_out_6 <= rgb_out_5;
          rgb_out_5 <= rgb_out_4;
          rgb_out_4 <= rgb_out_3;
-         rgb_out_3 <= rgb_out_2a;
+         rgb_out_3 <= rgb_out_2;
+         
          hdmi_pixel_en_6 <= hdmi_pixel_en_5;
          hdmi_pixel_en_5 <= hdmi_pixel_en_4;
          hdmi_pixel_en_4 <= hdmi_pixel_en_3;
@@ -7348,19 +7520,199 @@ begin
       if rising_edge(i_CLK_14) then
       
          rgb_vsync_n_o <= rgb_vsync_n_6;
-         rgb_vblank_n_o  <= rgb_vblank_n_6;
-         rgb_hblank_n_o <= rgb_hblank_n_6;
+         rgb_blank_n_o <= rgb_blank_n_6;
          rgb_hsync_n_o <= rgb_hsync_n_6;
-         rgb_csync_n_o <= rgb_vsync_n_6 and rgb_hsync_n_6;
-         if rgb_hblank_n_6 = '1' then
+         
+         if rgb_blank_n_6 = '1' then
             rgb_out_o  <= rgb_out_6;
          else
             rgb_out_o  <= (others => '0');
          end if;
          
          hdmi_pixel_en_7 <= hdmi_pixel_en_6;
+         
       end if;
    end process;
    
+   -- total delay is four * CLK_7 cycles
+
+   ------------------------------------------------------------
+   -- XILINX PERIPHERALS --------------------------------------
+   ------------------------------------------------------------
+
+   gen_xper_23: if (g_board_issue <= 1) generate
+   
+      -- ZX Next Issue 2 or Issue 3 PCB
+
+      nr_f0_xdev_cmd <= (others => '0');
+      nr_f8_xadc_den <= '0';
+      nr_f8_xadc_daddr <= (others => '0');
+      nr_f8_xadc_dwe <= '0';
+      nr_f9_xadc_d0 <= (others => '0');
+      nr_fa_xadc_d1 <= (others => '0');
+   
+      xdna_load <= '0';
+      xdna_shift <= '0';
+      xadc_reset <= '0';
+      xadc_convst <= '0';
+   
+   end generate;
+   
+   gen_xper_44: if (g_board_issue >= 2) generate
+
+      -- ZX Next Issue 4 or Issue 5 PCB
+
+      -- XDEV CMD
+      
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if reset = '1' then
+               nr_f0_select <= '1';
+            elsif nr_f0_we = '1' then
+               nr_f0_select <= nr_wr_dat(7);
+            end if;
+         end if;
+      end process;
+      
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if reset = '1' then
+               nr_f0_xdna_en <= '0';
+               nr_f0_xadc_en <= '0';
+            elsif nr_f0_we = '1' and nr_wr_dat(7 downto 6) = "11" then
+               nr_f0_xdna_en <= nr_wr_dat(0) and not nr_wr_dat(1);
+               nr_f0_xadc_en <= nr_wr_dat(1) and not nr_wr_dat(0);
+            end if;
+         end if;
+      end process;
+      
+      nr_f0_rd <= '1' when nr_register = X"F0" else '0';
+      
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if nr_f0_select = '1' then
+               nr_f0_xdev_cmd <= "100000" & nr_f0_xadc_en & nr_f0_xdna_en;
+            elsif nr_f0_xdna_en = '1' then
+               nr_f0_xdev_cmd <= "0000000" & i_XDNA_DO;
+            elsif nr_f0_xadc_en = '1' then
+               nr_f0_xdev_cmd <= '0' & i_XADC_BUSY & "0000" & nr_f0_xadc_eoc & nr_f0_xadc_eos;
+            else
+               nr_f0_xdev_cmd <= (others => '0');
+            end if;
+         end if;
+      end process;
+
+      -- XDNA Unique FPGA Identifier
+
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if nr_f0_select = '0' and nr_f0_xdna_en = '1' and nr_f0_we = '1' and nr_wr_dat(7) = '0'  then
+               xdna_load <= '1';
+            else
+               xdna_load <= '0';
+            end if;
+         end if;
+      end process;
+      
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if nr_f0_select = '0' and nr_f0_xdna_en = '1' and nr_f0_rd = '1' and port_253b_rd_fe = '1' then
+               xdna_shift <= '1';
+            else
+               xdna_shift <= '0';
+            end if;
+         end if;
+      end process;
+
+      -- XADC Analog to Digital Converter
+
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if nr_f0_select = '0' and nr_f0_xadc_en = '1' and nr_f0_we = '1' and nr_wr_dat(7) = '0' then
+               xadc_reset <= nr_wr_dat(6);
+               xadc_convst <= nr_wr_dat(0) and not nr_wr_dat(6);
+            else
+               xadc_reset <= '0';
+               xadc_convst <= '0';
+            end if;
+         end if;
+      end process;
+
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if reset = '1' then
+               nr_f0_xadc_eoc <= '0';
+            elsif i_XADC_EOC = '1' then
+               nr_f0_xadc_eoc <= '1';
+            elsif nr_f0_select = '0' and nr_f0_xadc_en = '1' and nr_f0_rd = '1' and port_253b_rd_fe = '1' then
+               nr_f0_xadc_eoc <= '0';
+            end if;
+         end if;
+      end process;
+      
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if reset = '1' then
+               nr_f0_xadc_eos <= '0';
+            elsif i_XADC_EOS = '1' then
+               nr_f0_xadc_eos <= '1';
+            elsif nr_f0_select = '0' and nr_f0_xadc_en = '1' and nr_f0_rd = '1' and port_253b_rd_fe = '1' then
+               nr_f0_xadc_eos <= '0';
+            end if;
+         end if;
+      end process;
+
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if nr_f8_we = '1' then
+               nr_f8_xadc_dwe <= nr_wr_dat(7);
+               nr_f8_xadc_daddr <= nr_wr_dat(6 downto 0);
+            end if;
+         end if;
+      end process;
+      
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if nr_f8_we = '1' then
+               nr_f8_xadc_den <= '1';
+            else
+               nr_f8_xadc_den <= '0';
+            end if;
+         end if;
+      end process;
+
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if nr_f9_we = '1' then
+               nr_f9_xadc_d0 <= nr_wr_dat;
+            elsif i_XADC_DRDY = '1' and nr_f8_xadc_dwe = '0' then
+               nr_f9_xadc_d0 <= i_XADC_DO(7 downto 0);
+            end if;
+         end if;
+      end process;
+
+      process (i_CLK_28)
+      begin
+         if rising_edge(i_CLK_28) then
+            if nr_fa_we = '1' then
+               nr_fa_xadc_d1 <= nr_wr_dat;
+            elsif i_XADC_DRDY = '1' and nr_f8_xadc_dwe = '0' then
+               nr_fa_xadc_d1 <= i_XADC_DO(15 downto 8);
+            end if;
+         end if;
+      end process;
+
+   end generate;
 
 end architecture;

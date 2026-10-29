@@ -40,7 +40,7 @@ end entity;
 
 architecture rtl of debounce is
 
-   signal button        : std_logic_vector(1 downto 0) := "10";
+   signal button        : std_logic_vector(1 downto 0) := INITIAL_STATE & INITIAL_STATE;
    signal button_noise  : std_logic;
    signal counter       : std_logic_vector(COUNTER_SIZE downto 0) := (others => '0');
    signal button_db     : std_logic := INITIAL_STATE;

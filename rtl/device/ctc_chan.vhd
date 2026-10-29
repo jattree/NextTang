@@ -1,5 +1,5 @@
 -- Z80 CTC Channel
--- Copyright 2020 Alvin Albrecht
+-- Copyright 2020, 2025 Alvin Albrecht
 --
 -- This file is part of the ZX Spectrum Next Project
 -- <https://gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA/tree/master/cores>
@@ -24,8 +24,8 @@
 -- Clarifications:
 --
 -- 1. Hard reset requires a control word to be written with D2 = 1
---    (time constant follows) otherwise the channel effectively
---    ignores the control word and will remain in the hard reset state.
+--    (time constant follows) otherwise the channel will remain
+--    in the hard reset state.
 --
 -- 2. Soft reset is generated when the control word's D1 = 1.  if
 --    D2 = 0, the channel will enter the hard reset state.  If D2 = 1
@@ -36,8 +36,16 @@
 --    A timer waiting for a clock edge to start will start and in counter
 --    mode, the count will be decremented.
 --
--- 4. ZC/TO is asserted for one clock cycle and not for the entire
---    duration that the count is at zero.
+-- 4. ZC/TO is asserted for one clock cycle.
+--
+-- 5. Reset of a channel requires twice writing a control word with
+--    soft reset bit set.  If the state machine is waiting for a time
+--    constant, the first write will not cause the reset.
+--
+-- 6. Control words, time constants and vectors can be written while the
+--    counter/timer is running as long as the soft reset bit is not set.
+--    A soft reset causes counting to stop.
+
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -51,7 +59,7 @@ entity ctc_chan is
       i_reset     : in std_logic;   -- hard reset
       
       i_iowr      : in std_logic;   -- write to this channel
-      o_iowr_tc   : out std_logic;  -- channel expects time constant next (ignore vector write)
+      o_iowr_vc   : out std_logic;  -- interrupt vector being written (pulsed one cycle, vector not handled in this module)
 
       i_int_en_wr : in std_logic;   -- separately write interrupt enable, must not overlap iowr
       i_int_en    : in std_logic;
@@ -81,23 +89,24 @@ architecture rtl of ctc_chan is
    signal prescaler_clk          : std_logic;
    
    signal t_count_en             : std_logic;
-   signal t_count_zero           : std_logic;
    signal t_count                : std_logic_vector(7 downto 0);
-   signal t_count_zero_d         : std_logic;
+   signal t_count_next           : std_logic_vector(7 downto 0);
+   signal t_count_next_zero      : std_logic;
    signal zc_to                  : std_logic;
+   signal zc_to_d                : std_logic;
    
-   type   state_t                is (S_CONTROL_WORD, S_TIME_CONSTANT, S_WAIT, S_RUNNING);
+   type   state_t                is (S_RESET, S_RESET_TC, S_TRIGGER, S_RUN, S_RUN_TC);
    signal state                  : state_t;
    signal state_next             : state_t;
    
    signal iowr_d                 : std_logic;
    signal iowr                   : std_logic;
-   signal iowr_tc_exp            : std_logic;
    signal iowr_tc                : std_logic;
-   signal iowr_cr                : std_logic;
-   signal control_reg            : std_logic_vector(5 downto 0);
+   signal iowr_cw                : std_logic;
+   signal iowr_vc                : std_logic;
+
+   signal control_reg            : std_logic_vector(4 downto 0);
    signal time_constant_reg      : std_logic_vector(7 downto 0);
-   signal reset_soft_trigger     : std_logic;
    signal clk_edge_change        : std_logic;
    
 begin
@@ -105,7 +114,7 @@ begin
    -- RESET
 
    reset_hard <= i_reset;
-   reset_soft <= '1' when state /= S_RUNNING else '0';
+   reset_soft <= '1' when state /= S_RUN and state /= S_RUN_TC else '0';
 
    -- CLOCK / TRIGGER
 
@@ -116,7 +125,7 @@ begin
       end if;
    end process;
 
-   clk_trg_edge <= ((clk_trg_d and not i_clk_trg) or clk_edge_change) when control_reg(4-2) = '0' else ((i_clk_trg and not clk_trg_d) or clk_edge_change);  -- one cycle
+   clk_trg_edge <= ((clk_trg_d and not i_clk_trg) or clk_edge_change) when control_reg(4-3) = '0' else ((i_clk_trg and not clk_trg_d) or clk_edge_change);  -- one cycle
 
    -- PRESCALER
 
@@ -134,12 +143,14 @@ begin
    p_count_lo <= '1' when p_count(3 downto 0) = "1111" else '0';
    p_count_hi <= '1' when p_count(7 downto 4) = "1111" else '0';
 
-   prescaler_clk <= (p_count_lo) when control_reg(5-2) = '0' else (p_count_lo and p_count_hi);  -- one cycle
+   prescaler_clk <= (p_count_lo) when control_reg(5-3) = '0' else (p_count_lo and p_count_hi);  -- one cycle
 
    -- COUNTER
 
-   t_count_en <= prescaler_clk when control_reg(6-2) = '0' else clk_trg_edge;
-   t_count_zero <= '1' when t_count = X"00" else '0';
+   t_count_en <= prescaler_clk when control_reg(6-3) = '0' else clk_trg_edge;  -- one cycle
+   
+   t_count_next <= t_count - 1;
+   t_count_next_zero <= '1' when t_count_next = X"00" else '0';
 
    process (i_CLK)
    begin
@@ -149,23 +160,27 @@ begin
          elsif zc_to = '1' then
             t_count <= time_constant_reg;
          elsif t_count_en = '1' then
-            t_count <= t_count - 1;
+            t_count <= t_count_next;
          end if;
       end if;
    end process;
    
    o_cpu_d <= t_count;
 
+   zc_to <= '1' when t_count_next_zero = '1' and t_count_en = '1' and (state = S_RUN or state = S_RUN_TC) else '0';  -- one cycle
+
    process (i_CLK)
    begin
       if rising_edge(i_CLK) then
-         t_count_zero_d <= t_count_zero;
+         if reset_hard = '1' then
+            zc_to_d <= '0';
+         else
+            zc_to_d <= zc_to;
+         end if;
       end if;
    end process;
 
-   zc_to <= '1' when t_count_zero = '1' and t_count_zero_d = '0' and state = S_RUNNING else '0';  -- one cycle
-   
-   o_zc_to <= zc_to;
+   o_zc_to <= zc_to_d;
 
    -- STATE MACHINE
 
@@ -173,45 +188,57 @@ begin
    begin
       if rising_edge(i_CLK) then
          if reset_hard = '1' then
-            state <= S_CONTROL_WORD;
+            state <= S_RESET;
          else
             state <= state_next;
          end if;
       end if;
    end process;
 
-   process (reset_soft_trigger, i_cpu_d, state, iowr_cr, iowr_tc, control_reg, clk_trg_edge)
+   process (iowr_cw, iowr, i_cpu_d, state, control_reg, clk_trg_edge)
    begin
-      if reset_soft_trigger = '1' then
+      if iowr_cw = '1' and i_cpu_d(1) = '1' then
          if i_cpu_d(2) = '0' then
-            state_next <= S_CONTROL_WORD;
+            state_next <= S_RESET;
          else
-            state_next <= S_TIME_CONSTANT;
+            state_next <= S_RESET_TC;
          end if;
       else
          case state is
-            when S_CONTROL_WORD =>
-               if iowr_cr = '1' and i_cpu_d(2) = '1' then
-                  state_next <= S_TIME_CONSTANT;
+            when S_RESET =>
+               if iowr_cw = '1' and i_cpu_d(2) = '1' then
+                  state_next <= S_RESET_TC;
                else
-                  state_next <= S_CONTROL_WORD;
+                  state_next <= S_RESET;
                end if;
-            when S_TIME_CONSTANT =>
-               if iowr_tc = '1' then
-                  state_next <= S_WAIT;
+            when S_RESET_TC =>
+               if iowr = '1' then
+                  state_next <= S_TRIGGER;
                else
-                  state_next <= S_TIME_CONSTANT;
+                  state_next <= S_RESET_TC;
                end if;
-            when S_WAIT =>
-               if control_reg(6-2) = '0' and control_reg(3-2) = '1' and clk_trg_edge = '0' then
-                  state_next <= S_WAIT;
+            when S_TRIGGER =>
+               if iowr_cw = '1' and i_cpu_d(2) = '1' then
+                  state_next <= S_RESET_TC;
+               elsif control_reg(6-3) = '0' and control_reg(3-3) = '1' and clk_trg_edge = '0' then
+                  state_next <= S_TRIGGER;
                else
-                  state_next <= S_RUNNING;
+                  state_next <= S_RUN;
                end if;
-            when S_RUNNING =>
-               state_next <= S_RUNNING;
+            when S_RUN =>
+               if iowr_cw = '1' and i_cpu_d(2) = '1' then
+                  state_next <= S_RUN_TC;
+               else
+                  state_next <= S_RUN;
+               end if;
+            when S_RUN_TC =>
+               if iowr = '1' then
+                  state_next <= S_RUN;
+               else
+                  state_next <= S_RUN_TC;
+               end if;
             when others =>
-               state_next <= S_CONTROL_WORD;
+               state_next <= S_RESET;
          end case;
       end if;
    end process;
@@ -226,29 +253,27 @@ begin
    end process;
 
    iowr <= i_iowr and not iowr_d;
-   iowr_tc_exp <= '1' when (control_reg(2-2) = '1' and state /= S_CONTROL_WORD) else '0';
 
-   o_iowr_tc <= iowr_tc_exp;
+   iowr_tc <= '1' when iowr = '1' and (state = S_RESET_TC or state = S_RUN_TC) else '0';                        -- write time constant
+   iowr_cw <= '1' when iowr = '1' and state /= S_RESET_TC and state /= S_RUN_TC and i_cpu_d(0) = '1' else '0';  -- write control word
+   iowr_vc <= '1' when iowr = '1' and state /= S_RESET_TC and state /= S_RUN_TC and i_cpu_d(0) = '0' else '0';  -- write interrupt vector
 
-   iowr_tc <= '1' when iowr = '1' and iowr_tc_exp = '1' else '0';
-   iowr_cr <= '1' when iowr = '1' and iowr_tc_exp = '0' and i_cpu_d(0) = '1' else '0';
+   o_iowr_vc <= iowr_vc;
 
    process (i_CLK)
    begin
       if rising_edge(i_CLK) then
          if reset_hard = '1' then
             control_reg <= (others => '0');
-         elsif iowr_cr = '1' then
-            control_reg <= i_cpu_d(7 downto 2);
-         elsif iowr_tc = '1' then
-            control_reg(2-2) <= '0';
+         elsif iowr_cw = '1' then
+            control_reg <= i_cpu_d(7 downto 3);
          elsif i_int_en_wr = '1' then
-            control_reg(7-2) <= i_int_en;
+            control_reg(7-3) <= i_int_en;
          end if;
       end if;
    end process;
    
-   o_int_en <= control_reg(7-2);
+   o_int_en <= control_reg(7-3);
 
    process (i_CLK)
    begin
@@ -261,7 +286,6 @@ begin
       end if;
    end process;
 
-   reset_soft_trigger <= '1' when iowr_cr = '1' and i_cpu_d(1) = '1' else '0';
-   clk_edge_change <= '1' when iowr_cr = '1' and (i_cpu_d(4) /= control_reg(4-2)) else '0';
+   clk_edge_change <= '1' when iowr_cw = '1' and (i_cpu_d(4) /= control_reg(4-3)) else '0';
 
 end architecture;

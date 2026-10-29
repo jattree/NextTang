@@ -234,12 +234,12 @@ module `NEXTTANG_ZXNEXT_TOP (
     zxnext #(
         .g_video_def(3'b000),
         .g_version(8'h32),
-        .g_sub_version(8'h00),
+        .g_sub_version(8'h03),   // official core 3.02.03
         .g_video_inc(2'b10),
-        .g_layer2_units(LAYER2_UNITS)
-    ) core (
+        .g_layer2_units(LAYER2_UNITS),
         .g_machine_id(8'h0A),
-        .g_board_issue(4'h2),
+        .g_board_issue(4'h2)
+    ) core (
 
         .i_CLK_28(clock_28),
         .i_CLK_28_n(clock_28_n),
@@ -305,11 +305,9 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_UART0_RTR_n(),
 
         .o_RGB(core_rgb),
-        .o_RGB_CS_n(),
         .o_RGB_VS_n(core_vsync_n),
+        .o_RGB_BK_n(),
         .o_RGB_HS_n(),
-        .o_RGB_VB_n(),
-        .o_RGB_HB_n(),
         .o_VIDEO_50_60(),
         .o_VIDEO_SCANLINES(),
         .o_VIDEO_SCANDOUBLE(),
@@ -318,7 +316,6 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_HDMI_RESET(),
         .o_HDMI_PIXEL(core_hdmi_pixel),
         .o_HDMI_LOCK(core_hdmi_lock),
-        .center(1'b1),
 
         .o_AUDIO_HDMI_AUDIO_EN(),
         .o_AUDIO_SPEAKER_EN(),
@@ -328,16 +325,16 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_AUDIO_EAR(),
         .o_AUDIO_L(core_audio_left),
         .o_AUDIO_R(core_audio_right),
+        .o_AUDIO_PI_FE_EAR(),
+        .o_AUDIO_ISSUE2_FE_MIC(),
 
         .o_RAM_A_ADDR(ram_a_address),
+        .o_RAM_A_ADDR_21(),
         .o_RAM_A_REQ(ram_a_request),
         .o_RAM_A_REQ2(ram_a_cycle_request),
-        .i_RAM_A_REQ_ALLOW(1'b0),
         .o_RAM_A_RD_n(ram_a_read_n),
         .i_RAM_A_DI(ram_a_read_data),
         .o_RAM_A_DO(ram_a_write_data),
-        .o_RAM_A_CYCLE(),
-        .o_RAM_A_RFSH(),
         // Active high. The port defaults to '1', which would hold the CPU.
         .i_CPU_WAIT(cpu_wait),
 
@@ -367,6 +364,9 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_BUS_EN(),
         .o_BUS_CLKEN(),
         .o_BUS_NMI_DEBOUNCE_DISABLE(),
+        .o_BUS_P3_MTR_n(),
+        .o_BUS_P3_DRD_n(),
+        .o_BUS_P3_DWR_n(),
 
         .i_ESP_GPIO_20(3'b111),
         .o_ESP_GPIO_0(),
@@ -374,6 +374,24 @@ module `NEXTTANG_ZXNEXT_TOP (
         .i_GPIO(28'b0),
         .o_GPIO(),
         .o_GPIO_EN(),
+
+        // The official core's Xilinx device DNA and XADC ports; the Gowin part
+        // has neither.
+        .o_XDNA_LOAD(),
+        .o_XDNA_SHIFT(),
+        .i_XDNA_DO(1'b0),
+        .o_XADC_RESET(),
+        .o_XADC_DEN(),
+        .o_XADC_DADDR(),
+        .o_XADC_DWE(),
+        .i_XADC_DRDY(1'b0),
+        .o_XADC_DI(),
+        .i_XADC_DO(16'h0000),
+        .i_XADC_BUSY(1'b0),
+        .i_XADC_EOC(1'b0),
+        .i_XADC_EOS(1'b0),
+        .o_XADC_CONVST(),
+        .o_XADC_CONTROL(),
 
         .o_DEBUG_NR_WE(core_nr_write),
         .o_DEBUG_NR_REG(core_nr_register),

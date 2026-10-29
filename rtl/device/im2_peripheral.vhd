@@ -76,14 +76,12 @@ architecture rtl of im2_peripheral is
    signal int_req_d           : std_logic;
    
    signal im2_reset_n         : std_logic;
-
    
    signal isr_serviced        : std_logic;
    signal isr_serviced_d      : std_logic;
    signal im2_isr_serviced    : std_logic;
    
    signal int_status          : std_logic;
-
    signal im2_int_req         : std_logic;
 
 begin
@@ -115,8 +113,8 @@ begin
       i_CLK_CPU         => i_CLK_CPU,
       i_CPU_CEN_R       => i_CPU_CEN_R,
       i_reset_n         => im2_reset_n,
-	  
-	  i_im2_mode        => i_im2_mode,
+      
+      i_im2_mode        => i_im2_mode,
       
       i_m1_n            => i_m1_n,
       i_iorq_n          => i_iorq_n,
@@ -124,9 +122,9 @@ begin
       i_int_req         => im2_int_req,
       o_int_n           => o_int_n,
       
-	  i_dma_int_en      => i_dma_int_en,
+      i_dma_int_en      => i_dma_int_en,
       o_dma_int         => o_dma_int,
-
+      
       i_reti_decode     => i_reti_decode,
       i_reti_seen       => i_reti_seen,
       o_isr_serviced    => isr_serviced,
@@ -137,7 +135,7 @@ begin
       i_vec             => i_vector,
       o_vec             => o_vector
    );
-      
+   
    process (i_CLK_28)
    begin
       if rising_edge(i_CLK_28) then
@@ -151,10 +149,7 @@ begin
    
    im2_isr_serviced <= isr_serviced and not isr_serviced_d;
 
-
    -- interrupt status bit
-
-
    
    -- record of whether interrupt request came from device, can be cleared
          
@@ -185,20 +180,19 @@ begin
    end process;
 
    o_int_status <= int_status or im2_int_req;
-   
-   -- pulse interrupt logic
-   
-   
-	o_pulse_en <= ((int_req and i_int_en) or i_int_unq) and not i_mode_pulse_0_im2_1;
 
    -- pulse interrupt logic
    
- --  gen_pulse_1: if (EXCEPTION = '1') generate
+   gen_pulse_0: if (EXCEPTION = '0') generate
+   
+      o_pulse_en <= ((int_req and i_int_en) or i_int_unq) and not i_mode_pulse_0_im2_1;
 
- --           o_pulse_en <= ((int_req and i_int_en) or i_int_unq) and ((i_mode_pulse_0_im2_1 and not i_im2_mode) or (not i_mode_pulse_0_im2_1));
+   end generate;
+   
+   gen_pulse_1: if (EXCEPTION = '1') generate
 
+      o_pulse_en <= ((int_req and i_int_en) or i_int_unq) and ((i_mode_pulse_0_im2_1 and not i_im2_mode) or (not i_mode_pulse_0_im2_1));
 
- --  end generate;
-
-
+   end generate;
+   
 end architecture;

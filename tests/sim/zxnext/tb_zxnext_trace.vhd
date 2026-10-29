@@ -92,7 +92,7 @@ architecture sim of tb_zxnext_trace is
     signal memory_done : std_logic := '0';
 
     signal rgb         : std_logic_vector(8 downto 0);
-    signal vs_n, hs_n, vb_n, hb_n, hdmi_pixel, hdmi_lock : std_logic;
+    signal vs_n, hs_n, bk_n, hdmi_pixel, hdmi_lock : std_logic;
     signal spi_sd0_n, spi_sck, spi_mosi : std_logic;
     signal kbd_row     : std_logic_vector(7 downto 0);
     signal audio_l, audio_r : std_logic_vector(12 downto 0);
@@ -349,11 +349,11 @@ begin
             g_video_def   => "000",
             g_version     => x"32",
             g_sub_version => x"00",
-            g_video_inc   => "10"
+            g_video_inc   => "10",
+            g_machine_id  => x"0A",
+            g_board_issue => x"2"
         )
         port map (
-            g_machine_id => x"0A",
-            g_board_issue => x"2",
             i_CLK_28 => clock_28,
             i_CLK_28_n => clock_28_n,
             i_CLK_14 => clock_14,
@@ -410,11 +410,9 @@ begin
             i_UART0_CTS_n => '0',
             o_UART0_RTR_n => open,
             o_RGB => rgb,
-            o_RGB_CS_n => open,
             o_RGB_VS_n => vs_n,
             o_RGB_HS_n => hs_n,
-            o_RGB_VB_n => vb_n,
-            o_RGB_HB_n => hb_n,
+            o_RGB_BK_n => bk_n,
             o_VIDEO_50_60 => open,
             o_VIDEO_SCANLINES => open,
             o_VIDEO_SCANDOUBLE => open,
@@ -423,7 +421,6 @@ begin
             o_HDMI_RESET => open,
             o_HDMI_PIXEL => hdmi_pixel,
             o_HDMI_LOCK => hdmi_lock,
-            center => '1',
             o_AUDIO_HDMI_AUDIO_EN => open,
             o_AUDIO_SPEAKER_EN => open,
             o_AUDIO_SPEAKER_EXCL => open,
@@ -435,12 +432,9 @@ begin
             o_RAM_A_ADDR => ram_a_addr,
             o_RAM_A_REQ => ram_a_req,
             o_RAM_A_REQ2 => ram_a_req2,
-            i_RAM_A_REQ_ALLOW => '0',
             o_RAM_A_RD_n => ram_a_rd_n,
             i_RAM_A_DI => ram_a_di,
             o_RAM_A_DO => ram_a_do,
-            o_RAM_A_CYCLE => open,
-            o_RAM_A_RFSH => open,
             o_DEBUG_NR_WE => debug_nr_we,
             o_DEBUG_NR_REG => debug_nr_reg,
             o_DEBUG_NR_DAT => debug_nr_dat,
@@ -475,7 +469,13 @@ begin
             o_ESP_GPIO_0_EN => open,
             i_GPIO => (others => '0'),
             o_GPIO => open,
-            o_GPIO_EN => open
+            o_GPIO_EN => open,
+            i_XDNA_DO => '0',
+            i_XADC_DRDY => '0',
+            i_XADC_DO => (others => '0'),
+            i_XADC_BUSY => '0',
+            i_XADC_EOC => '0',
+            i_XADC_EOS => '0'
         );
 
     trace : process
@@ -493,7 +493,7 @@ begin
             now_seen :=
                 ram_a_addr & ram_a_req & ram_a_req2 & ram_a_rd_n & ram_a_do &
                 ram_b_addr &
-                rgb & vs_n & hs_n & vb_n & hb_n & hdmi_pixel & hdmi_lock &
+                rgb & vs_n & hs_n & bk_n & '1' & hdmi_pixel & hdmi_lock &
                 spi_sd0_n & spi_sck & spi_mosi & kbd_row &
                 audio_l & audio_r &
                 cpu_speed & cpu_contend & cpu_lsb &

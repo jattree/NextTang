@@ -93,6 +93,44 @@ Later the same day `rtl/zxnext.vhd` gains two more changes:
   memory and clears the bits for the rest. The default sets every bit, which
   is the upstream behaviour.
 
+## Moving the Next core to the official tree
+
+On 2026-10-28 the Next core's baseline moved from the MiSTer copy to the
+official ZX Spectrum Next FPGA tree,
+[`gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA`](https://gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA)
+at `b047011d82bf3086f2b7db76451c6254506f5fe8` (core 3.02.03), which is also
+GPL-3.0-or-later. The MiSTer copy carries official core 3.02.00. Each core
+file was merged three ways, with the pinned MiSTer file as the base, the
+NextTang file as one side and the official file as the other, so NextTang's
+own patches carry over and every official change since 3.02.00 comes in. The
+per-file result is in [`upstream-official-files.tsv`](upstream-official-files.tsv):
+
+- **From the official tree:** `i2s.vhd`, `ctc.vhd`, `ctc_chan.vhd`,
+  `im2_control.vhd`, `im2_peripheral.vhd`, `debounce.vhd` and `sprites.vhd`
+  (among the fixes: the CTC count, IM2 peripherals, and sprites drawn about 70
+  to a line instead of 100).
+- **`zxnext.vhd`:** official 3.02.03 with NextTang's patches (clock enables,
+  debug outputs, the interrupt pulse, `g_layer2_units`) and three MiSTer
+  additions the Console needs: `i_CPU_WAIT` into the Z80's WAIT,
+  `o_RAM_A_REQ2`, and `i_BOOT`, which on a hard reset restores NextREG
+  power-on values as reloading the FPGA does on a Next (nextregs 0x04 and 0x10
+  are reset in the per-issue processes where the official core drives them).
+  The anti-brick boot ROM branch (machine ID 0xFA) is removed and the boot ROM
+  stays `bootrom`. The official Xilinx DNA, XADC, floppy and 4 MB ports are
+  tied off in the Console wrapper. The core reports 3.02.03.
+- **Kept from MiSTer:** the T80 family, which is Sorgelig's ZEXALL- and
+  MEMPTR-correct T80 and already contains every official T80N change;
+  `spi_master.vhd`, because the official rewrite has a different interface;
+  and `zxula_timing.vhd`, whose split blanking and centring the classic
+  profiles use. One line of it changes: in 48K 60 Hz timing MiSTer set the
+  active area 12 pixels late even with centring off (`128 + 12` in both
+  branches); it now uses the official 128.
+- **Every other file** has the same body in both trees.
+
+The memory-cycle delay MiSTer kept, which the official tree removed in
+`3a5ba97f` ("DMA and LDPIRX work at all speeds"), was dropped the day before on
+the MiSTer baseline and stays dropped.
+
 ## Reference projects
 
 These are read for their answers to device-specific questions. Nothing is

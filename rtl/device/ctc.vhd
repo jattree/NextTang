@@ -28,8 +28,8 @@
 -- Clarifications per CTC channel:
 --
 -- 1. Hard reset requires a control word to be written with D2 = 1
---    (time constant follows) otherwise the channel effectively
---    ignores the control word and will remain in the hard reset state.
+--    (time constant follows) otherwise the channel will remain
+--    in the hard reset state.
 --
 -- 2. Soft reset is generated when the control word's D1 = 1.  if
 --    D2 = 0, the channel will enter the hard reset state.  If D2 = 1
@@ -40,8 +40,15 @@
 --    A timer waiting for a clock edge to start will start and in counter
 --    mode, the count will be decremented.
 --
--- 4. ZC/TO is asserted for one clock cycle and not for the entire
---    duration that the count is at zero.
+-- 4. ZC/TO is asserted for one clock cycle.
+--
+-- 5. Reset of a channel requires twice writing a control word with
+--    soft reset bit set.  If the state machine is waiting for a time
+--    constant, the first write will not cause the reset.
+--
+-- 6. Control words, time constants and vectors can be written while the
+--    counter/timer is running as long as the soft reset bit is not set.
+--    A soft reset causes counting to stop.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -69,7 +76,7 @@ entity ctc is
       
       i_clk_trg              : in std_logic_vector(NUM_CTC-1 downto 0);   -- clock/trigger signals for each ctc channel, must be synchronized
       
-      o_im2_vector_wr        : out std_logic;                             -- im2 vector is being written (not handled in this module)
+      o_vector_wr            : out std_logic;                             -- interrupt vector is being written (pulsed one cycle)
       
       o_zc_to                : out std_logic_vector(NUM_CTC-1 downto 0);  -- zc/to for each ctc channel, asserted for one i_CLK cycle
       o_int_en               : out std_logic_vector(NUM_CTC-1 downto 0)   -- interrupt enable for each channel
@@ -85,7 +92,7 @@ architecture rtl of ctc is
    signal sel     : std_logic_vector(NUM_CTC-1 downto 0);
    
    signal iowr    : std_logic_vector(NUM_CTC-1 downto 0);
-   signal iowr_tc : std_logic_vector(NUM_CTC-1 downto 0);
+   signal iowr_vc : std_logic_vector(NUM_CTC-1 downto 0);
 
 begin
 
@@ -100,7 +107,7 @@ begin
             i_reset     => i_reset,
 
             i_iowr      => iowr(I),
-            o_iowr_tc   => iowr_tc(I),
+            o_iowr_vc   => iowr_vc(I),
 
             i_int_en_wr => i_int_en_wr,
             i_int_en    => i_int_en(I),
@@ -140,17 +147,19 @@ begin
 
    -- Output
 
-   process (iowr_tc, sel, i_port_ctc_wr, i_cpu_d)
-      variable tmp_iowr_tc : std_logic;
-   begin
-      tmp_iowr_tc := iowr_tc(0) and sel(0);
-      
-      for I in 1 to NUM_CTC-1 loop
-         tmp_iowr_tc := tmp_iowr_tc or (iowr_tc(I) and sel(I));
-      end loop;
-      
-      o_im2_vector_wr <= i_port_ctc_wr and (not i_cpu_d(0)) and (not tmp_iowr_tc);
-   end process;
+   o_vector_wr <= iowr_vc(0);   -- the z80 ctc only allows vectors written to channel 0
+   
+--   process (iowr_vc)
+--      variable tmp_iowr_vc : std_logic;
+--   begin
+--      tmp_iowr_vc := iowr_vc(0);
+--     
+--      for I in 1 to NUM_CTC-1 loop
+--         tmp_iowr_vc := tmp_iowr_vc or iowr_vc(I);
+--      end loop;
+--      
+--      o_vector_wr <= tmp_iowr_vc;
+--   end process;
 
    process (dout, sel)
       variable tmp_dout : std_logic_vector(7 downto 0);

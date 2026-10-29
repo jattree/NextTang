@@ -319,7 +319,7 @@ begin
             if center ='0' then
                 c_min_hactive <= to_unsigned(128 + 12, 9);   -- 256x192 area  --center area in mister
             else
-                c_min_hactive <= to_unsigned(128 + 12, 9);   -- 256x192 area
+                c_min_hactive <= to_unsigned(128, 9);   -- 256x192 area  -- NextTang: was 128 + 12 in both branches; official 3.02.03 has 128
             end if;
             c_max_hc      <= to_unsigned(447, 9);
          

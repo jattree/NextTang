@@ -57,7 +57,7 @@ entity im2_control is
       i_wr_n            : in std_logic;
       
       i_cpu_d           : in std_logic_vector(7 downto 0);
-	  
+      
       o_im_mode         : out std_logic_vector(1 downto 0);  -- 00 = im 0, 01 = im 1, 10 = im 2 changes on falling edge of T3
 
       o_reti_decode     : out std_logic;   -- reti is being decoded, only acknowledged interrupters should deassert IEO
@@ -229,6 +229,7 @@ begin
    end process;
    
    o_im_mode <= im_mode;
+   
    -- output signals
    
    o_reti_decode <= '1' when state = S_ED_T4 else '0';
