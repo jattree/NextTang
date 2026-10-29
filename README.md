@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL v3" src="https://img.shields.io/github/license/jattree/NextTang?style=flat-square&amp;color=0ea5e9"></a>
   <a href="https://github.com/jattree/NextTang/actions/workflows/quality.yml"><img alt="Quality checks" src="https://img.shields.io/github/actions/workflow/status/jattree/NextTang/quality.yml?branch=main&amp;style=flat-square&amp;label=quality"></a>
-  <a href="#current-status"><img alt="Status: 48K, 128K, and Spec256 on hardware" src="https://img.shields.io/badge/status-48K_%7C_128K_%7C_Spec256_on_hardware-f97316?style=flat-square"></a>
+  <a href="#current-status"><img alt="Status: 48K, 128K, Spec256 and the Next core on hardware" src="https://img.shields.io/badge/status-48K_%7C_128K_%7C_Spec256_%7C_Next_core_on_hardware-f97316?style=flat-square"></a>
   <a href="#hardware-targets"><img alt="Targets: Tang Nano 20K, Console 60K, and Console 138K" src="https://img.shields.io/badge/targets-Nano_20K_%7C_Console_60K_%7C_138K-334155?style=flat-square"></a>
   <a href="https://t.me/NextTang"><img alt="Telegram: NextTang" src="https://img.shields.io/badge/Telegram-NextTang-26A5E4?style=flat-square&amp;logo=telegram&amp;logoColor=white"></a>
   <a href="https://www.youtube.com/@NextTangFPGA"><img alt="YouTube: NextTang" src="https://img.shields.io/badge/YouTube-NextTang-FF0000?style=flat-square&amp;logo=youtube&amp;logoColor=white"></a>
@@ -26,11 +26,23 @@
 ## Current status
 
 > [!IMPORTANT]
-> The Console 138K now runs hardware-verified 48K, 128K and Spec256 machine
-> profiles with runtime-loaded user assets, direct USB keyboard/controller
-> input, DDR3-backed machine memory and HDMI audio/video. These are standalone
-> Spectrum-family platform slices, not yet the complete ZX Spectrum Next core
-> and not a blanket compatibility claim.
+> The Console 138K now runs the ZX Spectrum Next core: NextZXOS boots from the
+> SD card and Next games play at full speed with 720p50 HDMI video and audio.
+> It is not yet a complete Next. Below 28 MHz the browser is black and 48K
+> games do not load, and boot still fails on many loads. The 48K, 128K and
+> Spec256 profiles below remain standalone, hardware-verified platform slices.
+
+The Next core is the imported ZXNext machine core from the MiSTer port (see
+[provenance](docs/provenance.md)). Its 2 MB main memory lives in DDR3 behind a
+16 KiB CPU line cache, its CPU runs on the 28 MHz machine clock with speed and
+contention enables, and Layer 2 is mirrored into block RAM for two bank ranges.
+The official System/Next boot loader, built from its GPL source, loads
+`TBBLUE.FW` from the card and boots NextZXOS 2.09 to its menu and browser at
+28 MHz. Gods – Fogjaw Edition and Warhawk play at full speed with clean Layer 2,
+720p50 HDMI and HDMI audio. Not done yet: the slower CPU speeds, reliable boot
+(on most images only about two loads in six reach the welcome page), 60 Hz output, the F1/F3/F4 keys,
+Layer 2 outside the two mirrored ranges, and the real-time debugger. The
+bring-up is shown in [Episode 6](https://youtu.be/sYmfuHmmCgw).
 
 The 48K path boots a user-supplied Sinclair ROM through the imported T80 and
 standard upstream ULA. The ULA-visible lower 16 KiB remains local while the
