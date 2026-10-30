@@ -94,6 +94,12 @@ class SendNextTest(unittest.TestCase):
         self.assertEqual(len(rules), 64)
         self.assertEqual(rules[:8], bytes((0xFC, 0xFC, 0, 0, 1, 0, 0, 0)))
 
+    def test_zxpoly_mode(self) -> None:
+        game = bytearray(send_next.RUL1_AT + 72)
+        self.assertEqual(send_next.game_zxpoly_mode(bytes(game)), 0)
+        game[send_next.RUL1_AT : send_next.RUL1_AT + 8] = b"RUL1\x01\x00\x01\x07"
+        self.assertEqual(send_next.game_zxpoly_mode(bytes(game)), 7)
+
     def test_palette_is_rgb333_low_byte_first(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test.pal"

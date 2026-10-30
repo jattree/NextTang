@@ -292,6 +292,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [7:0]  spec256_background_index;
     wire [23:0] spec256_cfg;
     wire [511:0] spec256_rules;
+    wire [2:0]  spec256_zxpoly_mode;
     wire [8:0]  s256_ula_vc;
     wire        s256_bank5_write;
     wire [13:0] s256_bank5_address;
@@ -1295,6 +1296,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .palette_index(spec256_palette_index),
         .palette_rgb(spec256_palette_rgb),
         .render_dos(spec256_rules_flags[0]),
+        .zxpoly_mode(spec256_zxpoly_mode),
         .bk_over_ff(spec256_cfg[3]),
         .background_present(spec256_background_present),
         .background_write(spec256_background_write),
@@ -1849,7 +1851,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .background_index(spec256_background_index),
         .background_present(spec256_background_present),
         .cfg(spec256_cfg),
-        .rules(spec256_rules)
+        .rules(spec256_rules),
+        .zxpoly_mode(spec256_zxpoly_mode)
     );
 `else
     assign spec256_payload = 1'b0;
@@ -1862,6 +1865,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     assign spec256_background_index = 8'd0;
     assign spec256_cfg = 24'd0;
     assign spec256_rules = 512'd0;
+    assign spec256_zxpoly_mode = 3'd0;
 `endif
 
     reg [2:0]  trigger_digits_left = 3'd0;

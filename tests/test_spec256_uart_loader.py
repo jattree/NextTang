@@ -33,6 +33,7 @@ module testbench;
     wire [7:0] background_index;
     wire [23:0] cfg;
     wire [511:0] rules;
+    wire [2:0] zxpoly_mode;
     integer backgrounds = 0, background_errors = 0;
     integer planes = 0, palettes = 0, payload_bytes = 0, i;
     reg [63:0] first_word, second_word;
@@ -47,7 +48,7 @@ module testbench;
         .arm(arm), .arm_pc(arm_pc), .disarm(disarm), .rules_flags(rules_flags),
         .background_write(background_write), .background_address(background_address),
         .background_index(background_index), .background_present(background_present), .cfg(cfg),
-        .rules(rules));
+        .rules(rules), .zxpoly_mode(zxpoly_mode));
 
     always #5 clock = ~clock;
 
@@ -115,10 +116,13 @@ module testbench;
         if (rules[7:0] !== 8'h40 || rules[511:504] !== 8'h7f || rules[263:256] !== 8'h60)
             $fatal(1, "Y rules %h", rules);
         if (payload !== 0) $fatal(1, "still in payload after the rules");
+        send_string("Z6", 2);
+        if (zxpoly_mode !== 3'd6) $fatal(1, "Z6 set mode %0d", zxpoly_mode);
         send_string("Gab12", 5);
         send("H");
         if (background_present !== 0) $fatal(1, "H kept the background");
         if (rules !== 512'd0) $fatal(1, "H kept the rules");
+        if (zxpoly_mode !== 3'd0) $fatal(1, "H kept the ZX-Poly mode");
         send_string("S0", 2);
         $display("LOADER planes %0d palettes %0d payload %0d mode %0d armpc %h", planes, palettes, payload_bytes, mode, arm_pc);
         $display("WORDS %h@%h %h@%h LASTPAL %h", first_word, first_address, second_word, second_address, palette_last);

@@ -111,6 +111,13 @@ def game_rules(game: bytes) -> bytes | None:
     return game[RUL1_AT + 8 : RUL1_AT + 72]
 
 
+def game_zxpoly_mode(game: bytes) -> int:
+    """RUL1 byte 7: the ZX-Poly video mode (4, 6 or 7), or 0."""
+    if game[RUL1_AT : RUL1_AT + 4] != b"RUL1" or game[RUL1_AT + 4] != 1:
+        return 0
+    return game[RUL1_AT + 7] & 7
+
+
 def game_rules_flags(game: bytes) -> int:
     """RUL1's flags (bit 0: DOS render), or 0 for a .256 without RUL1."""
     if game[RUL1_AT : RUL1_AT + 4] != b"RUL1" or game[RUL1_AT + 4] != 1:
@@ -162,6 +169,7 @@ def main() -> int:
         background = game_background(game)
         cfg = game_cfg(game)
         rules = game_rules(game)
+        zxpoly = game_zxpoly_mode(game)
     else:
         words = plane_words(read_exact_file(args.gfx, GFX_SIZE, "Spec256 GFX"))
         flags = 0
@@ -169,6 +177,7 @@ def main() -> int:
         background = None
         cfg = bytes(3)
         rules = None
+        zxpoly = 0
     palette = palette_bytes(args.palette)
     snapshot = parse_snapshot(args.snapshot.read_bytes())
     count = len(words) // 8
@@ -188,6 +197,7 @@ def main() -> int:
     send(fd, b"C" + cfg.hex().encode())
     if rules is not None:
         send(fd, b"Y" + rules)
+    send(fd, b"Z%d" % zxpoly)
     send(fd, b"W4000%04x" % count + words)
     if font is not None:
         send(fd, b"W%04x%04x" % (ROM_FONT_START, ROM_FONT_WORDS) + font)

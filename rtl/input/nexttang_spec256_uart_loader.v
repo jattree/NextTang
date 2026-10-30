@@ -21,6 +21,8 @@
 //                   and flags (bit 3 BkOverFF, bit 7 CFG present)
 //   Y               then 64 raw bytes: RUL1's eight rules (bytes 8 to 71 of
 //                   the block), cleared by H
+//   Zn              the ZX-Poly video mode, RUL1 byte 7 (0: none), cleared
+//                   by H
 //   H               colour mode off
 //
 // Hex digits are 0-9 and a-f or A-F. While raw bytes are arriving, payload
@@ -55,7 +57,8 @@ module nexttang_spec256_uart_loader (
     output reg  [7:0]  background_index,
     output reg         background_present,   // set by B, cleared by H
     output reg  [23:0] cfg,                  // up, down, flags
-    output reg  [511:0] rules                // rule i in 64i+63..64i, byte j at 8j
+    output reg  [511:0] rules,               // rule i in 64i+63..64i, byte j at 8j
+    output reg  [2:0]  zxpoly_mode
 );
     localparam [2:0] IDLE = 3'd0;
     localparam [2:0] MODE = 3'd1;
@@ -97,6 +100,7 @@ module nexttang_spec256_uart_loader (
             background_present <= 1'b0;
             cfg <= 24'd0;
             rules <= 512'd0;
+            zxpoly_mode <= 3'd0;
         end else if (byte_valid) begin
             case (state)
                 IDLE: begin
@@ -110,7 +114,11 @@ module nexttang_spec256_uart_loader (
                         "C": begin digits_left <= 4'd6; state <= HEX; end
                         "B": begin next_address <= 16'd0; background_present <= 1'b1; state <= BACKGROUND; end
                         "Q": begin palette_bytes <= 10'd0; state <= PALETTE; end
-                        "H": begin disarm <= 1'b1; background_present <= 1'b0; rules <= 512'd0; end
+                        "H": begin
+                            disarm <= 1'b1; background_present <= 1'b0; rules <= 512'd0;
+                            zxpoly_mode <= 3'd0;
+                        end
+                        "Z": begin digits_left <= 4'd1; state <= HEX; end
                         "Y": begin next_address <= 16'd0; state <= RULES; end
                         default: ;
                     endcase
@@ -135,6 +143,9 @@ module nexttang_spec256_uart_loader (
                                 state <= IDLE;
                             end else if (command == "U") begin
                                 rules_flags <= {value[3:0], digit};
+                                state <= IDLE;
+                            end else if (command == "Z") begin
+                                zxpoly_mode <= digit[2:0];
                                 state <= IDLE;
                             end else if (command == "C") begin
                                 cfg <= {value[19:0], digit};

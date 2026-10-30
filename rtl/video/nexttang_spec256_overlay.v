@@ -31,6 +31,13 @@
 //                index is 0xFF with the .CFG's BkOverFF and an ink other
 //                than 7 (cells drawn in white keep the Spectrum's pixels)
 //
+// ZX-Poly games (RUL1 byte 7, zxpoly_mode 4, 6 or 7; Igor Maznitsa's
+// ZX-Poly converted by Alberto Conde's tools) colour a pixel with the Spectrum
+// colour I G R B taken from planes 3, 2, 1 and 0, at the Spectrum's two
+// levels. Mode 6 fills a cell whose ink equals its paper with the ink; mode 7
+// does both only in cells with FLASH and shows every other cell as the
+// Spectrum does (the core's own pixel). As SPEC256_MISTER's video.
+//
 // Outside the paper, or with enable low, the core's pixel passes through.
 // Everything leaves two 7 MHz cycles after it arrived, the capture's own
 // signals with it. The palette is RGB333, the frame store's pixel; a writer
@@ -67,6 +74,7 @@ module nexttang_spec256_overlay (
     input  wire [8:0]  palette_rgb,
 
     input  wire        render_dos,
+    input  wire [2:0]  zxpoly_mode,
     input  wire        bk_over_ff,
 
     // The background, written on clock_28; pixel (x, y) is word y * 256 + x.
@@ -121,6 +129,7 @@ module nexttang_spec256_overlay (
     reg [2:0]  s1_bit;
     reg [63:0] s1_word;
     reg [2:0]  s1_ink;
+    reg [7:0]  s1_attribute;
     reg [7:0]  s1_background;
 
     always @(posedge clock_7) begin
@@ -140,6 +149,7 @@ module nexttang_spec256_overlay (
             s1_bit <= 3'd7 - paper_x[2:0];
             s1_word <= plane_data;
             s1_ink <= attribute_q[2:0];
+            s1_attribute <= attribute_q;
             s1_background <= background_q;
 
             frame_start <= s1_frame_start;
@@ -148,6 +158,8 @@ module nexttang_spec256_overlay (
             y <= s1_y;
             if (!s1_paper)
                 pixel <= s1_pixel;
+            else if (zxpoly_on)
+                pixel <= zxpoly_plain ? s1_pixel : spectrum_rgb(zxpoly_colour, zxpoly_bright);
             else if (show_background)
                 pixel <= palette[s1_background];
             else if (!render_dos && index == 8'hff)
@@ -158,6 +170,24 @@ module nexttang_spec256_overlay (
                 pixel <= palette[index];
         end
     end
+
+    // ZX-Poly: the cell's own Spectrum colours where it is plain (mode 7
+    // without FLASH), its ink where ink = paper (modes 6 and 7), else I G R B.
+    wire zxpoly_on = zxpoly_mode != 3'd0;
+    wire zxpoly_plain = zxpoly_mode == 3'd7 && !s1_attribute[7];
+    wire zxpoly_fill = zxpoly_mode[1] && s1_attribute[2:0] == s1_attribute[5:3];
+    wire [2:0] zxpoly_colour = zxpoly_fill ? s1_attribute[2:0] : index[2:0];
+    wire zxpoly_bright = zxpoly_fill ? s1_attribute[6] : index[3];
+
+    // A Spectrum colour (G R B in bits 2:0) as RGB333: 0xD7 is 6, 0xFF is 7.
+    function [8:0] spectrum_rgb(input [2:0] colour, input bright);
+        reg [2:0] level;
+        begin
+            level = bright ? 3'd7 : 3'd6;
+            spectrum_rgb = {colour[1] ? level : 3'd0, colour[2] ? level : 3'd0,
+                            colour[0] ? level : 3'd0};
+        end
+    endfunction
 
     wire show_background = background_present &&
         (render_dos ? index == 8'h00
