@@ -73,6 +73,17 @@ class SendNextTest(unittest.TestCase):
         self.assertEqual(send_next.game_rom_font_words(bytes(game)), font)
         self.assertEqual(send_next.GRX1_AT + 4 + len(font), send_next.RUL1_AT)
 
+    def test_background_and_cfg(self) -> None:
+        game = bytearray(send_next.RUL1_AT + 72)
+        self.assertIsNone(send_next.game_background(bytes(game)))
+        game[send_next.CFG_AT : send_next.CFG_AT + 3] = b"\x40\x00\x88"
+        game[send_next.BACKGROUND_AT + 5] = 9
+        background = send_next.game_background(bytes(game))
+        self.assertEqual(len(background), 256 * 192)
+        self.assertEqual(background[5], 9)
+        self.assertEqual(send_next.game_cfg(bytes(game)), b"\x40\x00\x88")
+        self.assertEqual(send_next.BACKGROUND_AT + 256 * 192, 1_228_832)
+
     def test_palette_is_rgb333_low_byte_first(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test.pal"

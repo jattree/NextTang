@@ -13,6 +13,10 @@ A third sweep runs the Spec256 DOS rule: indices 0xC0 to 0xFF take the cell's
 ink from the attributes, which the overlay copies from bank 5 writes to
 0x1800-0x1AFF; writes elsewhere in bank 5 that share those low address bits
 must not reach the copy, and 0xFF no longer passes the core's pixel.
+
+Two more sweeps run with a background loaded (with zeros in it): in DOS mode
+index 0 shows the background; otherwise a non-zero background shows where the
+index is 0, or 0xFF in a cell whose ink is not 7 when BkOverFF is set.
 """
 
 from pathlib import Path
@@ -36,7 +40,11 @@ module testbench;
     reg palette_write = 0;
     reg [7:0] palette_index = 0;
     reg [8:0] palette_rgb = 0;
-    reg render_dos = 0, bank5_write = 0;
+    reg render_dos = 0, bank5_write = 0, bk_over_ff = 0;
+    reg background_present = 0, background_write = 0;
+    reg [15:0] background_address = 0;
+    reg [7:0] background_index = 0;
+    integer shown_background = 0;
     reg [13:0] bank5_address = 0;
     reg [7:0] bank5_data = 0;
     integer checked = 0, coloured = 0, passed_ff = 0, inked = 0, entry;
@@ -48,7 +56,10 @@ module testbench;
         .frame_start(o_frame), .pixel_valid(o_valid), .x(ox), .y(oy), .pixel(opixel),
         .plane_address(plane_address), .plane_data(plane_data),
         .palette_write(palette_write), .palette_index(palette_index), .palette_rgb(palette_rgb),
-        .render_dos(render_dos), .bank5_write(bank5_write), .bank5_address(bank5_address),
+        .render_dos(render_dos), .bk_over_ff(bk_over_ff),
+        .background_present(background_present), .background_write(background_write),
+        .background_address(background_address), .background_index(background_index),
+        .bank5_write(bank5_write), .bank5_address(bank5_address),
         .bank5_data(bank5_data));
 
     // 28 MHz, and 7 MHz rising on every fourth 28 MHz rising edge.
@@ -71,6 +82,9 @@ module testbench;
     endfunction
     function [8:0] core_pixel(input [8:0] x, input [8:0] y);
         core_pixel = (x * 3 + y * 5) & 9'h1ff;
+    endfunction
+    function [7:0] background_of(input integer px, input integer py);
+        background_of = (px + py) % 7 == 0 ? 8'h00 : ((px * 5 + py * 3) & 8'hff);
     endfunction
     function [7:0] attribute_of(input integer block);
         attribute_of = (block * 37 + 5) & 8'hff;
@@ -96,11 +110,14 @@ module testbench;
                     b = plane_byte(a, j);
                     index[j] = b[7 - (px % 8)];
                 end
-                if (dos && index[7:6] == 2'b11)
-                begin
-                    ink = attribute_of((py / 8) * 32 + px / 8);
+                ink = attribute_of((py / 8) * 32 + px / 8);
+                if (background_present &&
+                    (dos ? index == 8'h00
+                         : background_of(px, py) != 8'h00 &&
+                           (index == 8'h00 || (index == 8'hff && bk_over_ff && ink[2:0] != 3'd7))))
+                    expected = palette_of(background_of(px, py));
+                else if (dos && index[7:6] == 2'b11)
                     expected = palette_of({2'b11, ink[2:0], index[2:0]});
-                end
                 else if (dos)
                     expected = palette_of(index);
                 else
@@ -140,9 +157,13 @@ module testbench;
                 if (opixel === core_pixel(ox, oy)) passed_ff = passed_ff + 1;
                 else coloured = coloured + 1;
             end
-            if (enable && render_dos && ox >= 52 && ox < 308 && oy >= 48 && oy < 240 &&
-                opixel !== expected(ox, oy, 1, 0))
+            if (enable && render_dos && !background_present && ox >= 52 && ox < 308 &&
+                oy >= 48 && oy < 240 && opixel !== expected(ox, oy, 1, 0))
                 inked = inked + 1;
+            if (enable && background_present && ox >= 52 && ox < 308 && oy >= 48 && oy < 240 &&
+                opixel === palette_of(background_of(ox - 52, oy - 48)) &&
+                background_of(ox - 52, oy - 48) != 8'h00)
+                shown_background = shown_background + 1;
         end
     end
 
@@ -168,8 +189,18 @@ module testbench;
         sweep(1, 0);
         sweep(0, 0);
         sweep(1, 1);
-        $display("OVERLAY_PASS checked %0d coloured %0d passthrough %0d inked %0d",
-                 checked, coloured, passed_ff, inked);
+        for (entry = 0; entry < 49152; entry = entry + 1) begin
+            @(negedge clock_28);
+            background_write = 1; background_address = entry;
+            background_index = background_of(entry % 256, entry / 256);
+        end
+        @(negedge clock_28) background_write = 0;
+        background_present = 1;
+        sweep(1, 1);
+        bk_over_ff = 1;
+        sweep(1, 0);
+        $display("OVERLAY_PASS checked %0d coloured %0d passthrough %0d inked %0d background %0d",
+                 checked, coloured, passed_ff, inked, shown_background);
         $finish;
     end
 endmodule
@@ -182,8 +213,9 @@ class Spec256OverlayTest(unittest.TestCase):
         self.assertIn("OVERLAY_PASS", output, output)
         counts = output.split("OVERLAY_PASS ")[1].split()
         checked, coloured, passthrough = int(counts[1]), int(counts[3]), int(counts[5])
-        inked = int(counts[7])
-        self.assertEqual(checked, 3 * 360 * 288, output)
+        inked, background = int(counts[7]), int(counts[9])
+        self.assertEqual(checked, 5 * 360 * 288, output)
+        self.assertGreater(background, 1000, output)
         self.assertGreater(coloured, 40000, output)
         self.assertGreater(passthrough, 100, output)
         # Pixels the DOS rule changed: every 0xC0-0xFF index whose ink is not

@@ -22,6 +22,13 @@
 // not the core's pixel. The ink comes from a copy of the attributes
 // (bank 5, 0x1800 to 0x1AFF), kept from the core's writes to bank 5.
 //
+// With a background loaded (256 x 192 palette indices, 0 meaning none) a
+// paper pixel shows it, as SPEC256_MISTER's video does:
+//   DOS render   where the index is 0 (background index 0 is palette 0)
+//   otherwise    where the background is not 0 and the index is 0, or the
+//                index is 0xFF with the .CFG's BkOverFF and an ink other
+//                than 7 (cells drawn in white keep the Spectrum's pixels)
+//
 // Outside the paper, or with enable low, the core's pixel passes through.
 // Everything leaves two 7 MHz cycles after it arrived, the capture's own
 // signals with it. The palette is RGB333, the frame store's pixel; a writer
@@ -57,6 +64,13 @@ module nexttang_spec256_overlay (
     input  wire [8:0]  palette_rgb,
 
     input  wire        render_dos,
+    input  wire        bk_over_ff,
+
+    // The background, written on clock_28; pixel (x, y) is word y * 256 + x.
+    input  wire        background_present,
+    input  wire        background_write,
+    input  wire [15:0] background_address,
+    input  wire [7:0]  background_index,
 
     // Bank 5 writes, on clock_28, as the core's bank 5 RAM takes them.
     input  wire        bank5_write,
@@ -91,12 +105,21 @@ module nexttang_spec256_overlay (
         attribute_q <= attributes[attribute_read_index];
     end
 
+    reg [7:0] background [0:49151];
+    reg [7:0] background_q = 8'd0;
+    always @(posedge clock_28) begin
+        if (background_write)
+            background[background_address] <= background_index;
+        background_q <= background[{paper_y[7:0], paper_x[7:0]}];
+    end
+
     // Stage 1: the pixel and its plane word.
     reg        s1_frame_start, s1_valid, s1_paper;
     reg [8:0]  s1_x, s1_y, s1_pixel;
     reg [2:0]  s1_bit;
     reg [63:0] s1_word;
     reg [2:0]  s1_ink;
+    reg [7:0]  s1_background;
 
     always @(posedge clock_7) begin
         if (reset) begin
@@ -115,12 +138,17 @@ module nexttang_spec256_overlay (
             s1_bit <= 3'd7 - paper_x[2:0];
             s1_word <= plane_data;
             s1_ink <= attribute_q[2:0];
+            s1_background <= background_q;
 
             frame_start <= s1_frame_start;
             pixel_valid <= s1_valid;
             x <= s1_x;
             y <= s1_y;
-            if (!s1_paper || (!render_dos && index == 8'hff))
+            if (!s1_paper)
+                pixel <= s1_pixel;
+            else if (show_background)
+                pixel <= palette[s1_background];
+            else if (!render_dos && index == 8'hff)
                 pixel <= s1_pixel;
             else if (render_dos && index[7:6] == 2'b11)
                 pixel <= palette[{2'b11, s1_ink, index[2:0]}];
@@ -128,6 +156,11 @@ module nexttang_spec256_overlay (
                 pixel <= palette[index];
         end
     end
+
+    wire show_background = background_present &&
+        (render_dos ? index == 8'h00
+                    : s1_background != 8'h00 &&
+                      (index == 8'h00 || (index == 8'hff && bk_over_ff && s1_ink != 3'd7)));
 
     // Plane k is bit k of the index; the pixel is bit 7 - x mod 8 of its byte.
     wire [7:0] index;

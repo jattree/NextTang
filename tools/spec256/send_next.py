@@ -13,7 +13,9 @@ make256 (SPEC256_MISTER), which also carries the game's corrections (such as
 Jetpac's rocket taking the attribute ink), its RUL1 flags and, when it has
 one, its coloured ROM character set (GRX1, 0x3D00 to 0x3FFF), sent as plane
 words from 0x3D00. Only the 48K banks are sent: 5, 2 and 0 at 0x4000, 0x8000
-and 0xC000. H goes first, so a previous game's font is dropped.
+and 0xC000. H goes first, so a previous game's font and background are
+dropped. A .256's background (256 x 192 palette indices, 0 for none) goes
+with B when it has any pixel, and its .CFG colours with C.
 
 Without --palette a test palette is sent, the index's bits spread over RGB333,
 enough to see whether the planes land in the right places.
@@ -47,6 +49,9 @@ BANK_BYTES = 16_384 * 9
 GAME_MIN_SIZE = 8 * BANK_BYTES
 RUL1_AT = 1_382_956
 GRX1_AT = 1_376_808
+CFG_AT = 1_179_677
+BACKGROUND_AT = 1_179_680
+BACKGROUND_BYTES = 256 * 192
 ROM_FONT_START = 0x3D00
 ROM_FONT_WORDS = 768
 SPECTRUM_48K_BANKS = (5, 2, 0)
@@ -81,6 +86,19 @@ def game_rom_font_words(game: bytes) -> bytes | None:
     if len(words) != ROM_FONT_WORDS * 8:
         raise ValueError(".256 ends inside its GRX1 block")
     return words
+
+
+def game_background(game: bytes) -> bytes | None:
+    """The main background, or None when it is all 0 (no background)."""
+    background = game[BACKGROUND_AT : BACKGROUND_AT + BACKGROUND_BYTES]
+    if len(background) != BACKGROUND_BYTES or not any(background):
+        return None
+    return background
+
+
+def game_cfg(game: bytes) -> bytes:
+    """UpColorsMixed, DownColorsMixed and the CFG flags."""
+    return game[CFG_AT : CFG_AT + 3]
 
 
 def game_rules_flags(game: bytes) -> int:
@@ -131,10 +149,14 @@ def main() -> int:
         words = game_plane_words(game)
         flags = game_rules_flags(game)
         font = game_rom_font_words(game)
+        background = game_background(game)
+        cfg = game_cfg(game)
     else:
         words = plane_words(read_exact_file(args.gfx, GFX_SIZE, "Spec256 GFX"))
         flags = 0
         font = None
+        background = None
+        cfg = bytes(3)
     palette = palette_bytes(args.palette)
     snapshot = parse_snapshot(args.snapshot.read_bytes())
     count = len(words) // 8
@@ -151,15 +173,19 @@ def main() -> int:
     send(fd, b"H")
     send(fd, b"S1")
     send(fd, b"U%02x" % flags)
+    send(fd, b"C" + cfg.hex().encode())
     send(fd, b"W4000%04x" % count + words)
     if font is not None:
         send(fd, b"W%04x%04x" % (ROM_FONT_START, ROM_FONT_WORDS) + font)
     send(fd, b"Q" + palette)
+    if background is not None:
+        send(fd, b"B" + background)
     send(fd, b"G%04x" % snapshot.pc)
     time.sleep(0.2)
     os.close(fd)
     print(f"sent {count} plane words, palette ({'test' if args.palette is None else args.palette.name}), "
-          f"rules flags 0x{flags:02x}, {'ROM font, ' if font is not None else ''}"
+          f"rules flags 0x{flags:02x}, CFG {cfg.hex()}, {'ROM font, ' if font is not None else ''}"
+          f"{'background, ' if background is not None else ''}"
           f"armed at PC 0x{snapshot.pc:04x}, "
           f"{time.time() - started:.0f} s")
     return 0

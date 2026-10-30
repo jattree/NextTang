@@ -15,6 +15,10 @@
 //                   master's copy)
 //   Uff             the game's rules flags, byte 5 of the .256's RUL1 block
 //                   (bit 0: Spec256 DOS render)
+//   B               then 49152 raw bytes: the 256 x 192 background, one
+//                   palette index per pixel, row by row (0: none)
+//   Cuuddff         the game's .CFG colours: UpColorsMixed, DownColorsMixed
+//                   and flags (bit 3 BkOverFF, bit 7 CFG present)
 //   H               colour mode off
 //
 // Hex digits are 0-9 and a-f or A-F. While raw bytes are arriving, payload
@@ -42,13 +46,20 @@ module nexttang_spec256_uart_loader (
     output reg         arm,          // one cycle: arm at arm_pc
     output reg  [15:0] arm_pc,
     output reg         disarm,       // one cycle
-    output reg  [7:0]  rules_flags
+    output reg  [7:0]  rules_flags,
+
+    output reg         background_write,
+    output reg  [15:0] background_address,
+    output reg  [7:0]  background_index,
+    output reg         background_present,   // set by B, cleared by H
+    output reg  [23:0] cfg                   // up, down, flags
 );
     localparam [2:0] IDLE = 3'd0;
     localparam [2:0] MODE = 3'd1;
     localparam [2:0] HEX = 3'd2;
     localparam [2:0] PLANES = 3'd3;
     localparam [2:0] PALETTE = 3'd4;
+    localparam [2:0] BACKGROUND = 3'd5;
 
     reg [2:0]  state;
     reg [7:0]  command;
@@ -65,18 +76,21 @@ module nexttang_spec256_uart_loader (
                     (byte_in >= "A" && byte_in <= "F");
     wire [3:0] digit = byte_in <= "9" ? byte_in[3:0] : byte_in[3:0] + 4'd9;
 
-    assign payload = state == PLANES || state == PALETTE;
+    assign payload = state == PLANES || state == PALETTE || state == BACKGROUND;
 
     always @(posedge clock) begin
         plane_write <= 1'b0;
         palette_write <= 1'b0;
         arm <= 1'b0;
         disarm <= 1'b0;
+        background_write <= 1'b0;
         if (reset) begin
             state <= IDLE;
             spec256_mode <= 1'b0;
             arm_pc <= 16'd0;
             rules_flags <= 8'd0;
+            background_present <= 1'b0;
+            cfg <= 24'd0;
         end else if (byte_valid) begin
             case (state)
                 IDLE: begin
@@ -87,8 +101,10 @@ module nexttang_spec256_uart_loader (
                         "W": begin digits_left <= 4'd8; state <= HEX; end
                         "G": begin digits_left <= 4'd4; state <= HEX; end
                         "U": begin digits_left <= 4'd2; state <= HEX; end
+                        "C": begin digits_left <= 4'd6; state <= HEX; end
+                        "B": begin next_address <= 16'd0; background_present <= 1'b1; state <= BACKGROUND; end
                         "Q": begin palette_bytes <= 10'd0; state <= PALETTE; end
-                        "H": disarm <= 1'b1;
+                        "H": begin disarm <= 1'b1; background_present <= 1'b0; end
                         default: ;
                     endcase
                 end
@@ -112,6 +128,9 @@ module nexttang_spec256_uart_loader (
                                 state <= IDLE;
                             end else if (command == "U") begin
                                 rules_flags <= {value[3:0], digit};
+                                state <= IDLE;
+                            end else if (command == "C") begin
+                                cfg <= {value[19:0], digit};
                                 state <= IDLE;
                             end else begin
                                 next_address <= value[27:12];
@@ -147,6 +166,15 @@ module nexttang_spec256_uart_loader (
                         if (palette_bytes == 10'd511)
                             state <= IDLE;
                     end
+                end
+
+                BACKGROUND: begin
+                    background_write <= 1'b1;
+                    background_address <= next_address;
+                    background_index <= byte_in;
+                    next_address <= next_address + 16'd1;
+                    if (next_address == 16'd49151)
+                        state <= IDLE;
                 end
 
                 default: state <= IDLE;

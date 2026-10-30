@@ -286,6 +286,11 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [15:0] spec256_overlay_address;
     wire [63:0] spec256_overlay_data;
     wire [7:0]  spec256_rules_flags;
+    wire        spec256_background_present;
+    wire        spec256_background_write;
+    wire [15:0] spec256_background_address;
+    wire [7:0]  spec256_background_index;
+    wire [23:0] spec256_cfg;
     wire        s256_bank5_write;
     wire [13:0] s256_bank5_address;
     wire [7:0]  s256_bank5_data;
@@ -1277,6 +1282,11 @@ module `NEXTTANG_ZXNEXT_TOP (
         .palette_index(spec256_palette_index),
         .palette_rgb(spec256_palette_rgb),
         .render_dos(spec256_rules_flags[0]),
+        .bk_over_ff(spec256_cfg[3]),
+        .background_present(spec256_background_present),
+        .background_write(spec256_background_write),
+        .background_address(spec256_background_address),
+        .background_index(spec256_background_index),
         .bank5_write(s256_bank5_write),
         .bank5_address(s256_bank5_address),
         .bank5_data(s256_bank5_data)
@@ -1820,13 +1830,23 @@ module `NEXTTANG_ZXNEXT_TOP (
         .arm(loader_arm),
         .arm_pc(loader_arm_pc),
         .disarm(loader_disarm),
-        .rules_flags(spec256_rules_flags)
+        .rules_flags(spec256_rules_flags),
+        .background_write(spec256_background_write),
+        .background_address(spec256_background_address),
+        .background_index(spec256_background_index),
+        .background_present(spec256_background_present),
+        .cfg(spec256_cfg)
     );
 `else
     assign spec256_payload = 1'b0;
     assign spec256_mode = 1'b0;
     assign spec256_desync = 1'b0;
     assign spec256_rules_flags = 8'd0;
+    assign spec256_background_present = 1'b0;
+    assign spec256_background_write = 1'b0;
+    assign spec256_background_address = 16'd0;
+    assign spec256_background_index = 8'd0;
+    assign spec256_cfg = 24'd0;
 `endif
 
     reg [2:0]  trigger_digits_left = 3'd0;
