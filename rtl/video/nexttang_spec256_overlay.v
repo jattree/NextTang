@@ -4,9 +4,9 @@
 // Spec256's colour picture, laid over the Next core's captured raster.
 //
 // The core's picture is captured at 7 MHz as a 360 x 288 window
-// (nexttang_ula_capture), the Spectrum's 256 x 192 paper at (52, paper_top):
-// the paper's first line moves with the core's 50/60 Hz timing, so the board
-// measures it from the ULA's line counter (48 is the 50 Hz value). For
+// (nexttang_ula_capture), the Spectrum's 256 x 192 paper at (paper_left,
+// paper_top): the paper moves with the core's 50/60 Hz timing, so the board
+// measures both from the ULA's counters (48 is the 50 Hz top). For
 // each paper pixel this reads the colour planes' word for its screen byte
 // (one byte per plane, from the Layer 2 mirror's port B in Spec256 mode),
 // takes the pixel's bit from each plane as an 8-bit palette index, and
@@ -58,6 +58,7 @@ module nexttang_spec256_overlay (
     input  wire        reset,
     input  wire        enable,
     input  wire [8:0]  paper_top,
+    input  wire [8:0]  paper_left,
 
     input  wire        capture_frame_start,
     input  wire        capture_pixel_valid,
@@ -98,11 +99,9 @@ module nexttang_spec256_overlay (
     input  wire [13:0] bank5_address,
     input  wire [7:0]  bank5_data
 );
-    localparam [8:0] PAPER_X = 9'd52;
-
-    wire [8:0] paper_x = capture_x - PAPER_X;
+    wire [8:0] paper_x = capture_x - paper_left;
     wire [8:0] paper_y = capture_y - paper_top;
-    wire in_paper = capture_x >= PAPER_X && capture_x < PAPER_X + 9'd256 &&
+    wire in_paper = capture_x >= paper_left && capture_x < paper_left + 9'd256 &&
                     capture_y >= paper_top && capture_y < paper_top + 9'd192;
 
     // The Spectrum's display file: 010 y7 y6 y2 y1 y0 y5 y4 y3 x7 x6 x5 x4 x3.

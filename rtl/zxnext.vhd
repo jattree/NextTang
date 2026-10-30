@@ -369,7 +369,19 @@ entity zxnext is
       -- NextTang: the ULA's line within the 256 x 192 paper (0 on its first
       -- line), on i_CLK_7, for the Spec256 overlay to find the paper in the
       -- captured picture whatever the 50/60 Hz timing; observation only.
-      o_SPEC256_ULA_VC        : out std_logic_vector(8 downto 0)
+      o_SPEC256_ULA_VC        : out std_logic_vector(8 downto 0);
+      -- NextTang: the ULA's pixel within the paper's line (0 at its first
+      -- pixel), on i_CLK_7, for the overlay to find the paper's left edge;
+      -- observation only.
+      o_SPEC256_ULA_HC        : out std_logic_vector(8 downto 0);
+      -- NextTang: the eight MMU slots' 8K pages (slot 0 in bits 7:0) and
+      -- whether the ULA shows the shadow screen (bank 7), for Spec256's
+      -- planes to follow 128K paging; observation only.
+      o_SPEC256_MMU           : out std_logic_vector(63 downto 0);
+      o_SPEC256_ULA_SHADOW    : out std_logic;
+      -- NextTang: one 28 MHz cycle when the CPU executes RETN (NextZXOS
+      -- starts a snapshot with one); observation only.
+      o_SPEC256_RETN          : out std_logic
    );
 end entity;
 
@@ -1905,6 +1917,10 @@ end generate;
    o_SPEC256_BANK5_A <= vram_bank5_a0;
    o_SPEC256_BANK5_D <= cpu_do;
    o_SPEC256_ULA_VC <= std_logic_vector(vc);
+   o_SPEC256_ULA_HC <= std_logic_vector(hc);
+   o_SPEC256_MMU <= MMU7 & MMU6 & MMU5 & MMU4 & MMU3 & MMU2 & MMU1 & MMU0;
+   o_SPEC256_ULA_SHADOW <= ula_vram_shadow;
+   o_SPEC256_RETN <= z80_retn_seen_28;
    o_DEBUG_NR_REG <= nr_wr_reg;
    o_DEBUG_NR_DAT <= nr_wr_dat;
    o_DEBUG_IORQ_n <= cpu_iorq_n;

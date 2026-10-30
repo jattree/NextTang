@@ -23,6 +23,10 @@ for page 0x91 and opcode 7E (XOR 0F), LD A,(HL) reads each plane at its
 lane's own address with the XOR; LD B,(HL) fails the opcode filter and reads
 at the master's address. Without the rule both read at the master's address.
 
+With the slot 0x8000 to 0x9FFF marked as having no planes (plane_present, a
+128K bank the board holds no planes for), every read there gives the lanes
+the master's byte and their writes there are dropped.
+
 Checked:
 - every lane's bus strobes and data addresses equal the master's a 28 MHz
   cycle earlier (the lanes' desync flag stays clear), with nothing ever
@@ -104,7 +108,7 @@ PROGRAM = {
 
 
 def testbench(divide: int, graphics_from: int, control: bool, rom: bool, mono: bool,
-              rule: bool) -> str:
+              rule: bool, present: int) -> str:
     rule0 = "00000F01FF7E9191" if rule else "0000000000000000"
     code = "\n".join(
         f"        m(16#{address + i:04x}#) := x\"{byte:02x}\";"
@@ -243,6 +247,7 @@ begin
             clock_28 => clock, cen_r => cen_r, cen_f => cen_f, reset_n => reset_n,
             graphics => graphics, master_control => control, rom_planes => {"'1'" if rom else "'0'"}, arith_mono => {"'1'" if mono else "'0'"},
             rules => std_logic_vector'(447 downto 0 => '0') & x"{rule0}",
+            plane_present => x"{present:02x}",
             master_a => address, master_m1_n => m1_n, master_mreq_n => mreq_n, master_iorq_n => iorq_n,
             master_rd_n => rd_n, master_wr_n => wr_n, master_wait_n => '1',
             master_int_n => int_n, master_nmi_n => '1', master_busrq_n => '1',
@@ -334,11 +339,11 @@ end architecture;
 
 
 def run(divide: int, graphics_from: int = 0x0003, control: bool = True, rom: bool = True,
-        mono: bool = False, rule: bool = False) -> str:
+        mono: bool = False, rule: bool = False, present: int = 0xFF) -> str:
     with tempfile.TemporaryDirectory() as directory:
         work = f"--workdir={directory}"
         bench = Path(directory) / "testbench.vhd"
-        bench.write_text(testbench(divide, graphics_from, control, rom, mono, rule))
+        bench.write_text(testbench(divide, graphics_from, control, rom, mono, rule, present))
         for step in (("-a", *FLAGS, work, *map(str, SOURCES), str(bench)),
                      ("-e", *FLAGS, work, "testbench"),
                      ("-r", *FLAGS, work, "testbench", "--ieee-asserts=disable")):
@@ -394,6 +399,17 @@ class Spec256LanesTest(unittest.TestCase):
 
     def test_read_rule_at_14_mhz(self) -> None:
         self.check_graphics_run(run(2, rule=True), rule=True)
+
+    def test_a_slot_without_planes_reads_the_master_and_is_not_written(self) -> None:
+        output = run(8, present=0xEF)
+        self.assertIn("DESYNC '0'", output, output)
+        self.assertIn("REACHED_END true", output, output)
+        for k in range(8):
+            # Everything read from 0x8000 to 0x9FFF is the master's, so each
+            # lane stores the master's results (the ROM font byte stays its
+            # own), and LDIR's copy to 0x9000 never reaches the plane.
+            self.assertIn(f"LANE {k} A000 128 A001 0 A002 {0xC0 + k} A003 16 A004 0 "
+                          f"A005 0 A006 0 9000 0 9003 0 9004 0", output, output)
 
     def test_follow_mode_lanes_equal_the_master(self) -> None:
         output = run(8, graphics_from=0xFFFF)

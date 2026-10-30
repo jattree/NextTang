@@ -23,6 +23,8 @@
 //                   the block), cleared by H
 //   Zn              the ZX-Poly video mode, RUL1 byte 7 (0: none), cleared
 //                   by H
+//   Xnn             the paper's horizontal trim, a signed pixel count added
+//                   to the left edge the board measures (kept by H)
 //   H               colour mode off
 //
 // Hex digits are 0-9 and a-f or A-F. While raw bytes are arriving, payload
@@ -58,7 +60,8 @@ module nexttang_spec256_uart_loader (
     output reg         background_present,   // set by B, cleared by H
     output reg  [23:0] cfg,                  // up, down, flags
     output reg  [511:0] rules,               // rule i in 64i+63..64i, byte j at 8j
-    output reg  [2:0]  zxpoly_mode
+    output reg  [2:0]  zxpoly_mode,
+    output reg  [7:0]  paper_trim
 );
     localparam [2:0] IDLE = 3'd0;
     localparam [2:0] MODE = 3'd1;
@@ -101,6 +104,7 @@ module nexttang_spec256_uart_loader (
             cfg <= 24'd0;
             rules <= 512'd0;
             zxpoly_mode <= 3'd0;
+            paper_trim <= 8'd0;
         end else if (byte_valid) begin
             case (state)
                 IDLE: begin
@@ -119,6 +123,7 @@ module nexttang_spec256_uart_loader (
                             zxpoly_mode <= 3'd0;
                         end
                         "Z": begin digits_left <= 4'd1; state <= HEX; end
+                        "X": begin digits_left <= 4'd2; state <= HEX; end
                         "Y": begin next_address <= 16'd0; state <= RULES; end
                         default: ;
                     endcase
@@ -146,6 +151,9 @@ module nexttang_spec256_uart_loader (
                                 state <= IDLE;
                             end else if (command == "Z") begin
                                 zxpoly_mode <= digit[2:0];
+                                state <= IDLE;
+                            end else if (command == "X") begin
+                                paper_trim <= {value[3:0], digit};
                                 state <= IDLE;
                             end else if (command == "C") begin
                                 cfg <= {value[19:0], digit};

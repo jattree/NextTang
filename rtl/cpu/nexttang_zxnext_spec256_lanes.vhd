@@ -23,7 +23,10 @@
 -- plane sees the master's ROM byte) and I/O reads. With rom_planes, a game's
 -- coloured ROM character set is loaded: data reads from 0x3D00 to 0x3FFF
 -- then come from the lane's own plane too (the board serves them), as in
--- Alberto Conde's SPEC256_MISTER, which colours only the character set. Its data, ALU and
+-- Alberto Conde's SPEC256_MISTER, which colours only the character set.
+-- Reads from a RAM slot the board marks as having no planes (plane_present:
+-- a 128K bank the game pages in beyond the three it colours) come from the
+-- master's bus as well, and nothing is written there. A lane's data, ALU and
 -- carry are its own; every control decision (conditional jumps, calls,
 -- returns, block repeats, DJNZ) is the master's, live, so the lane keeps the
 -- master's timing without the master ever being held. At each instruction
@@ -89,6 +92,11 @@ entity nexttang_zxnext_spec256_lanes is
         -- enabled, bit 1 negate the opcode test, bit 2 master opcode rule,
         -- not applied here), XOR, two bytes for master opcode rules.
         rules          : in std_logic_vector(511 downto 0) := (others => '0');
+        -- Which 8K slots (bit n: 0x2000 * n) have the game's planes behind
+        -- them. A 128K game pages banks the board holds no planes for; data
+        -- reads there come from the master's bus, like the ROM's, and writes
+        -- there are dropped.
+        plane_present  : in std_logic_vector(7 downto 0) := (others => '1');
 
         -- The master, as the core sees it.
         master_a        : in  std_logic_vector(15 downto 0);
@@ -171,6 +179,10 @@ architecture rtl of nexttang_zxnext_spec256_lanes is
     signal m1_d, mreq_d, iorq_d, rd_d, wr_d : std_logic := '1';
     signal wait_d, wait_fall_d, int_d, nmi_d, busrq_d : std_logic := '1';
     signal a_d, pc_d, sp_d : std_logic_vector(15 downto 0) := (others => '0');
+    -- The master's address is in a RAM slot without planes, registered with
+    -- a_d: every lane accesses through the master's registers, and the
+    -- lane's own address arrives too late in the cycle to decode.
+    signal no_planes_d : std_logic := '0';
     signal i_d, r_d, f_d : std_logic_vector(7 downto 0) := (others => '0');
     signal regs_d : std_logic_vector(159 downto 0) := (others => '0');
     signal iff1_d, iff2_d, halted_d, int_cycle_d, nmi_cycle_d, boundary_d, incdecz_d : std_logic := '0';
@@ -209,6 +221,12 @@ begin
             cen_r_d <= cen_r;
             graphics_d <= graphics;
             a_d <= master_a;
+            if master_a(15 downto 14) /= "00" and
+               plane_present(to_integer(unsigned(master_a(15 downto 13)))) = '0' then
+                no_planes_d <= '1';
+            else
+                no_planes_d <= '0';
+            end if;
             m1_d <= master_m1_n; mreq_d <= master_mreq_n; iorq_d <= master_iorq_n;
             rd_d <= master_rd_n; wr_d <= master_wr_n;
             wait_d <= master_wait_n; int_d <= master_int_n; nmi_d <= master_nmi_n;
@@ -381,14 +399,16 @@ begin
         signal from_master : boolean;
     begin
         graphics_address(lane * 16 + 15 downto lane * 16) <= memory_address(lane);
-        graphics_write(lane) <= graphics_d and not lane_wr_n(lane) and not lane_mreq_n(lane);
+        graphics_write(lane) <= graphics_d and not lane_wr_n(lane) and not lane_mreq_n(lane) and
+                                not no_planes_d;
         graphics_iorq(lane) <= graphics_d and not lane_iorq_n(lane);
         own_data <= graphics_data_in(lane * 8 + 7 downto lane * 8) xor xor_q;
         rom_test_address <= a_d when rules_active = '1' else lane_address(lane);
         from_master <= graphics_d = '0' or lane_instruction_access(lane) = '1' or
                        lane_iorq_n(lane) = '0' or
                        (rom_test_address(15 downto 14) = "00" and
-                        not (rom_planes = '1' and unsigned(rom_test_address(13 downto 8)) >= 16#3D#));
+                        not (rom_planes = '1' and unsigned(rom_test_address(13 downto 8)) >= 16#3D#)) or
+                       no_planes_d = '1';
         data_in_fall <= master_di when from_master else own_data;
 
         cpu : entity work.T80Na

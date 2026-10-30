@@ -294,6 +294,11 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [511:0] spec256_rules;
     wire [2:0]  spec256_zxpoly_mode;
     wire [8:0]  s256_ula_vc;
+    wire [8:0]  s256_ula_hc;
+    wire [7:0]  spec256_paper_trim;
+    wire [63:0] s256_mmu;
+    wire        s256_ula_shadow;
+    wire        s256_retn;
     wire        s256_bank5_write;
     wire [13:0] s256_bank5_address;
     wire [7:0]  s256_bank5_data;
@@ -514,7 +519,11 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_SPEC256_BANK5_WE(s256_bank5_write),
         .o_SPEC256_BANK5_A(s256_bank5_address),
         .o_SPEC256_BANK5_D(s256_bank5_data),
-        .o_SPEC256_ULA_VC(s256_ula_vc)
+        .o_SPEC256_ULA_VC(s256_ula_vc),
+        .o_SPEC256_ULA_HC(s256_ula_hc),
+        .o_SPEC256_MMU(s256_mmu),
+        .o_SPEC256_ULA_SHADOW(s256_ula_shadow),
+        .o_SPEC256_RETN(s256_retn)
     );
 
     // ------------------------------------------------------------ keyboard, SD
@@ -809,6 +818,9 @@ module `NEXTTANG_ZXNEXT_TOP (
     // mode at the game's start address (G); H turns it off. Colour mode needs
     // 14 MHz or below; Spec256 games run at 3.5.
     wire [127:0] lanes_address;
+    // Which 8K slots have planes behind them, and where (below).
+    reg [7:0]  spec256_slot_present = 8'hfc;
+    reg [23:0] spec256_slot_high = 24'o76543210;
     wire [63:0]  lanes_write_data;
     wire [7:0]   lanes_write;
     wire         loader_plane_write;
@@ -830,6 +842,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .rom_planes(spec256_rom_planes),
         .arith_mono(spec256_rules_flags[1]),
         .rules(spec256_rules),
+        .plane_present(spec256_slot_present),
         .master_m1_n(s256_m1_n),
         .master_mreq_n(s256_mreq_n),
         .master_iorq_n(s256_iorq_n),
@@ -895,16 +908,53 @@ module `NEXTTANG_ZXNEXT_TOP (
 
     assign spec256_lane_read = spec256_rom_font_hit ? spec256_rom_font_q : spec256_plane_read;
 
-    // Every lane addresses memory through the master's registers, so lane
-    // 0's address serves all eight planes (the desync check enforces it).
-    // The loader writes only while colour mode is off, when lanes write
-    // nothing.
-    assign spec256_lane_address = loader_plane_write ? {8{loader_plane_address}} : lanes_address;
+    // The mirror holds the planes of the three banks a 48K game has, where
+    // a 48K machine pages them: bank 5 at 0x4000, bank 2 at 0x8000, bank 0
+    // at 0xC000 (the loader sends no others). A 128K game pages through the
+    // MMU, so each 8K slot's page says which copy a lane's access uses, if
+    // any: a slot holding another bank has no planes, and the lanes read
+    // the master's byte there and write nothing (plane_present); a slot
+    // without planes keeps its own address, so the mirror still drops lane
+    // writes below 0x4000. Built from
+    // the MMU a cycle late; paging is an OUT, never the access straight
+    // after it.
+    integer slot;
+    always @(posedge clock_28)
+        for (slot = 0; slot < 8; slot = slot + 1) begin
+            spec256_slot_high[3*slot +: 3] <=
+                s256_mmu[8*slot+1 +: 7] == 7'd5 ? {2'd1, s256_mmu[8*slot]} :
+                s256_mmu[8*slot+1 +: 7] == 7'd2 ? {2'd2, s256_mmu[8*slot]} :
+                s256_mmu[8*slot+1 +: 7] == 7'd0 ? {2'd3, s256_mmu[8*slot]} : slot[2:0];
+            spec256_slot_present[slot] <= s256_mmu[8*slot+1 +: 7] == 7'd5 ||
+                                          s256_mmu[8*slot+1 +: 7] == 7'd2 ||
+                                          s256_mmu[8*slot+1 +: 7] == 7'd0;
+        end
+
+    wire [127:0] lanes_plane_address;
+    genvar lane;
+    generate
+        for (lane = 0; lane < 8; lane = lane + 1) begin : lane_paging
+            assign lanes_plane_address[16*lane +: 16] = {
+                spec256_slot_high[3*lanes_address[16*lane+13 +: 3] +: 3],
+                lanes_address[16*lane +: 13]};
+        end
+    endgenerate
+
+    // Every lane writes at the master's address, so lane 0's write serves
+    // all eight planes. The loader writes only while colour mode is off,
+    // when lanes write nothing.
+    assign spec256_lane_address = loader_plane_write ? {8{loader_plane_address}} : lanes_plane_address;
     assign spec256_lane_write = loader_plane_write || lanes_write[0];
     assign spec256_lane_write_data = loader_plane_write ? loader_plane_data : lanes_write_data;
 
     // Colour mode from the first instruction fetched at the armed address.
+    // A game that resumes in the ROM (a PAUSE loop, the interrupt routine at
+    // 0x0038) arms only once a RETN has followed G: NextZXOS runs code at
+    // those addresses while it loads the snapshot, and colour mode started
+    // there copies every byte the load writes into the planes; it starts
+    // the snapshot with a RETN from its NMI handler.
     reg spec256_armed = 1'b0;
+    reg spec256_retn_seen = 1'b0;
     reg s256_previous_m1_n = 1'b1;
 
     always @(posedge clock_28) begin
@@ -914,10 +964,14 @@ module `NEXTTANG_ZXNEXT_TOP (
             spec256_graphics <= 1'b0;
         end else if (loader_arm) begin
             spec256_armed <= 1'b1;
+            spec256_retn_seen <= 1'b0;
         end else if (spec256_armed && s256_previous_m1_n && !s256_m1_n &&
-                     s256_boundary && s256_a == loader_arm_pc) begin
+                     s256_boundary && s256_a == loader_arm_pc &&
+                     (loader_arm_pc[15:14] != 2'b00 || spec256_retn_seen)) begin
             spec256_armed <= 1'b0;
             spec256_graphics <= 1'b1;
+        end else if (s256_retn) begin
+            spec256_retn_seen <= 1'b1;
         end
     end
 
@@ -1270,16 +1324,37 @@ module `NEXTTANG_ZXNEXT_TOP (
     // which the ULA's line counter reads 0, sampled mid-paper (x 180), where
     // the pixel pipeline's few cycles of delay keep the ULA on the same line.
     reg [8:0] spec256_paper_top = 9'd48;
+    // The planes are bank 5's; a 128K game showing the shadow screen (bank
+    // 7) is shown as the core draws it.
+    reg [1:0] spec256_shadow_sync = 2'b00;
+    always @(posedge clock_28)
+        spec256_shadow_sync <= {spec256_shadow_sync[0], s256_ula_shadow};
+    wire spec256_shadow = spec256_shadow_sync[1];
     always @(posedge clock_7)
         if (capture_pixel_valid && capture_x == 9'd180 && s256_ula_vc == 9'd0)
             spec256_paper_top <= capture_y;
+
+    // The paper's first pixel in the captured picture likewise: the capture
+    // pixel at which the ULA's pixel counter reads 0, on a paper line, plus
+    // the pixel pipeline's delay, 18 (measured on the Console 138K at 60 Hz:
+    // Highway Encounter's text lines up), plus a trim (the loader's X). The
+    // edge moves with the 50/60 Hz timing too: with 52 fixed, EmuZWin games,
+    // whose index 0xFF shows the core's own pixel, drew text with the core's
+    // pixels 4 to one side of the planes'.
+    localparam [8:0] SPEC256_PAPER_DELAY = 9'd18;
+    reg [8:0] spec256_paper_left = 9'd52;
+    always @(posedge clock_7)
+        if (capture_pixel_valid && s256_ula_vc == 9'd96 && s256_ula_hc == 9'd0)
+            spec256_paper_left <= capture_x + SPEC256_PAPER_DELAY +
+                                  {spec256_paper_trim[7], spec256_paper_trim};
 
     nexttang_spec256_overlay spec256_overlay (
         .clock_7(clock_7),
         .clock_28(clock_28),
         .reset(!machine_locked),
-        .enable(spec256_graphics),
+        .enable(spec256_graphics && !spec256_shadow),
         .paper_top(spec256_paper_top),
+        .paper_left(spec256_paper_left),
         .capture_frame_start(capture_frame_start),
         .capture_pixel_valid(capture_pixel_valid),
         .capture_x(capture_x),
@@ -1853,7 +1928,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .background_present(spec256_background_present),
         .cfg(spec256_cfg),
         .rules(spec256_rules),
-        .zxpoly_mode(spec256_zxpoly_mode)
+        .zxpoly_mode(spec256_zxpoly_mode),
+        .paper_trim(spec256_paper_trim)
     );
 `else
     assign spec256_payload = 1'b0;
@@ -1867,6 +1943,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     assign spec256_cfg = 24'd0;
     assign spec256_rules = 512'd0;
     assign spec256_zxpoly_mode = 3'd0;
+    assign spec256_paper_trim = 8'd0;
 `endif
 
     reg [2:0]  trigger_digits_left = 3'd0;

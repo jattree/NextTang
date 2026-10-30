@@ -1,8 +1,8 @@
 """The Spec256 overlay must colour exactly the paper, from the right plane bits.
 
 rtl/video/nexttang_spec256_overlay.v replaces captured pixels inside the
-256 x 192 paper at (52, paper_top) of the 360 x 288 window. The testbench sweeps the
-whole window at 7 MHz, serves plane words one 28 MHz cycle after each
+256 x 192 paper at (paper_left, paper_top) of the 360 x 288 window, here
+(52, top). The testbench sweeps the whole window at 7 MHz, serves plane words one 28 MHz cycle after each
 address as the mirror does, and checks every output pixel against an
 independent model: the display-file address in its arithmetic form, the index
 built from bit (7 - x mod 8) of each plane's byte, 0xFF passing the core's
@@ -67,7 +67,7 @@ module testbench;
         .frame_start(o_frame), .pixel_valid(o_valid), .x(ox), .y(oy), .pixel(opixel),
         .plane_address(plane_address), .plane_data(plane_data),
         .palette_write(palette_write), .palette_index(palette_index), .palette_rgb(palette_rgb),
-        .paper_top(top), .render_dos(render_dos), .zxpoly_mode(zxpoly), .bk_over_ff(bk_over_ff), .cfg(cfg),
+        .paper_top(top), .paper_left(9'd52), .render_dos(render_dos), .zxpoly_mode(zxpoly), .bk_over_ff(bk_over_ff), .cfg(cfg),
         .background_present(background_present), .background_write(background_write),
         .background_address(background_address), .background_index(background_index),
         .bank5_write(bank5_write), .bank5_address(bank5_address),
