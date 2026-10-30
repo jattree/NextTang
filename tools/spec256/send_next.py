@@ -125,6 +125,17 @@ def game_rules_flags(game: bytes) -> int:
     return game[RUL1_AT + 5]
 
 
+SNA_128K_SIZE = 131_103
+
+
+def snapshot_pc(data: bytes) -> int:
+    """The PC a snapshot resumes at: stacked in a 48K SNA, stored after the
+    first 48K in a 128K SNA's extension."""
+    if len(data) == SNA_128K_SIZE:
+        return data[49_179] | data[49_180] << 8
+    return parse_snapshot(data).pc
+
+
 def rgb333(red: int, green: int, blue: int) -> int:
     return (red >> 5) << 6 | (green >> 5) << 3 | (blue >> 5)
 
@@ -179,7 +190,7 @@ def main() -> int:
         rules = None
         zxpoly = 0
     palette = palette_bytes(args.palette)
-    snapshot = parse_snapshot(args.snapshot.read_bytes())
+    pc = snapshot_pc(args.snapshot.read_bytes())
     count = len(words) // 8
 
     fd = os.open(args.port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
@@ -204,14 +215,14 @@ def main() -> int:
     send(fd, b"Q" + palette)
     if background is not None:
         send(fd, b"B" + background)
-    send(fd, b"G%04x" % snapshot.pc)
+    send(fd, b"G%04x" % pc)
     time.sleep(0.2)
     os.close(fd)
     print(f"sent {count} plane words, palette ({'test' if args.palette is None else args.palette.name}), "
           f"rules flags 0x{flags:02x}, CFG {cfg.hex()}, {'ROM font, ' if font is not None else ''}"
           f"{'background, ' if background is not None else ''}"
           f"{'rules, ' if rules is not None else ''}"
-          f"armed at PC 0x{snapshot.pc:04x}, "
+          f"armed at PC 0x{pc:04x}, "
           f"{time.time() - started:.0f} s")
     return 0
 

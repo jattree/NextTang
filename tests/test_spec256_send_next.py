@@ -100,6 +100,11 @@ class SendNextTest(unittest.TestCase):
         game[send_next.RUL1_AT : send_next.RUL1_AT + 8] = b"RUL1\x01\x00\x01\x07"
         self.assertEqual(send_next.game_zxpoly_mode(bytes(game)), 7)
 
+    def test_128k_snapshot_pc_is_in_the_extension(self) -> None:
+        sna = bytearray(send_next.SNA_128K_SIZE)
+        sna[49_179:49_181] = b"\x2d\x96"
+        self.assertEqual(send_next.snapshot_pc(bytes(sna)), 0x962D)
+
     def test_palette_is_rgb333_low_byte_first(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test.pal"
