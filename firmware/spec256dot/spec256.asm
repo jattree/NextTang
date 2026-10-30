@@ -1,7 +1,7 @@
 ; SPDX-License-Identifier: GPL-3.0-or-later
 ; Copyright (C) 2026 NextTang contributors
 ;
-; .SPEC256 "GAME.256" - send a Spec256 game's colour to the NextTang core.
+; .SPEC256 "GAME.256" - load a Spec256 game into the NextTang core.
 ;
 ; A .256 (the format of Alberto Conde's SPEC256_MISTER, shared with it as
 ; agreed) holds a 128K Spectrum's memory with eight colour planes per byte,
@@ -14,11 +14,17 @@
 ;   H, S1, U flags, C cfg, [Y rules], Z mode, W planes for 0x4000-0xFFFF
 ;   (banks 5, 2, 0), [W ROM font], Q palette, [B background], G start
 ;
-; The game itself is then loaded as usual from its .SNA, which the browser
-; line in browser.cfg does after this command; colour starts at the game's
-; first instruction. The palette is SPEC256.RGB (512 bytes, RGB333, low byte
-; first), looked for in the current folder and then as /dot/SPEC256.RGB on
-; the system drive.
+; It also writes the game's own memory and CPU state from the .256 as a .z80
+; (version 3) snapshot, /tmp/SPEC256.Z80 on the system drive, exactly as
+; tools/spec256/z80_from_256.py does: the master's byte of each address (the
+; ninth), banks 5, 2 and 0 for a 48K game (7FFD bit 5) and all eight for a
+; 128K one, the registers (PC 0x0072 means the start is on the stack), the
+; border, 7FFD and the AY state (AYS1). The browser line in browser.cfg then
+; starts it with NextZXOS's snapshot loader, so a game needs only its .256;
+; colour starts at the game's first instruction. Every file write happens
+; before G arms colour mode. The palette is SPEC256.RGB (512 bytes, RGB333,
+; low byte first), looked for in the current folder and then as
+; /dot/SPEC256.RGB on the system drive.
 ;
 ; Blocks follow the format's rules: a block without its magic is absent, a
 ; file may end after any block (1179680 bytes at least), OPT1's level must
@@ -34,9 +40,12 @@
 F_OPEN          equ $9a
 F_CLOSE         equ $9b
 F_READ          equ $9d
+F_WRITE         equ $9e
 F_SEEK          equ $9f
 F_FSTAT         equ $a1
 FA_READ         equ $01
+FA_CREATE       equ $0e             ; write, create or truncate
+Z80_HEADER      equ 86              ; version 3: 30 + 2 + 54
 
 NR_SELECT       equ $243b
 NR_ACCESS       equ $253b
@@ -143,6 +152,22 @@ start:
         ld      (hl),0
 .rul1_on:
         call    start_pc
+        call    read_ay
+        call    build_header
+
+        ld      a,'$'                       ; the snapshot for NextZXOS
+        ld      hl,snapshot_name
+        ld      b,FA_CREATE
+        rst     $08
+        db      F_OPEN
+        ld      hl,msg_write
+        jp      c,fail
+        ld      (out_handle),a
+        ld      a,1
+        ld      (out_opened),a
+        ld      hl,z80_header
+        ld      bc,Z80_HEADER
+        call    write_out
 
         di
         ld      a,NR_CTRL                   ; own the loader, from idle
@@ -242,6 +267,17 @@ start:
         jr      nz,.background
 .no_background:
 
+        ld      a,(regs+28)                 ; 128K: the other five banks
+        and     $20
+        call    z,write_other_banks
+        ld      a,(out_handle)
+        rst     $08
+        db      F_CLOSE
+        ld      hl,msg_write
+        jp      c,fail
+        xor     a
+        ld      (out_opened),a
+
         ld      a,'G'
         call    send_byte
         ld      a,(pc+1)
@@ -276,7 +312,23 @@ send_planes:
         inc     hl
         ld      b,(hl)
         inc     hl
+        ld      a,(hl)                      ; .z80 page: 48K, then 128K
+        inc     hl
+        ld      (page_48k),a
+        ld      a,(hl)
+        inc     hl
         ld      (bank_next),hl
+        push    bc
+        push    de
+        ld      e,a
+        ld      a,(regs+28)
+        and     $20
+        ld      a,e
+        jr      z,.page
+        ld      a,(page_48k)
+.page:  call    write_page_header
+        pop     de
+        pop     bc
         call    seek
         ld      a,16384 / RECORDS
         ld      (count),a
@@ -295,6 +347,7 @@ send_planes:
         inc     hl
         dec     d
         jr      nz,.record
+        call    write_masters
         ld      a,(count)
         dec     a
         ld      (count),a
@@ -305,10 +358,213 @@ send_planes:
         jr      nz,.bank
         ret
 
+; Each bank: its offset in the .256, its .z80 page in a 48K and a 128K file.
 bank_offsets:
         dd      5 * 147456
+        db      8, 5 + 3
         dd      2 * 147456
+        db      4, 2 + 3
         dd      0
+        db      5, 0 + 3
+
+; ------------------------------------------------------------ the snapshot
+
+; The master's bytes of the 256 records in the buffer, to the snapshot.
+write_masters:
+        ld      hl,buffer + 8
+        ld      de,masters
+        ld      bc,(RECORDS & $ff) << 8 | 9 ; B: 256 records, C: their size
+.byte:  ld      a,(hl)
+        ld      (de),a
+        inc     de
+        ld      a,l
+        add     a,c
+        ld      l,a
+        jr      nc,.next
+        inc     h
+.next:  djnz    .byte
+        ld      hl,masters
+        ld      bc,RECORDS
+        jp      write_out
+
+; An uncompressed .z80 page: length 0xFFFF, page A.
+write_page_header:
+        ld      hl,page_header
+        ld      (hl),$ff
+        inc     hl
+        ld      (hl),$ff
+        inc     hl
+        ld      (hl),a
+        ld      hl,page_header
+        ld      bc,3
+        jp      write_out
+
+; A 128K game's banks 1, 3, 4, 6 and 7: the master's bytes only.
+write_other_banks:
+        ld      hl,other_banks
+        ld      a,5
+.bank:  ld      (banks_left),a
+        ld      a,(hl)
+        inc     hl
+        ld      (bank_next),hl
+        push    af
+        add     a,3
+        call    write_page_header
+        pop     af
+        add     a,a                         ; offset = bank x 147456
+        add     a,a
+        ld      e,a
+        ld      d,0
+        ld      hl,bank_bases
+        add     hl,de
+        call    load32
+        call    seek
+        ld      a,16384 / RECORDS
+        ld      (count),a
+.chunk: ld      hl,buffer
+        ld      bc,CHUNK
+        call    read_exact
+        call    write_masters
+        ld      a,(count)
+        dec     a
+        ld      (count),a
+        jr      nz,.chunk
+        ld      hl,(bank_next)
+        ld      a,(banks_left)
+        dec     a
+        jr      nz,.bank
+        ret
+
+other_banks:
+        db      1, 3, 4, 6, 7
+
+; Write BC bytes from HL to the snapshot; anything less is an error. Leaves
+; interrupts off and NextREG 0x3E selected.
+write_out:
+        push    bc
+        ld      a,(out_handle)
+        rst     $08
+        db      F_WRITE
+        pop     de
+        ld      hl,msg_write
+        jp      c,fail
+        ld      a,b
+        cp      d
+        jp      nz,fail
+        ld      a,c
+        cp      e
+        jp      nz,fail
+        di
+        jp      select_data
+
+; AYS1 (21 bytes at 1383028): magic, the selected register, R0-R15; ay_in
+; is 1 when it is present and not all zero.
+read_ay:
+        xor     a
+        ld      (ay_in),a
+        NEED    $0015,$1a89
+        ret     c
+        READ_AT $0015,$1a74,21,ays1
+        ld      hl,ays1
+        ld      de,magic_ays1
+        call    same_magic
+        ret     nz
+        ld      hl,ays1 + 4
+        ld      b,17
+.byte:  ld      a,(hl)
+        or      a
+        jr      nz,.state
+        inc     hl
+        djnz    .byte
+        ret
+.state: ld      a,1
+        ld      (ay_in),a
+        ret
+
+; The .z80 version 3 header, as z80_from_256.py builds it.
+build_header:
+        ld      hl,z80_header
+        ld      de,z80_header + 1
+        ld      bc,Z80_HEADER - 1
+        ld      (hl),0
+        ldir
+        ld      ix,z80_header
+        ld      a,(regs+1)                  ; A, F
+        ld      (ix+0),a
+        ld      a,(regs+0)
+        ld      (ix+1),a
+        ld      hl,(regs+10)                ; BC
+        ld      (z80_header+2),hl
+        ld      hl,(regs+14)                ; HL
+        ld      (z80_header+4),hl
+        ld      hl,(game_sp)
+        ld      (z80_header+8),hl
+        ld      a,(regs+4)                  ; I
+        ld      (ix+10),a
+        ld      a,(regs+5)                  ; R: low 7 bits, bit 7 in flags1
+        ld      c,a
+        and     $7f
+        ld      (ix+11),a
+        ld      a,c
+        rlca
+        and     1
+        ld      c,a
+        ld      a,(regs+27)                 ; border
+        and     7
+        add     a,a
+        or      c
+        ld      (ix+12),a
+        ld      hl,(regs+12)                ; DE
+        ld      (z80_header+13),hl
+        ld      hl,(regs+18)                ; BC'
+        ld      (z80_header+15),hl
+        ld      hl,(regs+20)                ; DE'
+        ld      (z80_header+17),hl
+        ld      hl,(regs+22)                ; HL'
+        ld      (z80_header+19),hl
+        ld      a,(regs+3)                  ; A', F'
+        ld      (ix+21),a
+        ld      a,(regs+2)
+        ld      (ix+22),a
+        ld      hl,(regs+24)                ; IY
+        ld      (z80_header+23),hl
+        ld      hl,(regs+16)                ; IX
+        ld      (z80_header+25),hl
+        ld      a,(regs+26)                 ; IFF1, IFF2, IM
+        ld      c,a
+        rrca
+        rrca
+        and     1
+        ld      (ix+27),a
+        ld      (ix+28),a
+        ld      a,c
+        and     3
+        ld      (ix+29),a
+        ld      (ix+30),54                  ; the extended header's length
+        ld      hl,(pc)
+        ld      (z80_header+32),hl
+        ld      a,(regs+28)                 ; 48K: mode 0, AY flag if a state
+        and     $20
+        jr      z,.k128
+        ld      a,(ay_in)
+        or      a
+        jr      z,.ay
+        ld      (ix+37),$04
+        jr      .ay
+.k128:  ld      (ix+34),4
+        ld      a,(regs+28)
+        ld      (ix+35),a
+.ay:    ld      a,(ay_in)
+        or      a
+        ret     z
+        ld      a,(ays1+4)
+        and     $0f
+        ld      (ix+38),a
+        ld      hl,ays1+5
+        ld      de,z80_header+39
+        ld      bc,16
+        ldir
+        ret
 
 ; Z when every byte of the background is 0 (no background).
 background_used:
@@ -344,6 +600,8 @@ background_used:
 ; The game's first instruction: PC, or, when PC is 0x0072 (the ROM's RETN,
 ; as make256 stores a snapshot taken in the NMI), the address on the stack.
 start_pc:
+        ld      hl,(regs+6)
+        ld      (game_sp),hl
         ld      hl,(regs+8)
         ld      (pc),hl
         ld      de,$0072
@@ -356,8 +614,12 @@ start_pc:
         ld      (pc),a
         pop     hl
         inc     hl
+        push    hl
         call    master_byte
         ld      (pc+1),a
+        pop     hl                          ; the RETN's pop
+        inc     hl
+        ld      (game_sp),hl
         ret
 
 ; A = the master's byte at Spectrum address HL (RAM, the 128K paging of
@@ -829,7 +1091,16 @@ fail_early:
         ret
 
 ; Close the file, restore the speed and interrupts.
-finish: ld      a,(opened)
+finish: ld      a,(out_opened)
+        or      a
+        jr      z,.no_out
+        ld      a,(out_handle)
+        rst     $08
+        db      F_CLOSE
+        xor     a
+        ld      (out_opened),a
+.no_out:
+        ld      a,(opened)
         or      a
         jr      z,.closed
         ld      a,(handle)
@@ -866,13 +1137,17 @@ magic_rul1:     db "RUL1"
 magic_grx1:     db "GRX1"
 magic_crd1:     db "CRD1"
 magic_opt1:     db "OPT1"
+magic_ays1:     db "AYS1"
+snapshot_name:  db "/tmp/SPEC256.Z80",0
 
 msg_usage:      db ".SPEC256 \"GAME.256\"",13
-                db "Sends a Spec256 game's colour to",13
-                db "the NextTang core; then load its",13
-                db ".SNA. .256 format: Alberto Conde",13
+                db "Loads a Spec256 game's colour",13
+                db "into the NextTang core and writes",13
+                db "/tmp/SPEC256.Z80 to start it.",13
+                db ".256 format: Alberto Conde",13
                 db "(SPEC256_MISTER)",13 | $80
 msg_done:       db "Colour loaded",13 | $80
+msg_write:      db "Cannot write /tmp/SPEC256.Z8", '0' | $80
 msg_no_core:    db "No Spec256 cor", 'e' | $80
 msg_open:       db "Cannot open the .25", '6' | $80
 msg_read:       db ".256 read erro", 'r' | $80
@@ -889,6 +1164,15 @@ interrupts:     db 0
 count:          db 0
 banks_left:     db 0
 opened:         db 0
+out_opened:     db 0
+out_handle:     db 0
+ay_in:          db 0
+page_48k:       db 0
+game_sp:        dw 0
+page_header:    ds 3
+ays1:           ds 21
+z80_header:     ds Z80_HEADER
+masters:        ds RECORDS
 bank_next:      dw 0
 entry_sp:       dw 0
 pc:             dw 0

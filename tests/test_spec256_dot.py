@@ -1,4 +1,5 @@
-"""The .SPEC256 dot command must send what send_next.py sends, and fail safely.
+"""The .SPEC256 dot command must send what send_next.py sends, write the
+snapshot z80_from_256.py writes, and fail safely.
 
 firmware/spec256dot/spec256.asm runs on a Z80 emulator (the `z80` Python
 package) with the esxDOS calls it makes (RST $08: open, stat, seek, read,
@@ -7,7 +8,10 @@ the core's interface ID; every byte written to NextREG 0x3E while the command
 owns the loader is collected and must equal send_next.game_colour_stream for
 the same .256 and palette: H, S1, U, C, Y, Z, the planes of banks 5, 2 and 0,
 the ROM font, Q, B and G, the start taken from the .256 (PC 0x0072 means the
-address on the stack, here in bank 3 paged at 0xC000). Checked too: a .256 of
+address on the stack, here in bank 3 paged at 0xC000). The file it writes to
+/tmp/SPEC256.Z80 on the system drive must equal z80_from_256.py's for the
+same .256: a 128K game (all eight banks, 7FFD, the AY state) and a 48K one
+(banks 5, 2 and 0, the AY flag). Checked too: a .256 of
 the oldest size (no optional blocks); a tagged block after OPT1 is skipped and
 a truncated one refused; an OPT1 level above 1, a core without the interface
 and a missing palette are refused before anything is sent; a read failing
@@ -29,6 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE = REPO_ROOT / "firmware" / "spec256dot" / "spec256.asm"
 sys.path.insert(0, str(REPO_ROOT / "tools" / "spec256"))
 import send_next  # noqa: E402
+from z80_from_256 import z80_from_256  # noqa: E402
 
 try:
     import z80
@@ -38,6 +43,7 @@ except ImportError:  # optional: pip install z80
 LOAD_AT = 0x2000
 ARGS_AT = 0x5D00
 RETURN_AT = 0xFFF0
+AYS1_AT = 1_383_028
 CRD1_AT = 1_383_049
 OPT1_AT = 1_383_117
 OPT1_END = 1_383_373
@@ -53,15 +59,18 @@ def assemble() -> bytes:
         return out.read_bytes()
 
 
-def make_game(seed: int = 1, size: int = OPT1_END) -> bytearray:
+def make_game(seed: int = 1, size: int = OPT1_END, port_7ffd: int = 0x13) -> bytearray:
     rng = random.Random(seed)
     game = bytearray(rng.randrange(256) for _ in range(size))
     regs = send_next.REGISTERS_AT
-    # PC 0x0072 with the real start on the stack at 0xFF10, bank 3 at 0xC000.
+    # PC 0x0072 with the real start on the stack at 0xFF10, in the bank 7FFD
+    # pages at 0xC000 (3 for the 128K default, 0 for a 48K game).
     game[regs + 6:regs + 10] = bytes((0x10, 0xFF, 0x72, 0x00))
-    game[send_next.PORT_7FFD_AT] = 0x13
+    game[send_next.PORT_7FFD_AT] = port_7ffd
     for address, byte in ((0xFF10, 0x5D), (0xFF11, 0xB1)):
-        game[(3 * 16_384 + (address & 0x3FFF)) * 9 + 8] = byte
+        game[((port_7ffd & 7) * 16_384 + (address & 0x3FFF)) * 9 + 8] = byte
+    if size >= AYS1_AT + 21:
+        game[AYS1_AT:AYS1_AT + 21] = b"AYS1" + bytes(range(7, 24))
     if size >= RUL1_AT + 72:
         game[RUL1_AT:RUL1_AT + 8] = b"RUL1" + bytes((1, 0x03, 2, 4))
     if size >= GRX1_AT + 4:
@@ -84,6 +93,7 @@ class Machine:
         self.fail_read = fail_read
         self.reads = 0
         self.handles: dict[int, list] = {}
+        self.written: dict[str, bytearray] = {}
         self.next_handle = 3
         self.selected = 0
         self.nextregs = {0x07: 0}
@@ -133,6 +143,13 @@ class Machine:
         if function == 0x9A:  # F_OPEN
             name = self.string(m.hl).lower()
             key = name if m.a != ord("$") else "$" + name
+            if m.b & 0x02:  # write: create or truncate
+                self.written[key] = bytearray()
+                handle = self.next_handle
+                self.next_handle += 1
+                self.handles[handle] = [self.written[key], 0]
+                m.a = handle
+                return False
             if key not in self.files:
                 m.a = 5
                 return True
@@ -158,6 +175,10 @@ class Machine:
             m.set_memory_block(m.hl, data)
             entry[1] += len(data)
             m.bc = len(data)
+        elif function == 0x9E:  # F_WRITE
+            data = bytes(m.memory[m.hl:m.hl + m.bc])
+            entry[0][entry[1]:entry[1] + len(data)] = data
+            entry[1] += len(data)
         elif function == 0x9B:  # F_CLOSE
             del self.handles[m.a]
         else:
@@ -237,6 +258,18 @@ class Spec256DotCommandTest(unittest.TestCase):
         self.assertIn(b"Test Game", machine.printed)
         self.assertIn(b"Coloured by Someone", machine.printed)
         self.assertIn((0x07, 3), machine.nr_writes)
+        self.assertEqual(bytes(machine.written["$/tmp/spec256.z80"]), z80_from_256(bytes(game)))
+        self.check_clean(machine)
+
+    def test_48k_game_snapshot(self) -> None:
+        game = make_game(seed=10, port_7ffd=0x30)
+        machine = self.machine(game)
+        failed, message = machine.run('"game.256"')
+        self.assertFalse(failed, message)
+        self.assertEqual(bytes(machine.stream), send_next.game_colour_stream(bytes(game), self.palette))
+        snapshot = bytes(machine.written["$/tmp/spec256.z80"])
+        self.assertEqual(snapshot, z80_from_256(bytes(game)))
+        self.assertEqual(len(snapshot), 86 + 3 * (3 + 16_384))
         self.check_clean(machine)
 
     def test_oldest_size_without_blocks(self) -> None:
@@ -245,6 +278,7 @@ class Spec256DotCommandTest(unittest.TestCase):
         failed, message = machine.run("game.256")
         self.assertFalse(failed, message)
         self.assertEqual(bytes(machine.stream), send_next.game_colour_stream(bytes(game), self.palette))
+        self.assertEqual(bytes(machine.written["$/tmp/spec256.z80"]), z80_from_256(bytes(game)))
         self.check_clean(machine)
 
     def test_tagged_blocks_after_opt1(self) -> None:
