@@ -20,7 +20,10 @@
 -- In graphics mode a lane reads data from its own colour plane, while
 -- opcodes and operands still come from the master's bus, and so do reads
 -- below 0x4000 (Spec256's default for a game without a coloured ROM: every
--- plane sees the master's ROM byte) and I/O reads. Its data, ALU and
+-- plane sees the master's ROM byte) and I/O reads. With rom_planes, a game's
+-- coloured ROM character set is loaded: data reads from 0x3D00 to 0x3FFF
+-- then come from the lane's own plane too (the board serves them), as in
+-- Alberto Conde's SPEC256_MISTER, which colours only the character set. Its data, ALU and
 -- carry are its own; every control decision (conditional jumps, calls,
 -- returns, block repeats, DJNZ) is the master's, live, so the lane keeps the
 -- master's timing without the master ever being held. At each instruction
@@ -31,6 +34,16 @@
 -- waits for that edge, then takes the first 28 MHz cycle with no CPU enable;
 -- one exists at 14 MHz and below. Spec256 games run at 3.5 MHz.
 --
+-- With arith_mono (the .256's RUL1 flag for Spec256 DOS games), a boundary
+-- after an instruction that computes the accumulator also loads the master's
+-- A into every lane, as the DOS program does: ADD, ADC, SUB and SBC (0x80
+-- to 0x9F), ADD/ADC/SUB/SBC/AND/XOR/OR n, INC A, DEC A, DAA, LD A,n,
+-- IN A,(n), and after ED, NEG, LD A,I, LD A,R and IN A,(C), with DD/FD forms
+-- counted and CB forms not. AND, XOR, OR and CP on registers and CP n are not
+-- on the list. It is Alberto Conde's (SPEC256_MISTER, writes_acc), kept
+-- exactly. The opcodes are the
+-- master's, taken from its opcode register as each opcode fetch ends.
+--
 -- desync is set for good if any lane's bus strobes ever differ from the
 -- master's a cycle before, or if a lane reads or writes memory or I/O at an
 -- address other than the master's: lockstep lost. Every lane addresses
@@ -40,6 +53,7 @@
 
 library ieee;
 use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 
 entity nexttang_zxnext_spec256_lanes is
     port (
@@ -52,6 +66,10 @@ entity nexttang_zxnext_spec256_lanes is
         -- Control decisions from the master; off only to show, in a test,
         -- that lockstep depends on it.
         master_control : in std_logic := '1';
+        -- A coloured ROM character set (0x3D00 to 0x3FFF) is in the planes.
+        rom_planes     : in std_logic := '0';
+        -- The master's accumulator after arithmetic (Spec256 DOS games).
+        arith_mono     : in std_logic := '0';
 
         -- The master, as the core sees it.
         master_a        : in  std_logic_vector(15 downto 0);
@@ -105,6 +123,29 @@ end entity;
 architecture rtl of nexttang_zxnext_spec256_lanes is
     type word_array is array (0 to 7) of std_logic_vector(15 downto 0);
 
+    function writes_acc(op : std_logic_vector(7 downto 0)) return boolean is
+        variable v : natural;
+    begin
+        v := to_integer(unsigned(op));
+        if v >= 16#80# and v <= 16#9F# then
+            return true;
+        end if;
+        case v is
+            when 16#C6# | 16#CE# | 16#D6# | 16#DE# | 16#E6# | 16#EE# | 16#F6# |
+                 16#3C# | 16#3D# | 16#27# | 16#3E# | 16#DB# => return true;
+            when others => return false;
+        end case;
+    end function;
+
+    function writes_acc_ed(op : std_logic_vector(7 downto 0)) return boolean is
+    begin
+        case to_integer(unsigned(op)) is
+            when 16#44# | 16#4C# | 16#54# | 16#5C# | 16#64# | 16#6C# | 16#74# | 16#7C# |
+                 16#57# | 16#5F# | 16#78# => return true;
+            when others => return false;
+        end case;
+    end function;
+
     -- The master, a cycle late: rising-edge copies, and falling-edge copies
     -- of the two inputs the T80 also samples on falling edges.
     signal reset_d, cen_r_d, cen_f_d, graphics_d : std_logic := '0';
@@ -126,6 +167,12 @@ architecture rtl of nexttang_zxnext_spec256_lanes is
     signal sync_stage : natural range 0 to 2 := 0;
     signal sync_load : std_logic;
     signal desync_r : std_logic := '0';
+
+    -- The master's opcodes: 00 none, 01 after CB, 10 after ED, 11 after DD/FD.
+    signal fetch_seen : std_logic := '0';
+    signal prefix : std_logic_vector(1 downto 0) := "00";
+    signal acc_written : std_logic := '0';  -- the last whole instruction computed A
+    signal sync_acc : std_logic := '0';     -- for the sync load in progress
 begin
     process (clock_28)
     begin
@@ -162,12 +209,45 @@ begin
                 master_previous_m1_n <= '1';
                 sync_stage <= 0;
                 desync_r <= '0';
+                fetch_seen <= '0';
+                prefix <= "00";
+                acc_written <= '0';
+                sync_acc <= '0';
             else
                 master_previous_m1_n <= m1_d;
+                -- An opcode fetch is M1 with MREQ (an interrupt acknowledge
+                -- has IORQ instead); its opcode is in the master's register
+                -- by the time M1 ends.
+                if m1_d = '0' and mreq_d = '0' then
+                    fetch_seen <= '1';
+                elsif master_previous_m1_n = '0' and m1_d = '1' then
+                    fetch_seen <= '0';
+                    if fetch_seen = '1' then
+                        if master_ir = x"CB" and prefix /= "11" then
+                            prefix <= "01";
+                        elsif master_ir = x"ED" then
+                            prefix <= "10";
+                        elsif master_ir = x"DD" or master_ir = x"FD" then
+                            prefix <= "11";
+                        else
+                            prefix <= "00";
+                            if prefix = "01" then
+                                acc_written <= '0';
+                            elsif prefix = "10" and writes_acc_ed(master_ir) then
+                                acc_written <= '1';
+                            elsif prefix /= "10" and writes_acc(master_ir) then
+                                acc_written <= '1';
+                            else
+                                acc_written <= '0';
+                            end if;
+                        end if;
+                    end if;
+                end if;
                 if graphics_d = '0' then
                     sync_stage <= 0;
                 elsif master_previous_m1_n = '1' and m1_d = '0' and boundary_d = '1' then
                     sync_stage <= 1;
+                    sync_acc <= arith_mono and acc_written;
                 elsif sync_stage = 1 and cen_r_d = '1' then
                     sync_stage <= 2;
                 elsif sync_load = '1' then
@@ -198,7 +278,9 @@ begin
         graphics_iorq(lane) <= graphics_d and not lane_iorq_n(lane);
         own_data <= graphics_data_in(lane * 8 + 7 downto lane * 8);
         from_master <= graphics_d = '0' or lane_instruction_access(lane) = '1' or
-                       lane_iorq_n(lane) = '0' or lane_address(lane)(15 downto 14) = "00";
+                       lane_iorq_n(lane) = '0' or
+                       (lane_address(lane)(15 downto 14) = "00" and
+                        not (rom_planes = '1' and unsigned(lane_address(lane)(13 downto 8)) >= 16#3D#));
         data_in_fall <= master_di when from_master else own_data;
 
         cpu : entity work.T80Na
@@ -245,6 +327,7 @@ begin
                 Spec256_sync_xy => xy_d,
                 Spec256_sync_int_cycle => int_cycle_d,
                 Spec256_sync_nmi_cycle => nmi_cycle_d,
+                Spec256_sync_acc => sync_acc,
                 Spec256_master_addressing => graphics_d,
                 Spec256_master_regs => regs_d,
                 Spec256_master_control => graphics_d and master_control,

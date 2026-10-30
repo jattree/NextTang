@@ -2,8 +2,8 @@
 
 rtl/input/nexttang_spec256_uart_loader.v is fed bytes as the UART receiver
 gives them. Raw plane and palette bytes, including ones that look like other
-commands ("K", "S", "G"), must land as data while payload is high, and the
-mode, arm and disarm commands must act.
+commands ("R", "S", "G"), must land as data while payload is high, and the
+mode, rules flags, arm and disarm commands must act.
 """
 
 from pathlib import Path
@@ -24,6 +24,7 @@ module testbench;
     wire [63:0] plane_data;
     wire [7:0] palette_index;
     wire [8:0] palette_rgb;
+    wire [7:0] rules_flags;
     integer planes = 0, palettes = 0, payload_bytes = 0, i;
     reg [63:0] first_word, second_word;
     reg [15:0] first_address, second_address;
@@ -34,7 +35,7 @@ module testbench;
         .payload(payload), .spec256_mode(mode),
         .plane_write(plane_write), .plane_address(plane_address), .plane_data(plane_data),
         .palette_write(palette_write), .palette_index(palette_index), .palette_rgb(palette_rgb),
-        .arm(arm), .arm_pc(arm_pc), .disarm(disarm));
+        .arm(arm), .arm_pc(arm_pc), .disarm(disarm), .rules_flags(rules_flags));
 
     always #5 clock = ~clock;
 
@@ -67,11 +68,17 @@ module testbench;
         repeat (3) @(negedge clock); reset = 0;
         send_string("S1", 2);
         if (mode !== 1) $fatal(1, "S1 did not set the mode");
-        // Two words at 0x4000: bytes 'K','S','G',1..5 then 8..15.
+        if (rules_flags !== 8'h00) $fatal(1, "rules flags not clear after reset");
+        send_string("U5A", 3);
+        if (rules_flags !== 8'h5a) $fatal(1, "U5A set the rules flags to %h", rules_flags);
+        send_string("Uz", 2);
+        if (rules_flags !== 8'h5a) $fatal(1, "a bad digit changed the rules flags");
+        // Two words at 0x4000: bytes 'R','S','G',1..5 then 8..15.
         send_string("W40000002", 9);
-        send("K"); send("S"); send("G");
+        send("R"); send("S"); send("G");
         for (i = 1; i <= 5; i = i + 1) send(i);
         for (i = 8; i <= 15; i = i + 1) send(i);
+        if (rules_flags !== 8'h5a) $fatal(1, "plane bytes changed the rules flags");
         // Palette: entry n = n + 0x100 for even n, so the high bit shows.
         send("Q");
         for (i = 0; i < 256; i = i + 1) begin send(i); send(1); end
@@ -90,7 +97,8 @@ class Spec256UartLoaderTest(unittest.TestCase):
     def test_loader_commands(self) -> None:
         output = run_testbench(TESTBENCH, *SOURCES)
         self.assertIn("LOADER planes 2 palettes 256 payload 528 mode 0 armpc ab12", output, output)
-        self.assertIn("WORDS 0504030201474b53@4000".replace("474b53", "47534b"), output, output)
+        # The first word's bytes, last byte first: 1..5 after 'G', 'S', 'R'.
+        self.assertIn("WORDS 0504030201475352@4000", output, output)
         self.assertIn("0f0e0d0c0b0a0908@4001 LASTPAL 1ff", output, output)
 
 

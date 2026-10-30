@@ -133,6 +133,7 @@ package T80N_Pack is
       Spec256_sync_xy : in std_logic_vector(1 downto 0) := (others => '0');
       Spec256_sync_int_cycle : in std_logic := '0';
       Spec256_sync_nmi_cycle : in std_logic := '0';
+      Spec256_sync_acc : in std_logic := '0';
       Spec256_master_addressing : in std_logic := '0';
       Spec256_master_regs : in std_logic_vector(159 downto 0) := (others => '0');
       Spec256_master_control : in std_logic := '0';

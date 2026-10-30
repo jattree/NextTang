@@ -7,6 +7,11 @@ low byte first, and the overlay takes colour index bit k of pixel x from bit
 must give the indices tools/spec256/render.py gives, the reference checked
 against GZX in Episode 5. The palette goes as 256 RGB333 entries, low byte
 first.
+
+From a .256 (SPEC256_MISTER's format: nine bytes per address of eight 16K
+banks, plane 0 first, master byte last) the same words come from banks 5, 2
+and 0, the rules flags from RUL1, or 0 when the file has none, and the ROM
+character set's words from GRX1 when it is there.
 """
 
 from pathlib import Path
@@ -36,6 +41,37 @@ class SendNextTest(unittest.TestCase):
                 for k in range(8):
                     index |= ((word >> (8 * k + 7 - x % 8)) & 1) << k
                 self.assertEqual(index, reference[y * 256 + x], (x, y))
+
+    def test_game_planes_come_from_the_48k_banks(self) -> None:
+        generator = random.Random(9)
+        gfx = bytes(generator.randrange(256) for _ in range(GFX_SIZE))
+        planes = decode_gfx(gfx)
+        game = bytearray(generator.randrange(256) for _ in range(send_next.RUL1_AT + 72))
+        for address in range(0x4000, 0x10000):
+            bank = (5, 2, 0)[(address >> 14) - 1]
+            at = bank * send_next.BANK_BYTES + (address & 0x3FFF) * 9
+            game[at : at + 8] = bytes(plane[address - 0x4000] for plane in planes)
+        game = bytes(game)
+        self.assertEqual(send_next.game_plane_words(game), send_next.plane_words(gfx))
+        with self.assertRaises(ValueError):
+            send_next.game_plane_words(game[: send_next.GAME_MIN_SIZE - 1])
+
+    def test_rules_flags_need_rul1_version_1(self) -> None:
+        game = bytearray(send_next.RUL1_AT + 72)
+        self.assertEqual(send_next.game_rules_flags(bytes(game)), 0)
+        game[send_next.RUL1_AT : send_next.RUL1_AT + 6] = b"RUL1\x01\x03"
+        self.assertEqual(send_next.game_rules_flags(bytes(game)), 3)
+        game[send_next.RUL1_AT + 4] = 2
+        self.assertEqual(send_next.game_rules_flags(bytes(game)), 0)
+
+    def test_rom_font_comes_from_grx1(self) -> None:
+        game = bytearray(send_next.RUL1_AT + 72)
+        self.assertIsNone(send_next.game_rom_font_words(bytes(game)))
+        font = bytes((i * 7 + 3) & 0xFF for i in range(768 * 8))
+        game[send_next.GRX1_AT : send_next.GRX1_AT + 4] = b"GRX1"
+        game[send_next.GRX1_AT + 4 : send_next.GRX1_AT + 4 + len(font)] = font
+        self.assertEqual(send_next.game_rom_font_words(bytes(game)), font)
+        self.assertEqual(send_next.GRX1_AT + 4 + len(font), send_next.RUL1_AT)
 
     def test_palette_is_rgb333_low_byte_first(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

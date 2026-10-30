@@ -8,6 +8,11 @@ independent model: the display-file address in its arithmetic form, the index
 built from bit (7 - x mod 8) of each plane's byte, 0xFF passing the core's
 pixel through, and everything outside the paper, or with the overlay off,
 unchanged. Outputs must keep their own coordinates.
+
+A third sweep runs the Spec256 DOS rule: indices 0xC0 to 0xFF take the cell's
+ink from the attributes, which the overlay copies from bank 5 writes to
+0x1800-0x1AFF; writes elsewhere in bank 5 that share those low address bits
+must not reach the copy, and 0xFF no longer passes the core's pixel.
 """
 
 from pathlib import Path
@@ -31,7 +36,10 @@ module testbench;
     reg palette_write = 0;
     reg [7:0] palette_index = 0;
     reg [8:0] palette_rgb = 0;
-    integer checked = 0, coloured = 0, passed_ff = 0, entry;
+    reg render_dos = 0, bank5_write = 0;
+    reg [13:0] bank5_address = 0;
+    reg [7:0] bank5_data = 0;
+    integer checked = 0, coloured = 0, passed_ff = 0, inked = 0, entry;
 
     nexttang_spec256_overlay dut (
         .clock_7(clock_7), .clock_28(clock_28), .reset(reset), .enable(enable),
@@ -39,7 +47,9 @@ module testbench;
         .capture_x(cx), .capture_y(cy), .capture_pixel(cpixel),
         .frame_start(o_frame), .pixel_valid(o_valid), .x(ox), .y(oy), .pixel(opixel),
         .plane_address(plane_address), .plane_data(plane_data),
-        .palette_write(palette_write), .palette_index(palette_index), .palette_rgb(palette_rgb));
+        .palette_write(palette_write), .palette_index(palette_index), .palette_rgb(palette_rgb),
+        .render_dos(render_dos), .bank5_write(bank5_write), .bank5_address(bank5_address),
+        .bank5_data(bank5_data));
 
     // 28 MHz, and 7 MHz rising on every fourth 28 MHz rising edge.
     integer phase = 0;
@@ -62,6 +72,9 @@ module testbench;
     function [8:0] core_pixel(input [8:0] x, input [8:0] y);
         core_pixel = (x * 3 + y * 5) & 9'h1ff;
     endfunction
+    function [7:0] attribute_of(input integer block);
+        attribute_of = (block * 37 + 5) & 8'hff;
+    endfunction
 
     // The mirror's port B: the word for the address of the last edge.
     integer lane;
@@ -70,9 +83,9 @@ module testbench;
             plane_data[8 * lane +: 8] <= plane_byte(plane_address, lane);
 
     // The expected pixel, from the model.
-    function [8:0] expected(input [8:0] x, input [8:0] y, input on);
+    function [8:0] expected(input [8:0] x, input [8:0] y, input on, input dos);
         integer px, py, a, j;
-        reg [7:0] index, b;
+        reg [7:0] index, b, ink;
         begin
             if (!on || x < 52 || x >= 308 || y < 48 || y >= 240) begin
                 expected = core_pixel(x, y);
@@ -83,15 +96,24 @@ module testbench;
                     b = plane_byte(a, j);
                     index[j] = b[7 - (px % 8)];
                 end
-                expected = index == 8'hff ? core_pixel(x, y) : palette_of(index);
+                if (dos && index[7:6] == 2'b11)
+                begin
+                    ink = attribute_of((py / 8) * 32 + px / 8);
+                    expected = palette_of({2'b11, ink[2:0], index[2:0]});
+                end
+                else if (dos)
+                    expected = palette_of(index);
+                else
+                    expected = index == 8'hff ? core_pixel(x, y) : palette_of(index);
             end
         end
     endfunction
 
-    task sweep(input on);
+    task sweep(input on, input dos);
         integer x, y;
         begin
             enable = on;
+            render_dos = dos;
             for (y = 0; y < 288; y = y + 1)
                 for (x = 0; x < 360; x = x + 1) begin
                     @(posedge clock_7); #1;
@@ -108,15 +130,19 @@ module testbench;
     always @(posedge clock_7) begin
         #2;
         if (o_valid) begin
-            if (opixel !== expected(ox, oy, enable))
-                $fatal(1, "pixel (%0d,%0d) was %h, expected %h", ox, oy, opixel, expected(ox, oy, enable));
+            if (opixel !== expected(ox, oy, enable, render_dos))
+                $fatal(1, "pixel (%0d,%0d) was %h, expected %h", ox, oy, opixel,
+                       expected(ox, oy, enable, render_dos));
             if (o_frame !== (ox == 0 && oy == 0))
                 $fatal(1, "frame start out of step at (%0d,%0d)", ox, oy);
             checked = checked + 1;
-            if (enable && ox >= 52 && ox < 308 && oy >= 48 && oy < 240) begin
+            if (enable && !render_dos && ox >= 52 && ox < 308 && oy >= 48 && oy < 240) begin
                 if (opixel === core_pixel(ox, oy)) passed_ff = passed_ff + 1;
                 else coloured = coloured + 1;
             end
+            if (enable && render_dos && ox >= 52 && ox < 308 && oy >= 48 && oy < 240 &&
+                opixel !== expected(ox, oy, 1, 0))
+                inked = inked + 1;
         end
     end
 
@@ -128,9 +154,22 @@ module testbench;
             palette_write = 1; palette_index = entry; palette_rgb = palette_of(entry);
         end
         @(negedge clock_28) palette_write = 0;
-        sweep(1);
-        sweep(0);
-        $display("OVERLAY_PASS checked %0d coloured %0d passthrough %0d", checked, coloured, passed_ff);
+        // The attributes, then writes that share their low ten address bits
+        // (0x1400 up, 0x1C00 up) and must be ignored.
+        for (entry = 0; entry < 768; entry = entry + 1) begin
+            @(negedge clock_28);
+            bank5_write = 1; bank5_address = 14'h1800 + entry; bank5_data = attribute_of(entry);
+        end
+        for (entry = 0; entry < 768; entry = entry + 1) begin
+            @(negedge clock_28);
+            bank5_address = (entry & 1 ? 14'h1c00 : 14'h1400) + entry; bank5_data = 8'h00;
+        end
+        @(negedge clock_28) bank5_write = 0;
+        sweep(1, 0);
+        sweep(0, 0);
+        sweep(1, 1);
+        $display("OVERLAY_PASS checked %0d coloured %0d passthrough %0d inked %0d",
+                 checked, coloured, passed_ff, inked);
         $finish;
     end
 endmodule
@@ -143,9 +182,13 @@ class Spec256OverlayTest(unittest.TestCase):
         self.assertIn("OVERLAY_PASS", output, output)
         counts = output.split("OVERLAY_PASS ")[1].split()
         checked, coloured, passthrough = int(counts[1]), int(counts[3]), int(counts[5])
-        self.assertEqual(checked, 2 * 360 * 288, output)
+        inked = int(counts[7])
+        self.assertEqual(checked, 3 * 360 * 288, output)
         self.assertGreater(coloured, 40000, output)
         self.assertGreater(passthrough, 100, output)
+        # Pixels the DOS rule changed: every 0xC0-0xFF index whose ink is not
+        # already its bits 5:3, and every former passthrough.
+        self.assertGreater(inked, 5000, output)
 
 
 if __name__ == "__main__":

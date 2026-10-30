@@ -2,17 +2,25 @@
 """Load a Spec256 game's colour data into the Next core over the debug UART.
 
 The board's Spec256 loader (rtl/input/nexttang_spec256_uart_loader.v) takes:
-S1 to turn the Layer 2 mirror into the colour planes, W with the plane words
-for 0x4000 to 0xFFFF, Q with the 256-entry RGB333 palette, and G with the
-address of the game's first instruction, where colour mode begins. The game
-itself is loaded on the Next as usual (its .SNA from the NextZXOS browser,
-at 3.5 MHz); arm before loading it.
+S1 to turn the Layer 2 mirror into the colour planes, U with the game's rules
+flags, W with the plane words for 0x4000 to 0xFFFF, Q with the 256-entry
+RGB333 palette, and G with the address of the game's first instruction, where
+colour mode begins. The game itself is loaded on the Next as usual (its .SNA
+from the NextZXOS browser, at 3.5 MHz); arm before loading it.
+
+The planes come from a Spec256 GFX, or from a .256 built by Alberto Conde's
+make256 (SPEC256_MISTER), which also carries the game's corrections (such as
+Jetpac's rocket taking the attribute ink), its RUL1 flags and, when it has
+one, its coloured ROM character set (GRX1, 0x3D00 to 0x3FFF), sent as plane
+words from 0x3D00. Only the 48K banks are sent: 5, 2 and 0 at 0x4000, 0x8000
+and 0xC000. H goes first, so a previous game's font is dropped.
 
 Without --palette a test palette is sent, the index's bits spread over RGB333,
 enough to see whether the planes land in the right places.
 
 Usage:
-  send_next.py --gfx GAME.GFX --snapshot GAME.SNA [--palette sp256.pal] [--port DEV]
+  send_next.py (--gfx GAME.GFX | --game GAME.256) --snapshot GAME.SNA
+               [--palette sp256.pal] [--port DEV]
 """
 
 from __future__ import annotations
@@ -32,6 +40,17 @@ from snapshot import parse_snapshot  # noqa: E402
 PORT = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A5069RR4-if00-port0"
 BAUD_BYTES_PER_SECOND = 11_520
 
+# The .256 layout (SPEC256_MISTER tools/README.md, "The .256 format"): every
+# address of the eight 16K banks as eight plane bytes, plane 0 first, then
+# the master's byte; RUL1 is 72 bytes at RUL1_AT, its flags at +5.
+BANK_BYTES = 16_384 * 9
+GAME_MIN_SIZE = 8 * BANK_BYTES
+RUL1_AT = 1_382_956
+GRX1_AT = 1_376_808
+ROM_FONT_START = 0x3D00
+ROM_FONT_WORDS = 768
+SPECTRUM_48K_BANKS = (5, 2, 0)
+
 
 def plane_words(gfx: bytes) -> bytes:
     """Every Spectrum address from 0x4000, eight bytes: plane 0's first."""
@@ -40,6 +59,35 @@ def plane_words(gfx: bytes) -> bytes:
     for address in range(len(planes[0])):
         out += bytes(plane[address] for plane in planes)
     return bytes(out)
+
+
+def game_plane_words(game: bytes) -> bytes:
+    """Plane words for 0x4000 to 0xFFFF from a .256, as plane_words gives them."""
+    if len(game) < GAME_MIN_SIZE:
+        raise ValueError(f".256 must be at least {GAME_MIN_SIZE} bytes, got {len(game)}")
+    out = bytearray()
+    for bank in SPECTRUM_48K_BANKS:
+        for offset in range(16_384):
+            at = bank * BANK_BYTES + offset * 9
+            out += game[at : at + 8]
+    return bytes(out)
+
+
+def game_rom_font_words(game: bytes) -> bytes | None:
+    """GRX1's plane words for 0x3D00 to 0x3FFF, or None without the block."""
+    if game[GRX1_AT : GRX1_AT + 4] != b"GRX1":
+        return None
+    words = game[GRX1_AT + 4 : GRX1_AT + 4 + ROM_FONT_WORDS * 8]
+    if len(words) != ROM_FONT_WORDS * 8:
+        raise ValueError(".256 ends inside its GRX1 block")
+    return words
+
+
+def game_rules_flags(game: bytes) -> int:
+    """RUL1's flags (bit 0: DOS render), or 0 for a .256 without RUL1."""
+    if game[RUL1_AT : RUL1_AT + 4] != b"RUL1" or game[RUL1_AT + 4] != 1:
+        return 0
+    return game[RUL1_AT + 5]
 
 
 def rgb333(red: int, green: int, blue: int) -> int:
@@ -70,13 +118,23 @@ def send(fd: int, payload: bytes) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--gfx", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--gfx", type=Path)
+    source.add_argument("--game", type=Path, help="a .256 built by make256")
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--palette", type=Path)
     parser.add_argument("--port", default=PORT)
     args = parser.parse_args()
 
-    words = plane_words(read_exact_file(args.gfx, GFX_SIZE, "Spec256 GFX"))
+    if args.game is not None:
+        game = args.game.read_bytes()
+        words = game_plane_words(game)
+        flags = game_rules_flags(game)
+        font = game_rom_font_words(game)
+    else:
+        words = plane_words(read_exact_file(args.gfx, GFX_SIZE, "Spec256 GFX"))
+        flags = 0
+        font = None
     palette = palette_bytes(args.palette)
     snapshot = parse_snapshot(args.snapshot.read_bytes())
     count = len(words) // 8
@@ -90,14 +148,20 @@ def main() -> int:
     attrs[4] = attrs[5] = termios.B115200
     termios.tcsetattr(fd, termios.TCSANOW, attrs)
     started = time.time()
+    send(fd, b"H")
     send(fd, b"S1")
+    send(fd, b"U%02x" % flags)
     send(fd, b"W4000%04x" % count + words)
+    if font is not None:
+        send(fd, b"W%04x%04x" % (ROM_FONT_START, ROM_FONT_WORDS) + font)
     send(fd, b"Q" + palette)
     send(fd, b"G%04x" % snapshot.pc)
     time.sleep(0.2)
     os.close(fd)
     print(f"sent {count} plane words, palette ({'test' if args.palette is None else args.palette.name}), "
-          f"armed at PC 0x{snapshot.pc:04x}, {time.time() - started:.0f} s")
+          f"rules flags 0x{flags:02x}, {'ROM font, ' if font is not None else ''}"
+          f"armed at PC 0x{snapshot.pc:04x}, "
+          f"{time.time() - started:.0f} s")
     return 0
 
 

@@ -142,6 +142,10 @@ entity T80N is
        Spec256_sync_xy : in std_logic_vector(1 downto 0) := (others => '0');
        Spec256_sync_int_cycle : in std_logic := '0';
        Spec256_sync_nmi_cycle : in std_logic := '0';
+       -- With a sync load, also take the master's accumulator (Spec256 DOS
+       -- "monochrome arithmetic": after an instruction that computes A, the
+       -- original program keeps the master's value and drops the colour).
+       Spec256_sync_acc : in std_logic := '0';
        Spec256_master_addressing : in std_logic := '0';
        Spec256_master_regs : in std_logic_vector(159 downto 0) := (others => '0');
        -- NextTang: a graphical lane in lockstep with its master takes every
@@ -593,6 +597,9 @@ begin
             Spec256_XY_pending_valid <= '1';
             Spec256_address_regs <= Spec256_master_regs;
             Spec256_instruction_access_r <= '1';
+            if Spec256_sync_acc = '1' then
+               ACC <= Spec256_master_regs(7 downto 0);
+            end if;
             for flag_index in 0 to 7 loop
                if flag_index /= Flag_C then
                   F(flag_index) <= Spec256_sync_f(flag_index);

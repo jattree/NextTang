@@ -282,8 +282,13 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire        spec256_lane_write;
     wire [63:0] spec256_lane_write_data;
     wire [63:0] spec256_plane_read;
+    wire [63:0] spec256_lane_read;
     wire [15:0] spec256_overlay_address;
     wire [63:0] spec256_overlay_data;
+    wire [7:0]  spec256_rules_flags;
+    wire        s256_bank5_write;
+    wire [13:0] s256_bank5_address;
+    wire [7:0]  s256_bank5_data;
 
     zxnext #(
         .g_video_def(3'b000),
@@ -497,7 +502,10 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_SPEC256_INT_CYCLE(s256_int_cycle),
         .o_SPEC256_NMI_CYCLE(s256_nmi_cycle),
         .o_SPEC256_BOUNDARY(s256_boundary),
-        .o_SPEC256_INCDECZ(s256_incdecz)
+        .o_SPEC256_INCDECZ(s256_incdecz),
+        .o_SPEC256_BANK5_WE(s256_bank5_write),
+        .o_SPEC256_BANK5_A(s256_bank5_address),
+        .o_SPEC256_BANK5_D(s256_bank5_data)
     );
 
     // ------------------------------------------------------------ keyboard, SD
@@ -810,6 +818,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .reset_n(s256_cpu_reset_n),
         .graphics(spec256_graphics),
         .master_control(1'b1),
+        .rom_planes(spec256_rom_planes),
+        .arith_mono(spec256_rules_flags[1]),
         .master_m1_n(s256_m1_n),
         .master_mreq_n(s256_mreq_n),
         .master_iorq_n(s256_iorq_n),
@@ -839,7 +849,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .master_instruction_boundary(s256_boundary),
         .master_incdecz(s256_incdecz),
         .graphics_address(lanes_address),
-        .graphics_data_in(spec256_plane_read),
+        .graphics_data_in(spec256_lane_read),
         .graphics_data_out(lanes_write_data),
         .graphics_write(lanes_write),
         .graphics_iorq(),
@@ -847,6 +857,33 @@ module `NEXTTANG_ZXNEXT_TOP (
         .debug_lane_pc(),
         .debug_lane_regs()
     );
+
+    // A game's coloured ROM character set (the .256's GRX1 block), 0x3D00 to
+    // 0x3FFF, which the loader writes like plane words. It is read like the
+    // mirror, the word for the address of the previous edge; until a font is
+    // loaded, or after H or S0, the lanes take the master's ROM byte.
+    reg [63:0] spec256_rom_font [0:767];
+    reg [63:0] spec256_rom_font_q = 64'd0;
+    reg        spec256_rom_font_hit = 1'b0;
+    reg        spec256_rom_planes = 1'b0;
+    wire       loader_font_write = loader_plane_write &&
+                                   loader_plane_address[15:8] >= 8'h3d &&
+                                   loader_plane_address[15:8] <= 8'h3f;
+    wire [9:0] loader_font_index = loader_plane_address[9:0] - 10'h100;
+    wire [9:0] lane_font_index = lanes_address[9:0] - 10'h100;
+
+    always @(posedge clock_28) begin
+        if (loader_font_write)
+            spec256_rom_font[loader_font_index] <= loader_plane_data;
+        spec256_rom_font_q <= spec256_rom_font[lane_font_index];
+        spec256_rom_font_hit <= lanes_address[15:8] >= 8'h3d && lanes_address[15:8] <= 8'h3f;
+        if (!spec256_mode || loader_disarm)
+            spec256_rom_planes <= 1'b0;
+        else if (loader_font_write)
+            spec256_rom_planes <= 1'b1;
+    end
+
+    assign spec256_lane_read = spec256_rom_font_hit ? spec256_rom_font_q : spec256_plane_read;
 
     // Every lane addresses memory through the master's registers, so lane
     // 0's address serves all eight planes (the desync check enforces it).
@@ -1238,7 +1275,11 @@ module `NEXTTANG_ZXNEXT_TOP (
         .plane_data(spec256_overlay_data),
         .palette_write(spec256_palette_write),
         .palette_index(spec256_palette_index),
-        .palette_rgb(spec256_palette_rgb)
+        .palette_rgb(spec256_palette_rgb),
+        .render_dos(spec256_rules_flags[0]),
+        .bank5_write(s256_bank5_write),
+        .bank5_address(s256_bank5_address),
+        .bank5_data(s256_bank5_data)
     );
     // V0 from the debug UART stops the frame store's DDR3 traffic and V1
     // restarts it, so the CPU's wait for main memory can be measured with
@@ -1778,12 +1819,14 @@ module `NEXTTANG_ZXNEXT_TOP (
         .palette_rgb(spec256_palette_rgb),
         .arm(loader_arm),
         .arm_pc(loader_arm_pc),
-        .disarm(loader_disarm)
+        .disarm(loader_disarm),
+        .rules_flags(spec256_rules_flags)
     );
 `else
     assign spec256_payload = 1'b0;
     assign spec256_mode = 1'b0;
     assign spec256_desync = 1'b0;
+    assign spec256_rules_flags = 8'd0;
 `endif
 
     reg [2:0]  trigger_digits_left = 3'd0;

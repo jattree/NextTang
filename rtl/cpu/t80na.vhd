@@ -127,6 +127,7 @@ entity T80Na is
        Spec256_sync_xy : in std_logic_vector(1 downto 0) := (others => '0');
        Spec256_sync_int_cycle : in std_logic := '0';
        Spec256_sync_nmi_cycle : in std_logic := '0';
+       Spec256_sync_acc : in std_logic := '0';
        Spec256_master_addressing : in std_logic := '0';
        Spec256_master_regs : in std_logic_vector(159 downto 0) := (others => '0');
        Spec256_master_control : in std_logic := '0';
@@ -283,6 +284,7 @@ begin
           Spec256_sync_xy => Spec256_sync_xy,
           Spec256_sync_int_cycle => Spec256_sync_int_cycle,
           Spec256_sync_nmi_cycle => Spec256_sync_nmi_cycle,
+          Spec256_sync_acc => Spec256_sync_acc,
           Spec256_master_addressing => Spec256_master_addressing,
           Spec256_master_regs => Spec256_master_regs,
           Spec256_master_control => Spec256_master_control,

@@ -13,6 +13,8 @@
 //   Gpppp           arm: colour mode from the next instruction fetched at
 //                   pppp (the game's start, where every lane is still the
 //                   master's copy)
+//   Uff             the game's rules flags, byte 5 of the .256's RUL1 block
+//                   (bit 0: Spec256 DOS render)
 //   H               colour mode off
 //
 // Hex digits are 0-9 and a-f or A-F. While raw bytes are arriving, payload
@@ -39,7 +41,8 @@ module nexttang_spec256_uart_loader (
 
     output reg         arm,          // one cycle: arm at arm_pc
     output reg  [15:0] arm_pc,
-    output reg         disarm        // one cycle
+    output reg         disarm,       // one cycle
+    output reg  [7:0]  rules_flags
 );
     localparam [2:0] IDLE = 3'd0;
     localparam [2:0] MODE = 3'd1;
@@ -73,6 +76,7 @@ module nexttang_spec256_uart_loader (
             state <= IDLE;
             spec256_mode <= 1'b0;
             arm_pc <= 16'd0;
+            rules_flags <= 8'd0;
         end else if (byte_valid) begin
             case (state)
                 IDLE: begin
@@ -82,6 +86,7 @@ module nexttang_spec256_uart_loader (
                         "S": state <= MODE;
                         "W": begin digits_left <= 4'd8; state <= HEX; end
                         "G": begin digits_left <= 4'd4; state <= HEX; end
+                        "U": begin digits_left <= 4'd2; state <= HEX; end
                         "Q": begin palette_bytes <= 10'd0; state <= PALETTE; end
                         "H": disarm <= 1'b1;
                         default: ;
@@ -104,6 +109,9 @@ module nexttang_spec256_uart_loader (
                             if (command == "G") begin
                                 arm_pc <= {value[11:0], digit};
                                 arm <= 1'b1;
+                                state <= IDLE;
+                            end else if (command == "U") begin
+                                rules_flags <= {value[3:0], digit};
                                 state <= IDLE;
                             end else begin
                                 next_address <= value[27:12];

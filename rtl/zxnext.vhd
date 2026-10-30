@@ -359,7 +359,13 @@ entity zxnext is
       o_SPEC256_INT_CYCLE     : out std_logic;
       o_SPEC256_NMI_CYCLE     : out std_logic;
       o_SPEC256_BOUNDARY      : out std_logic;
-      o_SPEC256_INCDECZ       : out std_logic
+      o_SPEC256_INCDECZ       : out std_logic;
+      -- NextTang: bank 5's CPU-port writes (CPU and DMA) exactly as the
+      -- bank's RAM takes them, for Spec256's copy of the attributes;
+      -- observation only.
+      o_SPEC256_BANK5_WE      : out std_logic;
+      o_SPEC256_BANK5_A       : out std_logic_vector(13 downto 0);
+      o_SPEC256_BANK5_D       : out std_logic_vector(7 downto 0)
    );
 end entity;
 
@@ -1891,6 +1897,9 @@ end generate;
    o_SPEC256_CPU_NMI_n <= z80_nmi_n;
    o_SPEC256_CPU_BUSRQ_n <= z80_busrq_n;
    o_SPEC256_CPU_A <= z80_a;
+   o_SPEC256_BANK5_WE <= cpu_bank5_sched and cpu_bank5_we;
+   o_SPEC256_BANK5_A <= vram_bank5_a0;
+   o_SPEC256_BANK5_D <= cpu_do;
    o_DEBUG_NR_REG <= nr_wr_reg;
    o_DEBUG_NR_DAT <= nr_wr_dat;
    o_DEBUG_IORQ_n <= cpu_iorq_n;
