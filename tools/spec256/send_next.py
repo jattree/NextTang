@@ -125,6 +125,55 @@ def game_rules_flags(game: bytes) -> int:
     return game[RUL1_AT + 5]
 
 
+REGISTERS_AT = 1_179_648
+PORT_7FFD_AT = 1_179_676
+NMI_RETN = 0x0072
+
+
+def game_start_pc(game: bytes) -> int:
+    """The game's first instruction from the .256 itself: its PC or, when
+    make256 stored the ROM's RETN at 0x0072 (a snapshot taken in the NMI),
+    the address on its stack, read from the master's bytes with the
+    snapshot's 128K paging. firmware/spec256dot/spec256.asm does the same."""
+    pc = game[REGISTERS_AT + 8] | game[REGISTERS_AT + 9] << 8
+    if pc != NMI_RETN:
+        return pc
+    sp = game[REGISTERS_AT + 6] | game[REGISTERS_AT + 7] << 8
+
+    def master(address: int) -> int:
+        slot = address >> 14
+        if slot == 0:
+            raise ValueError(".256 stack is in the ROM")
+        bank = (5, 2, game[PORT_7FFD_AT] & 7)[slot - 1]
+        return game[(bank * 16_384 + (address & 0x3FFF)) * 9 + 8]
+
+    return master(sp) | master((sp + 1) & 0xFFFF) << 8
+
+
+def colour_stream(words: bytes, flags: int, cfg: bytes, rules: bytes | None, zxpoly: int,
+                  font: bytes | None, background: bytes | None, palette: bytes, pc: int) -> bytes:
+    """The loader's commands for one game, in the order it takes them."""
+    out = b"H" + b"S1" + b"U%02x" % flags + b"C" + cfg.hex().encode()
+    if rules is not None:
+        out += b"Y" + rules
+    out += b"Z%d" % zxpoly
+    out += b"W4000%04x" % (len(words) // 8) + words
+    if font is not None:
+        out += b"W%04x%04x" % (ROM_FONT_START, ROM_FONT_WORDS) + font
+    out += b"Q" + palette
+    if background is not None:
+        out += b"B" + background
+    return out + b"G%04x" % pc
+
+
+def game_colour_stream(game: bytes, palette: bytes, pc: int | None = None) -> bytes:
+    """colour_stream for a .256; the start from the .256 unless given."""
+    return colour_stream(game_plane_words(game), game_rules_flags(game), game_cfg(game),
+                         game_rules(game), game_zxpoly_mode(game), game_rom_font_words(game),
+                         game_background(game), palette,
+                         game_start_pc(game) if pc is None else pc)
+
+
 SNA_128K_SIZE = 131_103
 
 
@@ -202,20 +251,7 @@ def main() -> int:
     attrs[4] = attrs[5] = termios.B115200
     termios.tcsetattr(fd, termios.TCSANOW, attrs)
     started = time.time()
-    send(fd, b"H")
-    send(fd, b"S1")
-    send(fd, b"U%02x" % flags)
-    send(fd, b"C" + cfg.hex().encode())
-    if rules is not None:
-        send(fd, b"Y" + rules)
-    send(fd, b"Z%d" % zxpoly)
-    send(fd, b"W4000%04x" % count + words)
-    if font is not None:
-        send(fd, b"W%04x%04x" % (ROM_FONT_START, ROM_FONT_WORDS) + font)
-    send(fd, b"Q" + palette)
-    if background is not None:
-        send(fd, b"B" + background)
-    send(fd, b"G%04x" % pc)
+    send(fd, colour_stream(words, flags, cfg, rules, zxpoly, font, background, palette, pc))
     time.sleep(0.2)
     os.close(fd)
     print(f"sent {count} plane words, palette ({'test' if args.palette is None else args.palette.name}), "

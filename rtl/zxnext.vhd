@@ -381,7 +381,12 @@ entity zxnext is
       o_SPEC256_ULA_SHADOW    : out std_logic;
       -- NextTang: one 28 MHz cycle when the CPU executes RETN (NextZXOS
       -- starts a snapshot with one); observation only.
-      o_SPEC256_RETN          : out std_logic
+      o_SPEC256_RETN          : out std_logic;
+      -- NextTang: what NextREG 0x3E and 0x3F read as (unused by the Next):
+      -- the board's Spec256 loader interface ID and status. Writes to them
+      -- reach the board through o_DEBUG_NR_*.
+      i_SPEC256_NR_3E         : in std_logic_vector(7 downto 0) := (others => '0');
+      i_SPEC256_NR_3F         : in std_logic_vector(7 downto 0) := (others => '0')
    );
 end entity;
 
@@ -7116,6 +7121,12 @@ end generate;
             
             when X"FA" =>
                port_253b_dat <= nr_fa_xadc_d1;
+
+            when X"3E" =>
+               port_253b_dat <= i_SPEC256_NR_3E;
+
+            when X"3F" =>
+               port_253b_dat <= i_SPEC256_NR_3F;
 
             when others =>
                port_253b_dat <= (others => '0');

@@ -16,7 +16,8 @@
 //   Uff             the game's rules flags, byte 5 of the .256's RUL1 block
 //                   (bit 0: Spec256 DOS render)
 //   B               then 49152 raw bytes: the 256 x 192 background, one
-//                   palette index per pixel, row by row (0: none)
+//                   palette index per pixel, row by row (0: none); shown
+//                   once the last byte has arrived
 //   Cuuddff         the game's .CFG colours: UpColorsMixed, DownColorsMixed
 //                   and flags (bit 3 BkOverFF, bit 7 CFG present)
 //   Y               then 64 raw bytes: RUL1's eight rules (bytes 8 to 71 of
@@ -25,7 +26,11 @@
 //                   by H
 //   Xnn             the paper's horizontal trim, a signed pixel count added
 //                   to the left edge the board measures (kept by H)
-//   H               colour mode off
+//   H               everything off: colour mode, the planes (S0), rules
+//                   flags, CFG, rules, ZX-Poly mode and background
+//
+// abort returns the parser to waiting for a command from any state, the
+// middle of a raw payload included, without changing what was loaded.
 //
 // Hex digits are 0-9 and a-f or A-F. While raw bytes are arriving, payload
 // is high and the board's other command decoders must ignore the bytes.
@@ -37,6 +42,7 @@ module nexttang_spec256_uart_loader (
     input  wire        reset,
     input  wire [7:0]  byte_in,
     input  wire        byte_valid,
+    input  wire        abort,
 
     output wire        payload,
     output reg         spec256_mode,
@@ -105,6 +111,8 @@ module nexttang_spec256_uart_loader (
             rules <= 512'd0;
             zxpoly_mode <= 3'd0;
             paper_trim <= 8'd0;
+        end else if (abort) begin
+            state <= IDLE;
         end else if (byte_valid) begin
             case (state)
                 IDLE: begin
@@ -116,10 +124,11 @@ module nexttang_spec256_uart_loader (
                         "G": begin digits_left <= 4'd4; state <= HEX; end
                         "U": begin digits_left <= 4'd2; state <= HEX; end
                         "C": begin digits_left <= 4'd6; state <= HEX; end
-                        "B": begin next_address <= 16'd0; background_present <= 1'b1; state <= BACKGROUND; end
+                        "B": begin next_address <= 16'd0; background_present <= 1'b0; state <= BACKGROUND; end
                         "Q": begin palette_bytes <= 10'd0; state <= PALETTE; end
                         "H": begin
-                            disarm <= 1'b1; background_present <= 1'b0; rules <= 512'd0;
+                            disarm <= 1'b1; spec256_mode <= 1'b0; background_present <= 1'b0;
+                            rules_flags <= 8'd0; cfg <= 24'd0; rules <= 512'd0;
                             zxpoly_mode <= 3'd0;
                         end
                         "Z": begin digits_left <= 4'd1; state <= HEX; end
@@ -199,8 +208,10 @@ module nexttang_spec256_uart_loader (
                     background_address <= next_address;
                     background_index <= byte_in;
                     next_address <= next_address + 16'd1;
-                    if (next_address == 16'd49151)
+                    if (next_address == 16'd49151) begin
+                        background_present <= 1'b1;
                         state <= IDLE;
+                    end
                 end
 
                 RULES: begin

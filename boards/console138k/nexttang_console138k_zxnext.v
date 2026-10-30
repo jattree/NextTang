@@ -277,6 +277,12 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire        spec256_mode;
     reg         spec256_graphics = 1'b0;
     wire        spec256_desync;
+    // The loader is also the CPU's: NextREG 0x3E takes its bytes and 0x3F
+    // claims it, aborts it and reads its status (see the loader below).
+    wire [7:0]  spec256_nr_status;
+    localparam [7:0] SPEC256_NR_ID = 8'hA1;
+    reg         spec256_cpu_owned = 1'b0;
+    reg         spec256_abort = 1'b0;
     wire        spec256_payload;
     wire [127:0] spec256_lane_address;
     wire        spec256_lane_write;
@@ -523,7 +529,9 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_SPEC256_ULA_HC(s256_ula_hc),
         .o_SPEC256_MMU(s256_mmu),
         .o_SPEC256_ULA_SHADOW(s256_ula_shadow),
-        .o_SPEC256_RETN(s256_retn)
+        .o_SPEC256_RETN(s256_retn),
+        .i_SPEC256_NR_3E(SPEC256_NR_ID),
+        .i_SPEC256_NR_3F(spec256_nr_status)
     );
 
     // ------------------------------------------------------------ keyboard, SD
@@ -955,6 +963,9 @@ module `NEXTTANG_ZXNEXT_TOP (
     // the snapshot with a RETN from its NMI handler.
     reg spec256_armed = 1'b0;
     reg spec256_retn_seen = 1'b0;
+    assign spec256_nr_status = {spec256_cpu_owned, 1'b0, spec256_background_present,
+                                spec256_desync, spec256_graphics, spec256_armed,
+                                spec256_payload, spec256_mode};
     reg s256_previous_m1_n = 1'b1;
 
     always @(posedge clock_28) begin
@@ -1804,9 +1815,9 @@ module `NEXTTANG_ZXNEXT_TOP (
     // address whose fetch freezes it, and re-arms.
     wire [7:0] command_byte;
     wire uart_byte_valid;
-    // While the Spec256 loader takes raw plane or palette bytes, no other
-    // command may see them.
-    wire command_valid = uart_byte_valid && !spec256_payload;
+    // While the Spec256 loader takes raw plane or palette bytes from the
+    // UART, no other command may see them.
+    wire command_valid = uart_byte_valid && !(spec256_payload && !spec256_cpu_owned);
 
     nexttang_uart_receiver #(
         .CLOCK_HZ(28000000),
@@ -1904,12 +1915,37 @@ module `NEXTTANG_ZXNEXT_TOP (
         .spi_mosi(pi_spi_mosi),
         .spi_miso(core_gpio[9])
     );
+    // The Spec256 loader takes its command language from the debug UART or,
+    // once the CPU claims it, from NextREG writes, so a NextZXOS dot command
+    // can load a game's colour without a host:
+    //   NextREG 0x3E  write: one loader byte; read: SPEC256_NR_ID (0xA1:
+    //                 marker A, interface version 1)
+    //   NextREG 0x3F  write: bit 0 the CPU owns the loader (UART loader bytes
+    //                 are then ignored; other UART commands still act), bit 7
+    //                 abort (the parser waits for a command again);
+    //                 read: bit 0 planes mode (S1), 1 inside a raw payload,
+    //                 2 armed, 3 colour running, 4 desync, 5 background
+    //                 present, 7 the CPU owns the loader
+    // A NextREG write reaches o_DEBUG_NR_* once, in the cycle the core takes
+    // it, so each one is one loader byte.
+    wire spec256_nr_byte = core_nr_write && core_nr_register == 8'h3E;
+    always @(posedge clock_28) begin
+        spec256_abort <= 1'b0;
+        if (!machine_locked) begin
+            spec256_cpu_owned <= 1'b0;
+        end else if (core_nr_write && core_nr_register == 8'h3F) begin
+            spec256_cpu_owned <= core_nr_data[0];
+            spec256_abort <= core_nr_data[7];
+        end
+    end
+
 `ifdef NEXTTANG_ZXNEXT_DDR3
     nexttang_spec256_uart_loader spec256_loader (
         .clock(clock_28),
         .reset(!machine_locked),
-        .byte_in(command_byte),
-        .byte_valid(uart_byte_valid),
+        .byte_in(spec256_cpu_owned ? core_nr_data : command_byte),
+        .byte_valid(spec256_cpu_owned ? spec256_nr_byte : uart_byte_valid),
+        .abort(spec256_abort),
         .payload(spec256_payload),
         .spec256_mode(spec256_mode),
         .plane_write(loader_plane_write),
@@ -1944,6 +1980,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     assign spec256_rules = 512'd0;
     assign spec256_zxpoly_mode = 3'd0;
     assign spec256_paper_trim = 8'd0;
+    assign spec256_nr_status = 8'd0;
 `endif
 
     reg [2:0]  trigger_digits_left = 3'd0;
