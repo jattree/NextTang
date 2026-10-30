@@ -1298,6 +1298,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .render_dos(spec256_rules_flags[0]),
         .zxpoly_mode(spec256_zxpoly_mode),
         .bk_over_ff(spec256_cfg[3]),
+        .cfg(spec256_cfg),
         .background_present(spec256_background_present),
         .background_write(spec256_background_write),
         .background_address(spec256_background_address),

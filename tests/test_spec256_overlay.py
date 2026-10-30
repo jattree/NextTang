@@ -10,6 +10,8 @@ pixel through, and everything outside the paper, or with the overlay off,
 unchanged. Outputs must keep their own coordinates.
 
 The last sweep moves the paper up to line 24, where the 60 Hz timing puts it.
+Two EmuZWin sweeps mix indices at or above 256 - UpColorsMixed and below
+DownColorsMixed with the cell's ink, then with its paper and BRIGHT.
 Three ZX-Poly sweeps follow (modes 4, 6, 7): colour I G R B from planes 3-0 at
 the Spectrum's levels, cells with ink = paper filled with the ink in modes 6
 and 7, and in mode 7 cells without FLASH left as the core drew them.
@@ -48,6 +50,7 @@ module testbench;
     reg render_dos = 0, bank5_write = 0, bk_over_ff = 0;
     reg [8:0] top = 9'd48;
     reg [2:0] zxpoly = 3'd0;
+    reg [23:0] cfg = 24'd0;
     integer zxpoly_plain = 0, zxpoly_filled = 0;
     reg background_present = 0, background_write = 0;
     reg [15:0] background_address = 0;
@@ -64,7 +67,7 @@ module testbench;
         .frame_start(o_frame), .pixel_valid(o_valid), .x(ox), .y(oy), .pixel(opixel),
         .plane_address(plane_address), .plane_data(plane_data),
         .palette_write(palette_write), .palette_index(palette_index), .palette_rgb(palette_rgb),
-        .paper_top(top), .render_dos(render_dos), .zxpoly_mode(zxpoly), .bk_over_ff(bk_over_ff),
+        .paper_top(top), .render_dos(render_dos), .zxpoly_mode(zxpoly), .bk_over_ff(bk_over_ff), .cfg(cfg),
         .background_present(background_present), .background_write(background_write),
         .background_address(background_address), .background_index(background_index),
         .bank5_write(bank5_write), .bank5_address(bank5_address),
@@ -100,6 +103,16 @@ module testbench;
             level = bright ? 3'd7 : 3'd6;
             spectrum_rgb = {colour[1] ? level : 3'd0, colour[2] ? level : 3'd0,
                             colour[0] ? level : 3'd0};
+        end
+    endfunction
+    function [8:0] mixed(input [8:0] rgb, input [2:0] colour, input bright);
+        integer level, r, g, b;
+        begin
+            level = bright ? 7 : 5;
+            r = (rgb[8:6] + (colour[1] ? level : 0)) / 2;
+            g = (rgb[5:3] + (colour[2] ? level : 0)) / 2;
+            b = (rgb[2:0] + (colour[0] ? level : 0)) / 2;
+            mixed = {r[2:0], g[2:0], b[2:0]};
         end
     endfunction
     function [7:0] attribute_of(input integer block);
@@ -143,6 +156,10 @@ module testbench;
                     expected = palette_of({2'b11, ink[2:0], index[2:0]});
                 else if (dos)
                     expected = palette_of(index);
+                else if (index != 8'hff && cfg[7] &&
+                         (index >= 256 - cfg[23:16] || index < cfg[15:8]))
+                    expected = mixed(palette_of(index), cfg[1] ? ink[5:3] : ink[2:0],
+                                     cfg[0] && ink[6]);
                 else
                     expected = index == 8'hff ? core_pixel(x, y) : palette_of(index);
             end
@@ -226,6 +243,10 @@ module testbench;
         top = 9'd24;
         sweep(1, 1);
         top = 9'd48;
+        background_present = 0; bk_over_ff = 0;
+        cfg = 24'h400880; sweep(1, 0);
+        cfg = 24'h010083; sweep(1, 0);
+        cfg = 24'd0;
         zxpoly = 3'd4; sweep(1, 0);
         zxpoly = 3'd6; sweep(1, 0);
         zxpoly = 3'd7; sweep(1, 0);
@@ -245,7 +266,7 @@ class Spec256OverlayTest(unittest.TestCase):
         counts = output.split("OVERLAY_PASS ")[1].split()
         checked, coloured, passthrough = int(counts[1]), int(counts[3]), int(counts[5])
         inked, background = int(counts[7]), int(counts[9])
-        self.assertEqual(checked, 9 * 360 * 288, output)
+        self.assertEqual(checked, 11 * 360 * 288, output)
         self.assertGreater(background, 1000, output)
         self.assertGreater(coloured, 40000, output)
         self.assertGreater(passthrough, 100, output)

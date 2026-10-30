@@ -31,6 +31,13 @@
 //                index is 0xFF with the .CFG's BkOverFF and an ink other
 //                than 7 (cells drawn in white keep the Spectrum's pixels)
 //
+// Games with a .CFG (EmuZWin colourings; cfg flags bit 7) mix colours with the
+// attribute, as SPEC256_MISTER does outside the DOS render: an index at or
+// above 256 - UpColorsMixed, or below DownColorsMixed, shows the average of
+// its palette colour and the cell's ink (its paper with UpMixPaper, flags bit
+// 1) at level 0xBF (0xFF in a BRIGHT cell with UseBrightInMix, bit 0). 0xFF
+// still shows the core's pixel, and the background is never mixed.
+//
 // ZX-Poly games (RUL1 byte 7, zxpoly_mode 4, 6 or 7; Igor Maznitsa's
 // ZX-Poly converted by Alberto Conde's tools) colour a pixel with the Spectrum
 // colour I G R B taken from planes 3, 2, 1 and 0, at the Spectrum's two
@@ -76,6 +83,9 @@ module nexttang_spec256_overlay (
     input  wire        render_dos,
     input  wire [2:0]  zxpoly_mode,
     input  wire        bk_over_ff,
+    // The .CFG: UpColorsMixed, DownColorsMixed, flags (bit 0 UseBrightInMix,
+    // bit 1 UpMixPaper, bit 7 present).
+    input  wire [23:0] cfg,
 
     // The background, written on clock_28; pixel (x, y) is word y * 256 + x.
     input  wire        background_present,
@@ -166,6 +176,8 @@ module nexttang_spec256_overlay (
                 pixel <= s1_pixel;
             else if (render_dos && index[7:6] == 2'b11)
                 pixel <= palette[{2'b11, s1_ink, index[2:0]}];
+            else if (mix_now)
+                pixel <= mixed(palette[index], mix_colour, mix_bright);
             else
                 pixel <= palette[index];
         end
@@ -186,6 +198,27 @@ module nexttang_spec256_overlay (
             level = bright ? 3'd7 : 3'd6;
             spectrum_rgb = {colour[1] ? level : 3'd0, colour[2] ? level : 3'd0,
                             colour[0] ? level : 3'd0};
+        end
+    endfunction
+
+    // EmuZWin mixing with the attribute.
+    wire [8:0] mix_low = 9'd256 - {1'b0, cfg[23:16]};
+    wire mix_now = cfg[7] && !render_dos &&
+                   ({1'b0, index} >= mix_low || index < cfg[15:8]);
+    wire [2:0] mix_colour = cfg[1] ? s1_attribute[5:3] : s1_attribute[2:0];
+    wire mix_bright = cfg[0] && s1_attribute[6];
+
+    // The average of an RGB333 colour and a Spectrum colour (G R B) at level
+    // 0xBF (5 of 7) or 0xFF (7), channel by channel, rounding down.
+    function [8:0] mixed(input [8:0] rgb, input [2:0] colour, input bright);
+        reg [2:0] level;
+        reg [3:0] r, g, b;
+        begin
+            level = bright ? 3'd7 : 3'd5;
+            r = rgb[8:6] + (colour[1] ? level : 3'd0);
+            g = rgb[5:3] + (colour[2] ? level : 3'd0);
+            b = rgb[2:0] + (colour[0] ? level : 3'd0);
+            mixed = {r[3:1], g[3:1], b[3:1]};
         end
     endfunction
 
