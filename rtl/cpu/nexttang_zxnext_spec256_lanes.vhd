@@ -52,7 +52,11 @@
 -- with the rule's XOR applied. Every other access, and every write, uses the
 -- master's address, as before. A game without rules is unchanged: the lanes
 -- address through the master's registers. graphics_address carries each
--- lane's memory address, the master's except on such a read.
+-- lane's memory address, the master's except on such a read. The decision is
+-- registered, so it reaches the planes a 28 MHz cycle after the read begins,
+-- well before the lanes take the data at 3.5, 7 and 14 MHz; with rules the
+-- ROM test uses the master's (registered) address, keeping every path from
+-- one lane's address to another lane's data a full clock long.
 --
 -- desync is set for good if any lane's bus strobes ever differ from the
 -- master's a cycle before, or if a lane reads or writes memory or I/O at an
@@ -193,8 +197,8 @@ architecture rtl of nexttang_zxnext_spec256_lanes is
     signal rules_active : std_logic;
     signal rule_hit : std_logic;
     signal rule_xor : std_logic_vector(7 downto 0);
-    signal own_read : std_logic;            -- this read uses the lanes' own addresses
-    signal own_read_q : std_logic := '0';
+    signal own_read : std_logic;            -- this read should use the lanes' own addresses
+    signal own_read_q : std_logic := '0';   -- ...registered: what the planes use
     signal xor_q : std_logic_vector(7 downto 0) := (others => '0');
     signal memory_address : word_array;
 begin
@@ -281,7 +285,7 @@ begin
     end process;
 
     memory_addresses : for lane in 0 to 7 generate
-        memory_address(lane) <= lane_address(lane) when rules_active = '0' or own_read = '1' else a_d;
+        memory_address(lane) <= lane_address(lane) when rules_active = '0' or own_read_q = '1' else a_d;
     end generate;
 
     -- The planes return the word for the address of the previous edge, so the
@@ -290,7 +294,7 @@ begin
     begin
         if rising_edge(clock_28) then
             own_read_q <= own_read;
-            if own_read = '1' then
+            if own_read_q = '1' then
                 xor_q <= rule_xor;
             else
                 xor_q <= (others => '0');
@@ -373,16 +377,18 @@ begin
 
     lanes : for lane in 0 to 7 generate
         signal own_data, data_in_fall : std_logic_vector(7 downto 0);
+        signal rom_test_address : std_logic_vector(15 downto 0);
         signal from_master : boolean;
     begin
         graphics_address(lane * 16 + 15 downto lane * 16) <= memory_address(lane);
         graphics_write(lane) <= graphics_d and not lane_wr_n(lane) and not lane_mreq_n(lane);
         graphics_iorq(lane) <= graphics_d and not lane_iorq_n(lane);
         own_data <= graphics_data_in(lane * 8 + 7 downto lane * 8) xor xor_q;
+        rom_test_address <= a_d when rules_active = '1' else lane_address(lane);
         from_master <= graphics_d = '0' or lane_instruction_access(lane) = '1' or
                        lane_iorq_n(lane) = '0' or
-                       (memory_address(lane)(15 downto 14) = "00" and
-                        not (rom_planes = '1' and unsigned(memory_address(lane)(13 downto 8)) >= 16#3D#));
+                       (rom_test_address(15 downto 14) = "00" and
+                        not (rom_planes = '1' and unsigned(rom_test_address(13 downto 8)) >= 16#3D#));
         data_in_fall <= master_di when from_master else own_data;
 
         cpu : entity work.T80Na
