@@ -122,6 +122,8 @@ entity T80Na is
        Spec256_sync_nmi_cycle : in std_logic := '0';
        Spec256_master_addressing : in std_logic := '0';
        Spec256_master_regs : in std_logic_vector(159 downto 0) := (others => '0');
+       Spec256_master_control : in std_logic := '0';
+       Spec256_master_incdecz : in std_logic := '0';
       Spec256_state_pc : out std_logic_vector(15 downto 0);
       Spec256_state_sp : out std_logic_vector(15 downto 0);
       Spec256_state_i : out std_logic_vector(7 downto 0);
@@ -136,6 +138,7 @@ entity T80Na is
        Spec256_state_int_cycle : out std_logic;
        Spec256_state_nmi_cycle : out std_logic;
        Spec256_state_instruction_boundary : out std_logic;
+       Spec256_state_incdecz : out std_logic;
        Spec256_instruction_access : out std_logic := '0';
 
       -- extended functions
@@ -267,6 +270,8 @@ begin
           Spec256_sync_nmi_cycle => Spec256_sync_nmi_cycle,
           Spec256_master_addressing => Spec256_master_addressing,
           Spec256_master_regs => Spec256_master_regs,
+          Spec256_master_control => Spec256_master_control,
+          Spec256_master_incdecz => Spec256_master_incdecz,
          Spec256_state_pc => Spec256_state_pc,
          Spec256_state_sp => Spec256_state_sp,
          Spec256_state_i => Spec256_state_i,
@@ -281,6 +286,7 @@ begin
           Spec256_state_int_cycle => Spec256_state_int_cycle,
           Spec256_state_nmi_cycle => Spec256_state_nmi_cycle,
           Spec256_state_instruction_boundary => Spec256_state_instruction_boundary,
+          Spec256_state_incdecz => Spec256_state_incdecz,
           Spec256_instruction_access => Spec256_instruction_access,
          
          Z80N_dout_o       => Z80N_dout_o,      

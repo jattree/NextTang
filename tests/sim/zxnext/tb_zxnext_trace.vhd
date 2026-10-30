@@ -70,7 +70,13 @@ entity tb_zxnext_trace is
         -- PORT_C_WAIT cycles, and each reply is checked.
         G_OPTION : natural := 0;
         PI_DEBUG : boolean := false;
-        PORT_C_WAIT : natural := 20
+        PORT_C_WAIT : natural := 20;
+        -- Run Spec256's eight graphical lanes beside the CPU in follow mode
+        -- (enables mode only) and check, at every instruction boundary, that
+        -- every lane's registers equal the CPU's, and that their bus strobes
+        -- never differ. The lines between the SPEC256 markers are removed for
+        -- the original core, which has no Spec256 exports.
+        SPEC256_LANES : boolean := false
     );
 end entity;
 
@@ -99,6 +105,18 @@ architecture sim of tb_zxnext_trace is
     signal memory_done : std_logic := '0';
 
     signal rgb         : std_logic_vector(8 downto 0);
+    -- SPEC256 begin
+    signal s256_reset_n, s256_m1_n, s256_mreq_n, s256_iorq_n, s256_rd_n, s256_wr_n : std_logic;
+    signal s256_wait_n, s256_int_n, s256_nmi_n, s256_busrq_n : std_logic;
+    signal s256_di, s256_i, s256_r, s256_f : std_logic_vector(7 downto 0);
+    signal s256_pc, s256_sp : std_logic_vector(15 downto 0);
+    signal s256_regs : std_logic_vector(159 downto 0);
+    signal s256_iff1, s256_iff2, s256_halted, s256_int_cycle, s256_nmi_cycle : std_logic;
+    signal s256_boundary, s256_incdecz, s256_desync : std_logic;
+    signal s256_imode, s256_xy : std_logic_vector(1 downto 0);
+    signal s256_lane_pc : std_logic_vector(127 downto 0);
+    signal s256_lane_regs : std_logic_vector(1279 downto 0);
+    -- SPEC256 end
     signal vs_n, hs_n, bk_n, hdmi_pixel, hdmi_lock : std_logic;
     signal spi_sd0_n, spi_sck, spi_mosi : std_logic;
     signal kbd_row     : std_logic_vector(7 downto 0);
@@ -493,6 +511,19 @@ begin
             i_RAM_A_DI => ram_a_di,
             o_RAM_A_DO => ram_a_do,
             o_DEBUG_NR_WE => debug_nr_we,
+            -- SPEC256 begin
+            o_SPEC256_CPU_RESET_n => s256_reset_n, o_SPEC256_CPU_M1_n => s256_m1_n,
+            o_SPEC256_CPU_MREQ_n => s256_mreq_n, o_SPEC256_CPU_IORQ_n => s256_iorq_n,
+            o_SPEC256_CPU_RD_n => s256_rd_n, o_SPEC256_CPU_WR_n => s256_wr_n,
+            o_SPEC256_CPU_WAIT_n => s256_wait_n, o_SPEC256_CPU_INT_n => s256_int_n,
+            o_SPEC256_CPU_NMI_n => s256_nmi_n, o_SPEC256_CPU_BUSRQ_n => s256_busrq_n,
+            o_SPEC256_CPU_DI => s256_di, o_SPEC256_PC => s256_pc, o_SPEC256_SP => s256_sp,
+            o_SPEC256_I => s256_i, o_SPEC256_R => s256_r, o_SPEC256_F => s256_f,
+            o_SPEC256_REGS => s256_regs, o_SPEC256_IFF1 => s256_iff1, o_SPEC256_IFF2 => s256_iff2,
+            o_SPEC256_HALTED => s256_halted, o_SPEC256_IMODE => s256_imode, o_SPEC256_XY => s256_xy,
+            o_SPEC256_INT_CYCLE => s256_int_cycle, o_SPEC256_NMI_CYCLE => s256_nmi_cycle,
+            o_SPEC256_BOUNDARY => s256_boundary, o_SPEC256_INCDECZ => s256_incdecz,
+            -- SPEC256 end
             o_DEBUG_NR_REG => debug_nr_reg,
             o_DEBUG_NR_DAT => debug_nr_dat,
             i_CPU_WAIT => cpu_wait,
@@ -807,6 +838,58 @@ begin
         debug_finished <= true;
         wait;
     end process;
+    -- SPEC256 begin
+    spec256 : if SPEC256_LANES and MODE = "enables" generate
+        lanes : entity work.nexttang_zxnext_spec256_lanes
+            port map (
+                clock_28 => cpu_clock, cen_r => cen_r, cen_f => cen_f, reset_n => s256_reset_n,
+                graphics => '0',
+                master_m1_n => s256_m1_n, master_mreq_n => s256_mreq_n, master_iorq_n => s256_iorq_n,
+                master_rd_n => s256_rd_n, master_wr_n => s256_wr_n, master_wait_n => s256_wait_n,
+                master_int_n => s256_int_n, master_nmi_n => s256_nmi_n, master_busrq_n => s256_busrq_n,
+                master_data_in => s256_di, master_pc => s256_pc, master_sp => s256_sp,
+                master_i => s256_i, master_r => s256_r, master_f => s256_f, master_regs => s256_regs,
+                master_iff1 => s256_iff1, master_iff2 => s256_iff2, master_halted => s256_halted,
+                master_imode => s256_imode, master_xy => s256_xy, master_int_cycle => s256_int_cycle,
+                master_nmi_cycle => s256_nmi_cycle, master_instruction_boundary => s256_boundary,
+                master_incdecz => s256_incdecz,
+                graphics_address => open, graphics_data_in => (others => '0'),
+                graphics_data_out => open, graphics_write => open, graphics_iorq => open,
+                desync => s256_desync, debug_lane_pc => s256_lane_pc, debug_lane_regs => s256_lane_regs);
+
+        check : process (cpu_clock)
+            variable previous_m1 : std_logic := '1';
+            variable boundaries, mismatched, ticks : natural := 0;
+            variable l : line;
+        begin
+            if rising_edge(cpu_clock) then
+                ticks := ticks + 1;
+                if previous_m1 = '1' and s256_m1_n = '0' and s256_boundary = '1' then
+                    boundaries := boundaries + 1;
+                    for k in 0 to 7 loop
+                        if s256_lane_regs(160 * k + 159 downto 160 * k) /= s256_regs or
+                           s256_lane_pc(16 * k + 15 downto 16 * k) /= s256_pc then
+                            if mismatched < 8 then
+                                write(l, string'("SPEC256_MISMATCH lane ") & integer'image(k) &
+                                      string'(" at cycle ") & integer'image(ticks) &
+                                      string'(" pc ") & to_hstring(s256_pc));
+                                writeline(output, l);
+                            end if;
+                            mismatched := mismatched + 1;
+                        end if;
+                    end loop;
+                end if;
+                previous_m1 := s256_m1_n;
+                if ticks = CYCLES - 4 then
+                    write(l, string'("SPEC256_FOLLOW boundaries ") & integer'image(boundaries) &
+                          string'(" mismatched ") & integer'image(mismatched) &
+                          string'(" desync ") & std_logic'image(s256_desync));
+                    writeline(output, l);
+                end if;
+            end if;
+        end process;
+    end generate;
+    -- SPEC256 end
 
     trace : process
         file output : text open write_mode is TRACE_FILE;

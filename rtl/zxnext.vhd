@@ -324,7 +324,38 @@ entity zxnext is
       o_DEBUG_NR_WE        : out std_logic;
       o_DEBUG_NR_REG       : out std_logic_vector(7 downto 0);
       o_DEBUG_NR_DAT       : out std_logic_vector(7 downto 0);
-      o_DEBUG_IORQ_n       : out std_logic
+      o_DEBUG_IORQ_n       : out std_logic;
+
+      -- NextTang: the CPU as Spec256's graphical lanes follow it, observation
+      -- only. Its strobes and the inputs it sees (cpu_di after the core's data
+      -- mux, and the combined WAIT, INT, NMI and BUSRQ), and the T80's
+      -- Spec256 state. Nothing here changes when they are left unconnected.
+      o_SPEC256_CPU_RESET_n   : out std_logic;
+      o_SPEC256_CPU_M1_n      : out std_logic;
+      o_SPEC256_CPU_MREQ_n    : out std_logic;
+      o_SPEC256_CPU_IORQ_n    : out std_logic;
+      o_SPEC256_CPU_RD_n      : out std_logic;
+      o_SPEC256_CPU_WR_n      : out std_logic;
+      o_SPEC256_CPU_WAIT_n    : out std_logic;
+      o_SPEC256_CPU_INT_n     : out std_logic;
+      o_SPEC256_CPU_NMI_n     : out std_logic;
+      o_SPEC256_CPU_BUSRQ_n   : out std_logic;
+      o_SPEC256_CPU_DI        : out std_logic_vector(7 downto 0);
+      o_SPEC256_PC            : out std_logic_vector(15 downto 0);
+      o_SPEC256_SP            : out std_logic_vector(15 downto 0);
+      o_SPEC256_I             : out std_logic_vector(7 downto 0);
+      o_SPEC256_R             : out std_logic_vector(7 downto 0);
+      o_SPEC256_F             : out std_logic_vector(7 downto 0);
+      o_SPEC256_REGS          : out std_logic_vector(159 downto 0);
+      o_SPEC256_IFF1          : out std_logic;
+      o_SPEC256_IFF2          : out std_logic;
+      o_SPEC256_HALTED        : out std_logic;
+      o_SPEC256_IMODE         : out std_logic_vector(1 downto 0);
+      o_SPEC256_XY            : out std_logic_vector(1 downto 0);
+      o_SPEC256_INT_CYCLE     : out std_logic;
+      o_SPEC256_NMI_CYCLE     : out std_logic;
+      o_SPEC256_BOUNDARY      : out std_logic;
+      o_SPEC256_INCDECZ       : out std_logic
    );
 end entity;
 
@@ -1843,6 +1874,19 @@ end generate;
    o_BUS_DO <= cpu_do;
 
    o_DEBUG_NR_WE <= nr_wr_en;
+
+   -- NextTang: the CPU's bus and inputs for Spec256's graphical lanes.
+   o_SPEC256_CPU_RESET_n <= not reset;
+   o_SPEC256_CPU_M1_n <= z80_m1_n;
+   o_SPEC256_CPU_MREQ_n <= z80_mreq_n;
+   o_SPEC256_CPU_IORQ_n <= z80_iorq_n;
+   o_SPEC256_CPU_RD_n <= z80_rd_n;
+   o_SPEC256_CPU_WR_n <= z80_wr_n;
+   o_SPEC256_CPU_WAIT_n <= z80_wait_n;
+   o_SPEC256_CPU_INT_n <= z80_int_n;
+   o_SPEC256_CPU_NMI_n <= z80_nmi_n;
+   o_SPEC256_CPU_BUSRQ_n <= z80_busrq_n;
+   o_SPEC256_CPU_DI <= cpu_di;
    o_DEBUG_NR_REG <= nr_wr_reg;
    o_DEBUG_NR_DAT <= nr_wr_dat;
    o_DEBUG_IORQ_n <= cpu_iorq_n;
@@ -1957,6 +2001,22 @@ gen_cpu_00: if (g_option(1 downto 0) = "00") generate
       A           => z80_a,         -- out
       D_i         => cpu_di,        -- in
       D_o         => z80_do,        -- out
+      -- NextTang: Spec256 state for the graphical lanes
+      Spec256_state_pc => o_SPEC256_PC,
+      Spec256_state_sp => o_SPEC256_SP,
+      Spec256_state_i => o_SPEC256_I,
+      Spec256_state_r => o_SPEC256_R,
+      Spec256_state_f => o_SPEC256_F,
+      Spec256_state_regs => o_SPEC256_REGS,
+      Spec256_state_iff1 => o_SPEC256_IFF1,
+      Spec256_state_iff2 => o_SPEC256_IFF2,
+      Spec256_state_halted => o_SPEC256_HALTED,
+      Spec256_state_imode => o_SPEC256_IMODE,
+      Spec256_state_xy => o_SPEC256_XY,
+      Spec256_state_int_cycle => o_SPEC256_INT_CYCLE,
+      Spec256_state_nmi_cycle => o_SPEC256_NMI_CYCLE,
+      Spec256_state_instruction_boundary => o_SPEC256_BOUNDARY,
+      Spec256_state_incdecz => o_SPEC256_INCDECZ,
       -- extended functions
       Z80N_dout_o       => Z80N_dout_s,
       Z80N_data_o       => Z80N_data_s,

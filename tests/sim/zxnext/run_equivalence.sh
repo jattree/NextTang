@@ -59,15 +59,16 @@ for source in "${core_sources[@]}"; do
         original_sources+=("$source")
     fi
 done
-# The original core has no enable ports to connect.
-grep -v -E 'i_CPU_CEN_[RF] => cen_[rf],' "$repo_root/tests/sim/zxnext/tb_zxnext_trace.vhd" \
-    >"$out/original_src/tb_zxnext_trace.vhd"
+# The original core has no enable ports to connect, and no Spec256 exports.
+grep -v -E 'i_CPU_CEN_[RF] => cen_[rf],' "$repo_root/tests/sim/zxnext/tb_zxnext_trace.vhd" |
+    sed '/-- SPEC256 begin/,/-- SPEC256 end/d' >"$out/original_src/tb_zxnext_trace.vhd"
 
 ghdl -i "${flags[@]}" --workdir="$out/original" "$out/bootrom.vhd" "${original_sources[@]}" \
     "${sim_sources[@]}" "$out/original_src/tb_zxnext_trace.vhd"
 ghdl -m "${flags[@]}" --workdir="$out/original" tb_zxnext_trace >/dev/null
 ghdl -i "${flags[@]}" --workdir="$out/patched" "$out/bootrom.vhd" "${core_sources[@]}" \
-    "${sim_sources[@]}" "$repo_root/tests/sim/zxnext/tb_zxnext_trace.vhd"
+    "${sim_sources[@]}" "$repo_root/rtl/cpu/nexttang_zxnext_spec256_lanes.vhd" \
+    "$repo_root/tests/sim/zxnext/tb_zxnext_trace.vhd"
 ghdl -m "${flags[@]}" --workdir="$out/patched" tb_zxnext_trace >/dev/null
 
 run() {

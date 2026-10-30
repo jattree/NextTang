@@ -144,6 +144,15 @@ entity T80N is
        Spec256_sync_nmi_cycle : in std_logic := '0';
        Spec256_master_addressing : in std_logic := '0';
        Spec256_master_regs : in std_logic_vector(159 downto 0) := (others => '0');
+       -- NextTang: a graphical lane in lockstep with its master takes every
+       -- control decision from it, live: conditional jumps, calls and returns
+       -- and block repeats from the master's flags (Spec256_master_regs is the
+       -- master's live register file, F in bits 15:8), and DJNZ from the
+       -- master's own zero test. Its data, ALU and carry stay its own. Lanes
+       -- then keep the master's timing exactly, with nothing holding the
+       -- master; the idea is Alberto Conde's (SPEC256_MISTER, CTRL_F/CTRL_B).
+       Spec256_master_control : in std_logic := '0';
+       Spec256_master_incdecz : in std_logic := '0';
       Spec256_state_pc : out std_logic_vector(15 downto 0);
       Spec256_state_sp : out std_logic_vector(15 downto 0);
       Spec256_state_i : out std_logic_vector(7 downto 0);
@@ -158,6 +167,7 @@ entity T80N is
        Spec256_state_int_cycle : out std_logic;
        Spec256_state_nmi_cycle : out std_logic;
        Spec256_state_instruction_boundary : out std_logic;
+       Spec256_state_incdecz : out std_logic;
        Spec256_instruction_access : out std_logic := '0';
       -- extended functions
       Z80N_dout_o       : out std_logic := '0';
@@ -260,6 +270,8 @@ architecture rtl of T80N is
    signal Auto_Wait_t1     : std_logic;
    signal Auto_Wait_t2     : std_logic;
    signal IncDecZ       : std_logic;
+   signal Control_F     : std_logic_vector(7 downto 0);  -- flags for control decisions
+   signal DJNZ_Z        : std_logic;                     -- DJNZ falls through
 
    -- ALU signals
    signal BusB          : std_logic_vector(7 downto 0);
@@ -387,7 +399,7 @@ begin
          IR => IR,
          ISet => ISet,
          MCycle => MCycle,
-         F => F,
+         F => Control_F,
          NMICycle => NMICycle,
          IntCycle => IntCycle,
          XY_State => XY_State,
@@ -487,6 +499,10 @@ begin
    Save_Mux <= BusB when ExchangeRp = '1' else
       DI_Reg when Save_ALU_r = '0' else
       ALU_Q;
+
+   Control_F <= Spec256_master_regs(15 downto 8) when Spec256_master_control = '1' else F;
+   DJNZ_Z <= Spec256_master_incdecz when Spec256_master_control = '1' else IncDecZ;
+   Spec256_state_incdecz <= IncDecZ;
 
    Spec256_master_bc <= Spec256_address_regs(23 downto 16) &
                         Spec256_address_regs(31 downto 24);
@@ -762,7 +778,7 @@ begin
                      if ISet = "10" and IR(7 downto 4) = x"B" and IR(2 downto 1) = "01" and MCycle = "011" and No_BTR = '0' then
                         -- INIR, INDR, OTIR, OTDR
                         A <= RegBusA_r;
-                     elsif No_PC = '0' or No_BTR = '1' or (I_DJNZ = '1' and IncDecZ = '1') or Mode > 1 then
+                     elsif No_PC = '0' or No_BTR = '1' or (I_DJNZ = '1' and DJNZ_Z = '1') or Mode > 1 then
                         Spec256_instruction_access_r <= '1';
                         A <= std_logic_vector(PC);
                      end if;
@@ -2022,9 +2038,9 @@ begin
             else
                Auto_Wait_t1 <= Auto_Wait or IORQ_i;
             end if;
-            No_BTR <= (I_BT and (not IR(4) or not F(Flag_P))) or
-                  (I_BC and (not IR(4) or F(Flag_Z) or not F(Flag_P))) or
-                  (I_BTR and (not IR(4) or F(Flag_Z)));
+            No_BTR <= (I_BT and (not IR(4) or not Control_F(Flag_P))) or
+                  (I_BC and (not IR(4) or Control_F(Flag_Z) or not Control_F(Flag_P))) or
+                  (I_BTR and (not IR(4) or Control_F(Flag_Z)));
             if TState = 2 then
                if SetEI = '1' then
                   IntE_FF1 <= '1';
@@ -2086,7 +2102,7 @@ begin
                         end if;
                      elsif (MCycle = MCycles) or
                         No_BTR = '1' or
-                        (MCycle = "010" and I_DJNZ = '1' and IncDecZ = '1') or
+                        (MCycle = "010" and I_DJNZ = '1' and DJNZ_Z = '1') or
                         ( MCycle = "111" and MCycles= "001" and Pre_XY_F_M = "001" ) then
                         M1_n <= '0';
                         MCycle <= "001";
