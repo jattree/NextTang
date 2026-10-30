@@ -365,7 +365,11 @@ entity zxnext is
       -- observation only.
       o_SPEC256_BANK5_WE      : out std_logic;
       o_SPEC256_BANK5_A       : out std_logic_vector(13 downto 0);
-      o_SPEC256_BANK5_D       : out std_logic_vector(7 downto 0)
+      o_SPEC256_BANK5_D       : out std_logic_vector(7 downto 0);
+      -- NextTang: the ULA's line within the 256 x 192 paper (0 on its first
+      -- line), on i_CLK_7, for the Spec256 overlay to find the paper in the
+      -- captured picture whatever the 50/60 Hz timing; observation only.
+      o_SPEC256_ULA_VC        : out std_logic_vector(8 downto 0)
    );
 end entity;
 
@@ -1900,6 +1904,7 @@ end generate;
    o_SPEC256_BANK5_WE <= cpu_bank5_sched and cpu_bank5_we;
    o_SPEC256_BANK5_A <= vram_bank5_a0;
    o_SPEC256_BANK5_D <= cpu_do;
+   o_SPEC256_ULA_VC <= std_logic_vector(vc);
    o_DEBUG_NR_REG <= nr_wr_reg;
    o_DEBUG_NR_DAT <= nr_wr_dat;
    o_DEBUG_IORQ_n <= cpu_iorq_n;

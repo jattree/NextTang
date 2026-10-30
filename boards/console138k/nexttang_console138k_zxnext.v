@@ -292,6 +292,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [7:0]  spec256_background_index;
     wire [23:0] spec256_cfg;
     wire [511:0] spec256_rules;
+    wire [8:0]  s256_ula_vc;
     wire        s256_bank5_write;
     wire [13:0] s256_bank5_address;
     wire [7:0]  s256_bank5_data;
@@ -511,7 +512,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_SPEC256_INCDECZ(s256_incdecz),
         .o_SPEC256_BANK5_WE(s256_bank5_write),
         .o_SPEC256_BANK5_A(s256_bank5_address),
-        .o_SPEC256_BANK5_D(s256_bank5_data)
+        .o_SPEC256_BANK5_D(s256_bank5_data),
+        .o_SPEC256_ULA_VC(s256_ula_vc)
     );
 
     // ------------------------------------------------------------ keyboard, SD
@@ -1263,11 +1265,20 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [8:0] overlay_y;
     wire [8:0] overlay_pixel;
 
+    // The paper's first line in the captured picture: the capture line on
+    // which the ULA's line counter reads 0, sampled mid-paper (x 180), where
+    // the pixel pipeline's few cycles of delay keep the ULA on the same line.
+    reg [8:0] spec256_paper_top = 9'd48;
+    always @(posedge clock_7)
+        if (capture_pixel_valid && capture_x == 9'd180 && s256_ula_vc == 9'd0)
+            spec256_paper_top <= capture_y;
+
     nexttang_spec256_overlay spec256_overlay (
         .clock_7(clock_7),
         .clock_28(clock_28),
         .reset(!machine_locked),
         .enable(spec256_graphics),
+        .paper_top(spec256_paper_top),
         .capture_frame_start(capture_frame_start),
         .capture_pixel_valid(capture_pixel_valid),
         .capture_x(capture_x),

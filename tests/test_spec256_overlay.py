@@ -1,13 +1,15 @@
 """The Spec256 overlay must colour exactly the paper, from the right plane bits.
 
 rtl/video/nexttang_spec256_overlay.v replaces captured pixels inside the
-256 x 192 paper at (52, 48) of the 360 x 288 window. The testbench sweeps the
+256 x 192 paper at (52, paper_top) of the 360 x 288 window. The testbench sweeps the
 whole window at 7 MHz, serves plane words one 28 MHz cycle after each
 address as the mirror does, and checks every output pixel against an
 independent model: the display-file address in its arithmetic form, the index
 built from bit (7 - x mod 8) of each plane's byte, 0xFF passing the core's
 pixel through, and everything outside the paper, or with the overlay off,
 unchanged. Outputs must keep their own coordinates.
+
+The last sweep moves the paper up to line 24, where the 60 Hz timing puts it.
 
 A third sweep runs the Spec256 DOS rule: indices 0xC0 to 0xFF take the cell's
 ink from the attributes, which the overlay copies from bank 5 writes to
@@ -41,6 +43,7 @@ module testbench;
     reg [7:0] palette_index = 0;
     reg [8:0] palette_rgb = 0;
     reg render_dos = 0, bank5_write = 0, bk_over_ff = 0;
+    reg [8:0] top = 9'd48;
     reg background_present = 0, background_write = 0;
     reg [15:0] background_address = 0;
     reg [7:0] background_index = 0;
@@ -56,7 +59,7 @@ module testbench;
         .frame_start(o_frame), .pixel_valid(o_valid), .x(ox), .y(oy), .pixel(opixel),
         .plane_address(plane_address), .plane_data(plane_data),
         .palette_write(palette_write), .palette_index(palette_index), .palette_rgb(palette_rgb),
-        .render_dos(render_dos), .bk_over_ff(bk_over_ff),
+        .paper_top(top), .render_dos(render_dos), .bk_over_ff(bk_over_ff),
         .background_present(background_present), .background_write(background_write),
         .background_address(background_address), .background_index(background_index),
         .bank5_write(bank5_write), .bank5_address(bank5_address),
@@ -101,10 +104,10 @@ module testbench;
         integer px, py, a, j;
         reg [7:0] index, b, ink;
         begin
-            if (!on || x < 52 || x >= 308 || y < 48 || y >= 240) begin
+            if (!on || x < 52 || x >= 308 || y < top || y >= top + 192) begin
                 expected = core_pixel(x, y);
             end else begin
-                px = x - 52; py = y - 48;
+                px = x - 52; py = y - top;
                 a = 16'h4000 + ((py & 8'hc0) << 5) + ((py & 7) << 8) + ((py & 8'h38) << 2) + (px >> 3);
                 for (j = 0; j < 8; j = j + 1) begin
                     b = plane_byte(a, j);
@@ -153,16 +156,16 @@ module testbench;
             if (o_frame !== (ox == 0 && oy == 0))
                 $fatal(1, "frame start out of step at (%0d,%0d)", ox, oy);
             checked = checked + 1;
-            if (enable && !render_dos && ox >= 52 && ox < 308 && oy >= 48 && oy < 240) begin
+            if (enable && !render_dos && ox >= 52 && ox < 308 && oy >= top && oy < top + 192) begin
                 if (opixel === core_pixel(ox, oy)) passed_ff = passed_ff + 1;
                 else coloured = coloured + 1;
             end
             if (enable && render_dos && !background_present && ox >= 52 && ox < 308 &&
-                oy >= 48 && oy < 240 && opixel !== expected(ox, oy, 1, 0))
+                oy >= top && oy < top + 192 && opixel !== expected(ox, oy, 1, 0))
                 inked = inked + 1;
-            if (enable && background_present && ox >= 52 && ox < 308 && oy >= 48 && oy < 240 &&
-                opixel === palette_of(background_of(ox - 52, oy - 48)) &&
-                background_of(ox - 52, oy - 48) != 8'h00)
+            if (enable && background_present && ox >= 52 && ox < 308 && oy >= top && oy < top + 192 &&
+                opixel === palette_of(background_of(ox - 52, oy - top)) &&
+                background_of(ox - 52, oy - top) != 8'h00)
                 shown_background = shown_background + 1;
         end
     end
@@ -199,6 +202,9 @@ module testbench;
         sweep(1, 1);
         bk_over_ff = 1;
         sweep(1, 0);
+        // The 60 Hz paper, 24 lines higher.
+        top = 9'd24;
+        sweep(1, 1);
         $display("OVERLAY_PASS checked %0d coloured %0d passthrough %0d inked %0d background %0d",
                  checked, coloured, passed_ff, inked, shown_background);
         $finish;
@@ -214,7 +220,7 @@ class Spec256OverlayTest(unittest.TestCase):
         counts = output.split("OVERLAY_PASS ")[1].split()
         checked, coloured, passthrough = int(counts[1]), int(counts[3]), int(counts[5])
         inked, background = int(counts[7]), int(counts[9])
-        self.assertEqual(checked, 5 * 360 * 288, output)
+        self.assertEqual(checked, 6 * 360 * 288, output)
         self.assertGreater(background, 1000, output)
         self.assertGreater(coloured, 40000, output)
         self.assertGreater(passthrough, 100, output)
