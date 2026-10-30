@@ -44,6 +44,16 @@
 -- exactly. The opcodes are the
 -- master's, taken from its opcode register as each opcode fetch ends.
 --
+-- Per-plane read rules (the .256's RUL1 rules, as SPEC256_MISTER applies
+-- them): when a game has any, the lanes compute addresses from their own
+-- registers, and a memory read whose master address page lies in a rule's
+-- window, with the instruction's opcode passing the rule's filter, reads each
+-- plane at that lane's own address (unless a lane's address is in the ROM)
+-- with the rule's XOR applied. Every other access, and every write, uses the
+-- master's address, as before. A game without rules is unchanged: the lanes
+-- address through the master's registers. graphics_address carries each
+-- lane's memory address, the master's except on such a read.
+--
 -- desync is set for good if any lane's bus strobes ever differ from the
 -- master's a cycle before, or if a lane reads or writes memory or I/O at an
 -- address other than the master's: lockstep lost. Every lane addresses
@@ -70,6 +80,11 @@ entity nexttang_zxnext_spec256_lanes is
         rom_planes     : in std_logic := '0';
         -- The master's accumulator after arithmetic (Spec256 DOS games).
         arith_mono     : in std_logic := '0';
+        -- RUL1's eight rules, rule i in bits 64i+63..64i, byte j of it in
+        -- 8j+7..8j: first page, last page, opcode, opcode mask, flags (bit 0
+        -- enabled, bit 1 negate the opcode test, bit 2 master opcode rule,
+        -- not applied here), XOR, two bytes for master opcode rules.
+        rules          : in std_logic_vector(511 downto 0) := (others => '0');
 
         -- The master, as the core sees it.
         master_a        : in  std_logic_vector(15 downto 0);
@@ -173,6 +188,15 @@ architecture rtl of nexttang_zxnext_spec256_lanes is
     signal prefix : std_logic_vector(1 downto 0) := "00";
     signal acc_written : std_logic := '0';  -- the last whole instruction computed A
     signal sync_acc : std_logic := '0';     -- for the sync load in progress
+
+    signal ir_d : std_logic_vector(7 downto 0) := (others => '0');
+    signal rules_active : std_logic;
+    signal rule_hit : std_logic;
+    signal rule_xor : std_logic_vector(7 downto 0);
+    signal own_read : std_logic;            -- this read uses the lanes' own addresses
+    signal own_read_q : std_logic := '0';
+    signal xor_q : std_logic_vector(7 downto 0) := (others => '0');
+    signal memory_address : word_array;
 begin
     process (clock_28)
     begin
@@ -190,10 +214,87 @@ begin
             halted_d <= master_halted; imode_d <= master_imode; xy_d <= master_xy;
             int_cycle_d <= master_int_cycle; nmi_cycle_d <= master_nmi_cycle;
             boundary_d <= master_instruction_boundary; incdecz_d <= master_incdecz;
+            ir_d <= master_ir;
         end if;
         if falling_edge(clock_28) then
             cen_f_d <= cen_f;
             wait_fall_d <= master_wait_n;
+        end if;
+    end process;
+
+    -- The rules apply to plain rules only (master opcode rules are not
+    -- implemented); the first rule that hits, from rule 0, gives the XOR.
+    process (rules)
+        variable any : std_logic;
+    begin
+        any := '0';
+        for i in 0 to 7 loop
+            if rules(64 * i + 32) = '1' and rules(64 * i + 34) = '0' then
+                any := '1';
+            end if;
+        end loop;
+        rules_active <= any;
+    end process;
+
+    process (rules, a_d, ir_d)
+        variable hit : std_logic;
+        variable x : std_logic_vector(7 downto 0);
+        variable opcode_match : boolean;
+    begin
+        hit := '0';
+        x := (others => '0');
+        for i in 7 downto 0 loop
+            opcode_match := ((ir_d xor rules(64 * i + 23 downto 64 * i + 16)) and
+                             rules(64 * i + 31 downto 64 * i + 24)) = x"00";
+            if rules(64 * i + 33) = '1' then
+                opcode_match := not opcode_match;
+            end if;
+            if rules(64 * i + 32) = '1' and rules(64 * i + 34) = '0' and
+               unsigned(a_d(15 downto 8)) >= unsigned(rules(64 * i + 7 downto 64 * i)) and
+               unsigned(a_d(15 downto 8)) <= unsigned(rules(64 * i + 15 downto 64 * i + 8)) and
+               opcode_match then
+                hit := '1';
+                x := rules(64 * i + 47 downto 64 * i + 40);
+            end if;
+        end loop;
+        rule_hit <= hit;
+        rule_xor <= x;
+    end process;
+
+    -- A rule read: a memory read by the lanes (lane 0's strobes stand for all
+    -- eight) that hits, with no lane's own address in the ROM.
+    process (graphics_d, rules_active, rule_hit, lane_mreq_n, lane_rd_n, lane_m1_n, lane_address)
+        variable any_rom : boolean;
+    begin
+        any_rom := false;
+        for lane in 0 to 7 loop
+            if lane_address(lane)(15 downto 14) = "00" then
+                any_rom := true;
+            end if;
+        end loop;
+        if graphics_d = '1' and rules_active = '1' and rule_hit = '1' and
+           lane_mreq_n(0) = '0' and lane_rd_n(0) = '0' and lane_m1_n(0) = '1' and not any_rom then
+            own_read <= '1';
+        else
+            own_read <= '0';
+        end if;
+    end process;
+
+    memory_addresses : for lane in 0 to 7 generate
+        memory_address(lane) <= lane_address(lane) when rules_active = '0' or own_read = '1' else a_d;
+    end generate;
+
+    -- The planes return the word for the address of the previous edge, so the
+    -- XOR for that read is registered with it.
+    process (clock_28)
+    begin
+        if rising_edge(clock_28) then
+            own_read_q <= own_read;
+            if own_read = '1' then
+                xor_q <= rule_xor;
+            else
+                xor_q <= (others => '0');
+            end if;
         end if;
     end process;
 
@@ -260,7 +361,8 @@ begin
                        lane_wr_n(lane) /= wr_d then
                         desync_r <= '1';
                     end if;
-                    if ((lane_mreq_n(lane) = '0' and (lane_rd_n(lane) = '0' or lane_wr_n(lane) = '0')) or
+                    if rules_active = '0' and
+                       ((lane_mreq_n(lane) = '0' and (lane_rd_n(lane) = '0' or lane_wr_n(lane) = '0')) or
                         lane_iorq_n(lane) = '0') and lane_address(lane) /= a_d then
                         desync_r <= '1';
                     end if;
@@ -273,14 +375,14 @@ begin
         signal own_data, data_in_fall : std_logic_vector(7 downto 0);
         signal from_master : boolean;
     begin
-        graphics_address(lane * 16 + 15 downto lane * 16) <= lane_address(lane);
+        graphics_address(lane * 16 + 15 downto lane * 16) <= memory_address(lane);
         graphics_write(lane) <= graphics_d and not lane_wr_n(lane) and not lane_mreq_n(lane);
         graphics_iorq(lane) <= graphics_d and not lane_iorq_n(lane);
-        own_data <= graphics_data_in(lane * 8 + 7 downto lane * 8);
+        own_data <= graphics_data_in(lane * 8 + 7 downto lane * 8) xor xor_q;
         from_master <= graphics_d = '0' or lane_instruction_access(lane) = '1' or
                        lane_iorq_n(lane) = '0' or
-                       (lane_address(lane)(15 downto 14) = "00" and
-                        not (rom_planes = '1' and unsigned(lane_address(lane)(13 downto 8)) >= 16#3D#));
+                       (memory_address(lane)(15 downto 14) = "00" and
+                        not (rom_planes = '1' and unsigned(memory_address(lane)(13 downto 8)) >= 16#3D#));
         data_in_fall <= master_di when from_master else own_data;
 
         cpu : entity work.T80Na
@@ -328,7 +430,7 @@ begin
                 Spec256_sync_int_cycle => int_cycle_d,
                 Spec256_sync_nmi_cycle => nmi_cycle_d,
                 Spec256_sync_acc => sync_acc,
-                Spec256_master_addressing => graphics_d,
+                Spec256_master_addressing => graphics_d and not rules_active,
                 Spec256_master_regs => regs_d,
                 Spec256_master_control => graphics_d and master_control,
                 Spec256_master_incdecz => incdecz_d,

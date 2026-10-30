@@ -21,7 +21,9 @@
 // plane per memory: Spectrum address x is word x - 0x4000 in all eight, so
 // one access reaches every plane. A 48K Spec256 game has no Layer 2, so in
 // spec256_mode the lanes take port A, which the CPU's writes otherwise use,
-// and the colour overlay takes port B, which Layer 2 otherwise reads.
+// and the colour overlay takes port B, which Layer 2 otherwise reads. Each
+// lane addresses its own plane, so a per-plane read rule can read the eight
+// planes at eight addresses in one access.
 // Reads outside both return OUTSIDE. That byte is not reliably transparent:
 // the core decides transparency after the palette, and in 640x256 each nibble
 // is a pixel. The board therefore tells the core which units are mirrored, and
@@ -55,10 +57,11 @@ module nexttang_layer2_mirror #(
     output reg         check_hit,
 
     // Spec256: the lanes on port A, the overlay on port B, both by Spectrum
-    // address (0x4000 to 0xFFFF), lane k's byte in bits 8k+7:8k. Reads return
-    // the word at the address of the previous edge.
+    // address (0x4000 to 0xFFFF), lane k's byte in bits 8k+7:8k and its
+    // address in 16k+15:16k. Reads return the word at the address of the
+    // previous edge.
     input  wire        spec256_mode,
-    input  wire [15:0] lane_address,
+    input  wire [127:0] lane_address,
     input  wire        lane_write,
     input  wire [63:0] lane_write_data,
     output wire [63:0] lane_read_data,
@@ -93,9 +96,7 @@ module nexttang_layer2_mirror #(
     // Copy word and memory for a Layer 2 address; Spectrum word for a plane.
     wire [WORD_BITS-1:0] write_word = {slot(write_unit), write_address[13:3]};
     wire [WORD_BITS-1:0] read_word = {slot(read_unit), read_address[13:3]};
-    wire [WORD_BITS-1:0] lane_word = lane_address - 16'h4000;
     wire [WORD_BITS-1:0] overlay_word = overlay_address - 16'h4000;
-    wire lane_in_planes = lane_address[15:14] != 2'b00;
 
     reg read_hit_q = 1'b0;
     reg [2:0] read_byte_q = 3'd0;
@@ -117,6 +118,9 @@ module nexttang_layer2_mirror #(
         for (k = 0; k < 8; k = k + 1) begin : memory
             wire layer2_write = write_request && write_n_read && hit(write_unit) &&
                                 write_address[2:0] == k;
+            wire [15:0] lane_k_address = lane_address[16*k +: 16];
+            wire [WORD_BITS-1:0] lane_word = lane_k_address - 16'h4000;
+            wire lane_in_planes = lane_k_address[15:14] != 2'b00;
             nexttang_block_ram #(
                 .ADDRESS_BITS(WORD_BITS),
                 .DATA_BITS(8),

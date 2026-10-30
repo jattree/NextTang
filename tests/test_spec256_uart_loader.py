@@ -5,7 +5,8 @@ gives them. Raw plane and palette bytes, including ones that look like other
 commands ("R", "S", "G"), must land as data while payload is high, and the
 mode, rules flags, CFG, arm and disarm commands must act. A background's
 49152 bytes, including command letters, land in order as background writes,
-and H drops the background.
+H drops the background, and Y's 64 rule bytes land in order, also dropped by
+H.
 """
 
 from pathlib import Path
@@ -31,6 +32,7 @@ module testbench;
     wire [15:0] background_address;
     wire [7:0] background_index;
     wire [23:0] cfg;
+    wire [511:0] rules;
     integer backgrounds = 0, background_errors = 0;
     integer planes = 0, palettes = 0, payload_bytes = 0, i;
     reg [63:0] first_word, second_word;
@@ -44,7 +46,8 @@ module testbench;
         .palette_write(palette_write), .palette_index(palette_index), .palette_rgb(palette_rgb),
         .arm(arm), .arm_pc(arm_pc), .disarm(disarm), .rules_flags(rules_flags),
         .background_write(background_write), .background_address(background_address),
-        .background_index(background_index), .background_present(background_present), .cfg(cfg));
+        .background_index(background_index), .background_present(background_present), .cfg(cfg),
+        .rules(rules));
 
     always #5 clock = ~clock;
 
@@ -107,9 +110,15 @@ module testbench;
         end
         repeat (3) @(negedge clock);
         if (payload !== 0) $fatal(1, "still in payload after the background");
+        send("Y");
+        for (i = 0; i < 64; i = i + 1) send(i + 8'h40);
+        if (rules[7:0] !== 8'h40 || rules[511:504] !== 8'h7f || rules[263:256] !== 8'h60)
+            $fatal(1, "Y rules %h", rules);
+        if (payload !== 0) $fatal(1, "still in payload after the rules");
         send_string("Gab12", 5);
         send("H");
         if (background_present !== 0) $fatal(1, "H kept the background");
+        if (rules !== 512'd0) $fatal(1, "H kept the rules");
         send_string("S0", 2);
         $display("LOADER planes %0d palettes %0d payload %0d mode %0d armpc %h", planes, palettes, payload_bytes, mode, arm_pc);
         $display("WORDS %h@%h %h@%h LASTPAL %h", first_word, first_address, second_word, second_address, palette_last);
@@ -123,7 +132,7 @@ endmodule
 class Spec256UartLoaderTest(unittest.TestCase):
     def test_loader_commands(self) -> None:
         output = run_testbench(TESTBENCH, *SOURCES)
-        self.assertIn("LOADER planes 2 palettes 256 payload 49680 mode 0 armpc ab12", output, output)
+        self.assertIn("LOADER planes 2 palettes 256 payload 49744 mode 0 armpc ab12", output, output)
         self.assertIn("BACKGROUND 49152 errors 0", output, output)
         # The first word's bytes, last byte first: 1..5 after 'G', 'S', 'R'.
         self.assertIn("WORDS 0504030201475352@4000", output, output)

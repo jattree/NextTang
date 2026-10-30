@@ -19,6 +19,8 @@
 //                   palette index per pixel, row by row (0: none)
 //   Cuuddff         the game's .CFG colours: UpColorsMixed, DownColorsMixed
 //                   and flags (bit 3 BkOverFF, bit 7 CFG present)
+//   Y               then 64 raw bytes: RUL1's eight rules (bytes 8 to 71 of
+//                   the block), cleared by H
 //   H               colour mode off
 //
 // Hex digits are 0-9 and a-f or A-F. While raw bytes are arriving, payload
@@ -52,7 +54,8 @@ module nexttang_spec256_uart_loader (
     output reg  [15:0] background_address,
     output reg  [7:0]  background_index,
     output reg         background_present,   // set by B, cleared by H
-    output reg  [23:0] cfg                   // up, down, flags
+    output reg  [23:0] cfg,                  // up, down, flags
+    output reg  [511:0] rules                // rule i in 64i+63..64i, byte j at 8j
 );
     localparam [2:0] IDLE = 3'd0;
     localparam [2:0] MODE = 3'd1;
@@ -60,6 +63,7 @@ module nexttang_spec256_uart_loader (
     localparam [2:0] PLANES = 3'd3;
     localparam [2:0] PALETTE = 3'd4;
     localparam [2:0] BACKGROUND = 3'd5;
+    localparam [2:0] RULES = 3'd6;
 
     reg [2:0]  state;
     reg [7:0]  command;
@@ -76,7 +80,8 @@ module nexttang_spec256_uart_loader (
                     (byte_in >= "A" && byte_in <= "F");
     wire [3:0] digit = byte_in <= "9" ? byte_in[3:0] : byte_in[3:0] + 4'd9;
 
-    assign payload = state == PLANES || state == PALETTE || state == BACKGROUND;
+    assign payload = state == PLANES || state == PALETTE || state == BACKGROUND ||
+                     state == RULES;
 
     always @(posedge clock) begin
         plane_write <= 1'b0;
@@ -91,6 +96,7 @@ module nexttang_spec256_uart_loader (
             rules_flags <= 8'd0;
             background_present <= 1'b0;
             cfg <= 24'd0;
+            rules <= 512'd0;
         end else if (byte_valid) begin
             case (state)
                 IDLE: begin
@@ -104,7 +110,8 @@ module nexttang_spec256_uart_loader (
                         "C": begin digits_left <= 4'd6; state <= HEX; end
                         "B": begin next_address <= 16'd0; background_present <= 1'b1; state <= BACKGROUND; end
                         "Q": begin palette_bytes <= 10'd0; state <= PALETTE; end
-                        "H": begin disarm <= 1'b1; background_present <= 1'b0; end
+                        "H": begin disarm <= 1'b1; background_present <= 1'b0; rules <= 512'd0; end
+                        "Y": begin next_address <= 16'd0; state <= RULES; end
                         default: ;
                     endcase
                 end
@@ -174,6 +181,13 @@ module nexttang_spec256_uart_loader (
                     background_index <= byte_in;
                     next_address <= next_address + 16'd1;
                     if (next_address == 16'd49151)
+                        state <= IDLE;
+                end
+
+                RULES: begin
+                    rules <= {byte_in, rules[511:8]};
+                    next_address <= next_address + 16'd1;
+                    if (next_address == 16'd63)
                         state <= IDLE;
                 end
 

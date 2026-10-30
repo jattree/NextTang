@@ -17,6 +17,12 @@ monochrome arithmetic (Spec256 DOS games) the first stores the master's A in
 every plane, since ADD n is on the DOS program's list; AND is not, so the
 second stays each lane's own.
 
+Then HL is loaded from the planes, so each lane holds its own pointer
+(0x9100 + 0x10 k), and the program reads through it twice. With a RUL1 rule
+for page 0x91 and opcode 7E (XOR 0F), LD A,(HL) reads each plane at its
+lane's own address with the XOR; LD B,(HL) fails the opcode filter and reads
+at the master's address. Without the rule both read at the master's address.
+
 Checked:
 - every lane's bus strobes and data addresses equal the master's a 28 MHz
   cycle earlier (the lanes' desync flag stays clear), with nothing ever
@@ -86,12 +92,20 @@ PROGRAM = {
     0x0064: [0x3A, 0x30, 0x80],        # LD A,(8030)
     0x0067: [0xA7],                    # AND A           not on the list
     0x0068: [0x32, 0x04, 0xA0],        # LD (A004),A     lanes k+1 either way
-    0x006B: [0x18, 0xFE],              # JR $
+    0x006B: [0x2A, 0x40, 0x80],        # LD HL,(8040)    master 9100, lanes 9100+10k
+    0x006E: [0x7E],                    # LD A,(HL)       rule: own address, XOR 0F
+    0x006F: [0x32, 0x05, 0xA0],        # LD (A005),A
+    0x0072: [0x46],                    # LD B,(HL)       opcode 46: the master's address
+    0x0073: [0x78],                    # LD A,B
+    0x0074: [0x32, 0x06, 0xA0],        # LD (A006),A
+    0x0077: [0x18, 0xFE],              # JR $
     0x1234: [0x50, 0x00],              # IM2 table entry for vector 34
 }
 
 
-def testbench(divide: int, graphics_from: int, control: bool, rom: bool, mono: bool) -> str:
+def testbench(divide: int, graphics_from: int, control: bool, rom: bool, mono: bool,
+              rule: bool) -> str:
+    rule0 = "00000F01FF7E9191" if rule else "0000000000000000"
     code = "\n".join(
         f"        m(16#{address + i:04x}#) := x\"{byte:02x}\";"
         for address, data in PROGRAM.items() for i, byte in enumerate(data))
@@ -116,6 +130,7 @@ architecture sim of testbench is
         m(16#8023#) := x"55";
         m(16#8030#) := x"00"; m(16#8031#) := x"01";
         m(16#3D08#) := x"3C";
+        m(16#8040#) := x"00"; m(16#8041#) := x"91";
         return m;
     end function;
 
@@ -129,6 +144,12 @@ architecture sim of testbench is
             p(k)(16#8030#) := std_logic_vector(to_unsigned(k + 1, 8));
             p(k)(16#8031#) := x"00";
             p(k)(16#3D08#) := std_logic_vector(to_unsigned(16#C0# + k, 8));
+            p(k)(16#8040#) := std_logic_vector(to_unsigned(16#10# * k, 8));
+            p(k)(16#8041#) := x"91";
+            p(k)(16#9100#) := x"55";
+        end loop;
+        for k in 0 to 7 loop
+            p(k)(16#9100# + 16#10# * k) := std_logic_vector(to_unsigned(16#A0# + k, 8));
         end loop;
         return p;
     end function;
@@ -221,6 +242,7 @@ begin
         port map (
             clock_28 => clock, cen_r => cen_r, cen_f => cen_f, reset_n => reset_n,
             graphics => graphics, master_control => control, rom_planes => {"'1'" if rom else "'0'"}, arith_mono => {"'1'" if mono else "'0'"},
+            rules => std_logic_vector'(447 downto 0 => '0') & x"{rule0}",
             master_a => address, master_m1_n => m1_n, master_mreq_n => mreq_n, master_iorq_n => iorq_n,
             master_rd_n => rd_n, master_wr_n => wr_n, master_wait_n => '1',
             master_int_n => int_n, master_nmi_n => '1', master_busrq_n => '1',
@@ -272,7 +294,7 @@ begin
             end if;
             previous_m1 := m1_d;
             regs_d := regs; m1_d := m1_n; boundary_d := boundary;
-            if address = x"006B" and m1_n = '0' and graphics = '1' then
+            if address = x"0077" and m1_n = '0' and graphics = '1' then
                 reached := true;
                 exit;
             end if;
@@ -285,6 +307,8 @@ begin
                " A002 " & integer'image(to_integer(unsigned(memory(16#A002#)))) &
                " A003 " & integer'image(to_integer(unsigned(memory(16#A003#)))) &
                " A004 " & integer'image(to_integer(unsigned(memory(16#A004#)))) &
+               " A005 " & integer'image(to_integer(unsigned(memory(16#A005#)))) &
+               " A006 " & integer'image(to_integer(unsigned(memory(16#A006#)))) &
                " MASTER_9000_9004 " & integer'image(to_integer(unsigned(memory(16#9000#)))) & " " &
                integer'image(to_integer(unsigned(memory(16#9003#)))) & " " &
                integer'image(to_integer(unsigned(memory(16#9004#))));
@@ -295,6 +319,8 @@ begin
                    " A002 " & integer'image(to_integer(unsigned(planes(k)(16#A002#)))) &
                    " A003 " & integer'image(to_integer(unsigned(planes(k)(16#A003#)))) &
                    " A004 " & integer'image(to_integer(unsigned(planes(k)(16#A004#)))) &
+                   " A005 " & integer'image(to_integer(unsigned(planes(k)(16#A005#)))) &
+                   " A006 " & integer'image(to_integer(unsigned(planes(k)(16#A006#)))) &
                    " 9000 " & integer'image(to_integer(unsigned(planes(k)(16#9000#)))) &
                    " 9003 " & integer'image(to_integer(unsigned(planes(k)(16#9003#)))) &
                    " 9004 " & integer'image(to_integer(unsigned(planes(k)(16#9004#))));
@@ -308,11 +334,11 @@ end architecture;
 
 
 def run(divide: int, graphics_from: int = 0x0003, control: bool = True, rom: bool = True,
-        mono: bool = False) -> str:
+        mono: bool = False, rule: bool = False) -> str:
     with tempfile.TemporaryDirectory() as directory:
         work = f"--workdir={directory}"
         bench = Path(directory) / "testbench.vhd"
-        bench.write_text(testbench(divide, graphics_from, control, rom, mono))
+        bench.write_text(testbench(divide, graphics_from, control, rom, mono, rule))
         for step in (("-a", *FLAGS, work, *map(str, SOURCES), str(bench)),
                      ("-e", *FLAGS, work, "testbench"),
                      ("-r", *FLAGS, work, "testbench", "--ieee-asserts=disable")):
@@ -324,12 +350,14 @@ def run(divide: int, graphics_from: int = 0x0003, control: bool = True, rom: boo
 
 @unittest.skipUnless(shutil.which("ghdl"), "ghdl is not installed")
 class Spec256LanesTest(unittest.TestCase):
-    def check_graphics_run(self, output: str, rom: bool = True, mono: bool = False) -> None:
+    def check_graphics_run(self, output: str, rom: bool = True, mono: bool = False,
+                           rule: bool = False) -> None:
         self.assertIn("DESYNC '0'", output, output)
         self.assertIn("REACHED_END true", output, output)
         # The master: no JR, DJNZ 64 times, LDIR of 4 bytes, CALL Z taken, RET C.
-        self.assertIn("MASTER_A000 128 A001 0 A002 60 A003 16 A004 0 MASTER_9000_9004 17 20 0",
-                      output, output)
+        # The master's own memory: 9100 holds 0, so both reads give 0.
+        self.assertIn("MASTER_A000 128 A001 0 A002 60 A003 16 A004 0 A005 0 A006 0 "
+                      "MASTER_9000_9004 17 20 0", output, output)
         for k in range(8):
             # Each lane: its own bytes, the master's count of four, and its
             # own RRCA result (plane 8031 is 0) in the final store; the
@@ -337,7 +365,10 @@ class Spec256LanesTest(unittest.TestCase):
             # font byte its own plane's with a coloured font, else the master's.
             font = 0xC0 + k if rom else 0x3C
             added = 0x10 if mono else k + 1 + 0x10
+            at_master = 0xA0 if k == 0 else 0x55
+            ruled = (0xA0 + k) ^ 0x0F if rule else at_master
             self.assertIn(f"LANE {k} A000 0 A001 {k + 1} A002 {font} A003 {added} A004 {k + 1} "
+                          f"A005 {ruled} A006 {at_master} "
                           f"9000 {0x30 + 16 * k} 9003 {0x33 + 16 * k} 9004 0", output, output)
 
     def test_lanes_hold_lockstep_at_3_5_mhz(self) -> None:
@@ -357,6 +388,12 @@ class Spec256LanesTest(unittest.TestCase):
 
     def test_monochrome_arithmetic_at_14_mhz(self) -> None:
         self.check_graphics_run(run(2, mono=True), mono=True)
+
+    def test_read_rule_at_3_5_mhz(self) -> None:
+        self.check_graphics_run(run(8, rule=True), rule=True)
+
+    def test_read_rule_at_14_mhz(self) -> None:
+        self.check_graphics_run(run(2, rule=True), rule=True)
 
     def test_follow_mode_lanes_equal_the_master(self) -> None:
         output = run(8, graphics_from=0xFFFF)

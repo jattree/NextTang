@@ -28,7 +28,8 @@ module testbench;
     reg [20:0] read_address = 0;
     wire [7:0] read_data;
     reg spec256_mode = 0;
-    reg [15:0] lane_address = 0, overlay_address = 0;
+    reg [127:0] lane_address = 0;
+    reg [15:0] overlay_address = 0;
     reg lane_write = 0;
     reg [63:0] lane_write_data = 0;
     wire [63:0] lane_read_data, overlay_data;
@@ -143,13 +144,15 @@ endmodule
 # In spec256_mode the board's 24-bank copy is eight 48 KiB colour planes:
 # a lane write at a Spectrum address puts each lane's byte in its own plane,
 # the lanes and the overlay read all eight back at once, writes below 0x4000
-# are dropped, and leaving the mode gives Layer 2 its byte view again.
+# are dropped, and leaving the mode gives Layer 2 its byte view again. Each
+# lane has its own address: eight different addresses read each plane's byte
+# at its own address in one access (a Spec256 per-plane read rule).
 SPEC256_TESTBENCH = (
     WIDE_TESTBENCH.split("    initial begin\n        cpu_cycle(21'h060000")[0]
     + r"""    task automatic plane_write(input [15:0] address, input [63:0] data);
         begin
             @(negedge clock_28);
-            lane_address = address; lane_write_data = data; lane_write = 1;
+            lane_address = {8{address}}; lane_write_data = data; lane_write = 1;
             @(negedge clock_28);
             lane_write = 0;
         end
@@ -161,16 +164,21 @@ SPEC256_TESTBENCH = (
         plane_write(16'hffff, 64'h8877665544332211);
         plane_write(16'h3fff, 64'hdeadbeefdeadbeef);
         @(negedge clock_28);
-        lane_address = 16'h4000; overlay_address = 16'hffff;
+        lane_address = {8{16'h4000}}; overlay_address = 16'hffff;
         @(negedge clock_28);
         if (lane_read_data !== 64'h0807060504030201)
             $fatal(1, "lanes read %h at 4000", lane_read_data);
         if (overlay_data !== 64'h8877665544332211)
             $fatal(1, "overlay read %h at ffff", overlay_data);
-        lane_address = 16'h4001;
+        lane_address = {8{16'h4001}};
         @(negedge clock_28);
         if (lane_read_data === 64'hdeadbeefdeadbeef)
             $fatal(1, "a write below 0x4000 landed in the planes");
+        // Lanes 0-3 at 0x4000, lanes 4-7 at 0xffff: each plane's own byte.
+        lane_address = {{4{16'hffff}}, {4{16'h4000}}};
+        @(negedge clock_28);
+        if (lane_read_data !== 64'h8877665504030201)
+            $fatal(1, "per-lane addresses read %h", lane_read_data);
         // Layer 2's view: copy byte k of word 0 is plane k at 0x4000.
         spec256_mode = 0;
         expect_read(21'h060000, 8'h01);

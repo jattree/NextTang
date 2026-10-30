@@ -278,7 +278,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     reg         spec256_graphics = 1'b0;
     wire        spec256_desync;
     wire        spec256_payload;
-    wire [15:0] spec256_lane_address;
+    wire [127:0] spec256_lane_address;
     wire        spec256_lane_write;
     wire [63:0] spec256_lane_write_data;
     wire [63:0] spec256_plane_read;
@@ -291,6 +291,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [15:0] spec256_background_address;
     wire [7:0]  spec256_background_index;
     wire [23:0] spec256_cfg;
+    wire [511:0] spec256_rules;
     wire        s256_bank5_write;
     wire [13:0] s256_bank5_address;
     wire [7:0]  s256_bank5_data;
@@ -825,6 +826,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .master_control(1'b1),
         .rom_planes(spec256_rom_planes),
         .arith_mono(spec256_rules_flags[1]),
+        .rules(spec256_rules),
         .master_m1_n(s256_m1_n),
         .master_mreq_n(s256_mreq_n),
         .master_iorq_n(s256_iorq_n),
@@ -894,7 +896,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     // 0's address serves all eight planes (the desync check enforces it).
     // The loader writes only while colour mode is off, when lanes write
     // nothing.
-    assign spec256_lane_address = loader_plane_write ? loader_plane_address : lanes_address[15:0];
+    assign spec256_lane_address = loader_plane_write ? {8{loader_plane_address}} : lanes_address;
     assign spec256_lane_write = loader_plane_write || lanes_write[0];
     assign spec256_lane_write_data = loader_plane_write ? loader_plane_data : lanes_write_data;
 
@@ -1835,7 +1837,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .background_address(spec256_background_address),
         .background_index(spec256_background_index),
         .background_present(spec256_background_present),
-        .cfg(spec256_cfg)
+        .cfg(spec256_cfg),
+        .rules(spec256_rules)
     );
 `else
     assign spec256_payload = 1'b0;
@@ -1847,6 +1850,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     assign spec256_background_address = 16'd0;
     assign spec256_background_index = 8'd0;
     assign spec256_cfg = 24'd0;
+    assign spec256_rules = 512'd0;
 `endif
 
     reg [2:0]  trigger_digits_left = 3'd0;

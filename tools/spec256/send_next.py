@@ -15,7 +15,8 @@ one, its coloured ROM character set (GRX1, 0x3D00 to 0x3FFF), sent as plane
 words from 0x3D00. Only the 48K banks are sent: 5, 2 and 0 at 0x4000, 0x8000
 and 0xC000. H goes first, so a previous game's font and background are
 dropped. A .256's background (256 x 192 palette indices, 0 for none) goes
-with B when it has any pixel, and its .CFG colours with C.
+with B when it has any pixel, its .CFG colours with C, and RUL1's eight
+per-plane read rules with Y.
 
 Without --palette a test palette is sent, the index's bits spread over RGB333,
 enough to see whether the planes land in the right places.
@@ -101,6 +102,15 @@ def game_cfg(game: bytes) -> bytes:
     return game[CFG_AT : CFG_AT + 3]
 
 
+def game_rules(game: bytes) -> bytes | None:
+    """RUL1's eight 8-byte rules, or None without RUL1 version 1 or rules."""
+    if game[RUL1_AT : RUL1_AT + 4] != b"RUL1" or game[RUL1_AT + 4] != 1:
+        return None
+    if game[RUL1_AT + 6] == 0:
+        return None
+    return game[RUL1_AT + 8 : RUL1_AT + 72]
+
+
 def game_rules_flags(game: bytes) -> int:
     """RUL1's flags (bit 0: DOS render), or 0 for a .256 without RUL1."""
     if game[RUL1_AT : RUL1_AT + 4] != b"RUL1" or game[RUL1_AT + 4] != 1:
@@ -151,12 +161,14 @@ def main() -> int:
         font = game_rom_font_words(game)
         background = game_background(game)
         cfg = game_cfg(game)
+        rules = game_rules(game)
     else:
         words = plane_words(read_exact_file(args.gfx, GFX_SIZE, "Spec256 GFX"))
         flags = 0
         font = None
         background = None
         cfg = bytes(3)
+        rules = None
     palette = palette_bytes(args.palette)
     snapshot = parse_snapshot(args.snapshot.read_bytes())
     count = len(words) // 8
@@ -174,6 +186,8 @@ def main() -> int:
     send(fd, b"S1")
     send(fd, b"U%02x" % flags)
     send(fd, b"C" + cfg.hex().encode())
+    if rules is not None:
+        send(fd, b"Y" + rules)
     send(fd, b"W4000%04x" % count + words)
     if font is not None:
         send(fd, b"W%04x%04x" % (ROM_FONT_START, ROM_FONT_WORDS) + font)
@@ -186,6 +200,7 @@ def main() -> int:
     print(f"sent {count} plane words, palette ({'test' if args.palette is None else args.palette.name}), "
           f"rules flags 0x{flags:02x}, CFG {cfg.hex()}, {'ROM font, ' if font is not None else ''}"
           f"{'background, ' if background is not None else ''}"
+          f"{'rules, ' if rules is not None else ''}"
           f"armed at PC 0x{snapshot.pc:04x}, "
           f"{time.time() - started:.0f} s")
     return 0

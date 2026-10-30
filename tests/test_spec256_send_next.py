@@ -84,6 +84,16 @@ class SendNextTest(unittest.TestCase):
         self.assertEqual(send_next.game_cfg(bytes(game)), b"\x40\x00\x88")
         self.assertEqual(send_next.BACKGROUND_AT + 256 * 192, 1_228_832)
 
+    def test_rules_need_rul1_with_rules(self) -> None:
+        game = bytearray(send_next.RUL1_AT + 72)
+        game[send_next.RUL1_AT : send_next.RUL1_AT + 8] = b"RUL1\x01\x00\x00\x00"
+        self.assertIsNone(send_next.game_rules(bytes(game)))
+        game[send_next.RUL1_AT + 6] = 2
+        game[send_next.RUL1_AT + 8 : send_next.RUL1_AT + 16] = bytes((0xFC, 0xFC, 0, 0, 1, 0, 0, 0))
+        rules = send_next.game_rules(bytes(game))
+        self.assertEqual(len(rules), 64)
+        self.assertEqual(rules[:8], bytes((0xFC, 0xFC, 0, 0, 1, 0, 0, 0)))
+
     def test_palette_is_rgb333_low_byte_first(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test.pal"
