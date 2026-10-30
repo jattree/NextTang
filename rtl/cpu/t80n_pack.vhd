@@ -137,6 +137,11 @@ package T80N_Pack is
       Spec256_master_regs : in std_logic_vector(159 downto 0) := (others => '0');
       Spec256_master_control : in std_logic := '0';
       Spec256_master_incdecz : in std_logic := '0';
+      Spec256_fetch_from_master : in std_logic := '0';
+      Spec256_master_ir : in std_logic_vector(7 downto 0) := (others => '0');
+      Spec256_master_vector : in std_logic_vector(7 downto 0) := (others => '0');
+      Spec256_state_ir : out std_logic_vector(7 downto 0);
+      Spec256_state_vector : out std_logic_vector(7 downto 0);
       Spec256_state_pc : out std_logic_vector(15 downto 0);
       Spec256_state_sp : out std_logic_vector(15 downto 0);
       Spec256_state_i : out std_logic_vector(7 downto 0);

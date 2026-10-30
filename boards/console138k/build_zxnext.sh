@@ -61,7 +61,7 @@ case "$profile" in
     diagnostic-ddr3)
         base_name=nexttang_console138k_zxnext_ddr3
         constraints_base=console138k_zxnext_ddr3
-        attempts=(1:1 2:2 2:1)
+        attempts=(3:1 1:1 2:2 2:1)
         if [[ "$vendor_source" != /* || ! -d "$vendor_source" ]]; then
             printf '%s\n' 'console138k zxnext build: diagnostic-ddr3 requires --vendor-source ABSOLUTE_DIRECTORY' >&2
             exit 2
@@ -113,6 +113,7 @@ source_files=(
     "$repo_root/rtl/cpu/t80n.vhd"
     "$repo_root/rtl/cpu/t80na.vhd"
     "$repo_root/rtl/cpu/nexttang_t80na_variants.vhd"
+    "$repo_root/rtl/cpu/nexttang_zxnext_spec256_lanes.vhd"
 )
 for core_file in "${core_files[@]}"; do
     source_files+=("$repo_root/$core_file")
@@ -162,6 +163,8 @@ if [[ "$profile" == diagnostic-ddr3 ]]; then
         "$repo_root/rtl/memory/nexttang_gowin_ddr3_ui_adapter.v"
         "$repo_root/rtl/memory/nexttang_ddr3_ui_arbiter.v"
         "$repo_root/rtl/video/nexttang_ddr3_frame_store.v"
+        "$repo_root/rtl/video/nexttang_spec256_overlay.v"
+        "$repo_root/rtl/input/nexttang_spec256_uart_loader.v"
         "$repo_root/boards/console138k/nexttang_console138k_ddr3_pll.v"
         "$vendor_source/ddr3_memory_interface/ddr3_memory_interface.v"
         "$vendor_source/gowin_pll/gowin_pll.v"
@@ -248,7 +251,8 @@ sha256sum "${source_files[@]}" "${included_files[@]}" >"$source_hashes"
 # placement and router options close them changes as the design changes, so
 # each profile lists PLACE:ROUTE pairs to try in order. A failed attempt keeps
 # its reports under attempt-PLACE-ROUTE for inspection; the bitstream that
-# passes stays in impl/.
+# passes stays in impl/. Place option 3, the vendor default for this device,
+# was the only one to close the DDR3 image once Spec256's eight lanes were in.
 attempt=0
 for pair in "${attempts[@]}"; do
     attempt=$((attempt + 1))

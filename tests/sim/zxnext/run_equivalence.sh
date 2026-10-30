@@ -48,8 +48,10 @@ sim_sources=(
 )
 
 # The original core: each source as it was at ORIGINAL_REV, where it existed.
+# Spec256's lanes need the current T80's ports, so the original goes without.
 original_sources=()
 for source in "${core_sources[@]}"; do
+    [[ "$source" == *nexttang_zxnext_spec256_lanes.vhd ]] && continue
     relative=${source#"$repo_root"/}
     if git -C "$repo_root" cat-file -e "$original_rev:$relative" 2>/dev/null; then
         mkdir -p "$out/original_src/$(dirname -- "$relative")"
@@ -67,8 +69,7 @@ ghdl -i "${flags[@]}" --workdir="$out/original" "$out/bootrom.vhd" "${original_s
     "${sim_sources[@]}" "$out/original_src/tb_zxnext_trace.vhd"
 ghdl -m "${flags[@]}" --workdir="$out/original" tb_zxnext_trace >/dev/null
 ghdl -i "${flags[@]}" --workdir="$out/patched" "$out/bootrom.vhd" "${core_sources[@]}" \
-    "${sim_sources[@]}" "$repo_root/rtl/cpu/nexttang_zxnext_spec256_lanes.vhd" \
-    "$repo_root/tests/sim/zxnext/tb_zxnext_trace.vhd"
+    "${sim_sources[@]}" "$repo_root/tests/sim/zxnext/tb_zxnext_trace.vhd"
 ghdl -m "${flags[@]}" --workdir="$out/patched" tb_zxnext_trace >/dev/null
 
 run() {

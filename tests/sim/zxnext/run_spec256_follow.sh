@@ -36,7 +36,6 @@ mapfile -t core_sources < <(
 ghdl -i "${flags[@]}" --workdir="$out/work" "$out/bootrom.vhd" "${core_sources[@]}" \
     "$repo_root/rtl/clock/nexttang_zxnext_cpu_enables.vhd" \
     "$repo_root/tests/sim/zxnext/cpu_clock_reference_pkg.vhd" \
-    "$repo_root/rtl/cpu/nexttang_zxnext_spec256_lanes.vhd" \
     "$repo_root/tests/sim/zxnext/tb_zxnext_trace.vhd"
 ghdl -m "${flags[@]}" --workdir="$out/work" tb_zxnext_trace >/dev/null
 

@@ -7,13 +7,18 @@ lane deciding from its own data would leave the master at every control
 decision: JR C after an ADD whose carry differs per lane, DJNZ with B loaded
 from the colour plane, LDIR with BC from the plane, CPIR finding its byte only
 in the master's memory, and CALL Z, CALL NC and RET C on data-dependent flags.
+It ends with an IM2 interrupt whose handler stores a byte that differs per
+lane: the lanes, a 28 MHz cycle behind, take the opcode and the vector from
+the master's registers, not the data bus.
 
 Checked:
-- every lane's bus strobes equal the master's on every 28 MHz edge (the
-  lanes' desync flag stays clear), with nothing ever holding the master;
+- every lane's bus strobes and data addresses equal the master's a 28 MHz
+  cycle earlier (the lanes' desync flag stays clear), with nothing ever
+  holding the master;
 - each lane computed with its own plane data at the master's addresses and
   the master's loop counts (LDIR copied the master's count of the lane's own
-  bytes; the last store holds the lane's own result);
+  bytes; the last store holds the lane's own result), and ran the interrupt
+  handler at the master's vector;
 - follow mode keeps every lane's registers equal to the master's;
 - with master control off, the same program loses lockstep, so the check can
   fail.
@@ -56,11 +61,19 @@ PROGRAM = {
     0x002A: [0xB7],                    # OR A
     0x002B: [0xCC, 0x40, 0x00],        # CALL Z,0040
     0x002E: [0x32, 0x00, 0xA0],        # LD (A000),A
-    0x0031: [0x18, 0xFE],              # JR $
+    0x0031: [0xED, 0x5E],              # IM 2
+    0x0033: [0x3E, 0x12],              # LD A,12
+    0x0035: [0xED, 0x47],              # LD I,A
+    0x0037: [0xFB],                    # EI
+    0x0038: [0x18, 0xFE],              # JR $            INT here, vector 34
     0x0040: [0x3A, 0x31, 0x80],        # LD A,(8031)     master 1, lanes 0
     0x0043: [0x0F],                    # RRCA
     0x0044: [0xD8],                    # RET C
     0x0045: [0xC9],                    # RET
+    0x0050: [0x3A, 0x30, 0x80],        # LD A,(8030)     IM2 handler: master 0, lanes k+1
+    0x0053: [0x32, 0x01, 0xA0],        # LD (A001),A
+    0x0056: [0x18, 0xFE],              # JR $
+    0x1234: [0x50, 0x00],              # IM2 table entry for vector 34
 }
 
 
@@ -109,6 +122,7 @@ architecture sim of testbench is
     signal cen_r, cen_f : std_logic := '0';
     signal phase : natural range 0 to {divide - 1} := 0;
     signal m1_n, mreq_n, iorq_n, rd_n, wr_n : std_logic;
+    signal int_n : std_logic := '1';
     signal address : std_logic_vector(15 downto 0);
     signal data_in, data_out : std_logic_vector(7 downto 0);
     signal memory : memory_t := master_image;
@@ -118,6 +132,7 @@ architecture sim of testbench is
     signal regs : std_logic_vector(159 downto 0);
     signal iff1, iff2, halted, int_cycle, nmi_cycle, boundary, incdecz : std_logic;
     signal imode, xy : std_logic_vector(1 downto 0);
+    signal ir, vector, di : std_logic_vector(7 downto 0);
     signal graphics : std_logic := '0';
     signal g_address : std_logic_vector(127 downto 0);
     signal g_in, g_out : std_logic_vector(63 downto 0);
@@ -140,7 +155,19 @@ begin
     cen_r <= '1' when phase = {divide - 1} else '0';
     cen_f <= '1' when phase = {divide // 2 - 1} else '0';
 
-    data_in <= memory(to_integer(unsigned(address))) when mreq_n = '0' and rd_n = '0' else x"ff";
+    data_in <= memory(to_integer(unsigned(address))) when mreq_n = '0' and rd_n = '0' else
+               x"34" when m1_n = '0' and iorq_n = '0' else x"ff";
+
+    -- INT once the master waits at 0x0038, until it is acknowledged.
+    process (clock) begin
+        if rising_edge(clock) then
+            if m1_n = '0' and iorq_n = '0' then
+                int_n <= '1';
+            elsif m1_n = '0' and address = x"0038" then
+                int_n <= '0';
+            end if;
+        end if;
+    end process;
     process (clock) begin
         if rising_edge(clock) then
             if mreq_n = '0' and wr_n = '0' then
@@ -161,7 +188,7 @@ begin
         generic map (Mode => 0)
         port map (
             RESET_n => reset_n, CLK_n => clock, CEN_R => cen_r, CEN_F => cen_f,
-            WAIT_n => '1', INT_n => '1', NMI_n => '1', BUSRQ_n => '1',
+            WAIT_n => '1', INT_n => int_n, NMI_n => '1', BUSRQ_n => '1',
             M1_n => m1_n, MREQ_n => mreq_n, IORQ_n => iorq_n, RD_n => rd_n, WR_n => wr_n,
             RFSH_n => open, HALT_n => open, BUSAK_n => open,
             A => address, D_i => data_in, D_o => data_out,
@@ -171,16 +198,17 @@ begin
             Spec256_state_imode => imode, Spec256_state_xy => xy,
             Spec256_state_int_cycle => int_cycle, Spec256_state_nmi_cycle => nmi_cycle,
             Spec256_state_instruction_boundary => boundary, Spec256_state_incdecz => incdecz,
+            Spec256_state_ir => ir, Spec256_state_vector => vector, Spec256_state_di => di,
             Z80N_dout_o => open, Z80N_data_o => open, Z80N_command_o => open);
 
     lanes : entity work.nexttang_zxnext_spec256_lanes
         port map (
             clock_28 => clock, cen_r => cen_r, cen_f => cen_f, reset_n => reset_n,
             graphics => graphics, master_control => control,
-            master_m1_n => m1_n, master_mreq_n => mreq_n, master_iorq_n => iorq_n,
+            master_a => address, master_m1_n => m1_n, master_mreq_n => mreq_n, master_iorq_n => iorq_n,
             master_rd_n => rd_n, master_wr_n => wr_n, master_wait_n => '1',
-            master_int_n => '1', master_nmi_n => '1', master_busrq_n => '1',
-            master_data_in => data_in, master_pc => pc, master_sp => sp, master_i => i_reg,
+            master_int_n => int_n, master_nmi_n => '1', master_busrq_n => '1',
+            master_ir => ir, master_vector => vector, master_di => di, master_pc => pc, master_sp => sp, master_i => i_reg,
             master_r => r_reg, master_f => f_reg, master_regs => regs,
             master_iff1 => iff1, master_iff2 => iff2, master_halted => halted,
             master_imode => imode, master_xy => xy, master_int_cycle => int_cycle,
@@ -208,22 +236,27 @@ begin
         variable boundaries, mismatched : natural := 0;
         variable previous_m1 : std_logic := '1';
         variable reached : boolean := false;
+        -- The lanes run a 28 MHz cycle behind: compare them with the master
+        -- as it was a cycle ago.
+        variable regs_d : std_logic_vector(159 downto 0) := (others => '0');
+        variable m1_d, boundary_d : std_logic := '1';
     begin
         wait for 100 ns;
         reset_n <= '1';
         for cycle in 0 to 120000 loop
             wait until rising_edge(clock);
             -- In follow mode every lane is the master, register for register.
-            if graphics = '0' and previous_m1 = '1' and m1_n = '0' and boundary = '1' then
+            if graphics = '0' and previous_m1 = '1' and m1_d = '0' and boundary_d = '1' then
                 boundaries := boundaries + 1;
                 for k in 0 to 7 loop
-                    if lane_regs(160 * k + 159 downto 160 * k) /= regs then
+                    if lane_regs(160 * k + 159 downto 160 * k) /= regs_d then
                         mismatched := mismatched + 1;
                     end if;
                 end loop;
             end if;
-            previous_m1 := m1_n;
-            if address = x"0031" and m1_n = '0' and graphics = '1' then
+            previous_m1 := m1_d;
+            regs_d := regs; m1_d := m1_n; boundary_d := boundary;
+            if address = x"0056" and m1_n = '0' and graphics = '1' then
                 reached := true;
                 exit;
             end if;
@@ -232,12 +265,14 @@ begin
         report "DESYNC " & std_logic'image(desync);
         report "FOLLOW_BOUNDARIES " & integer'image(boundaries) & " MISMATCHED " & integer'image(mismatched);
         report "MASTER_A000 " & integer'image(to_integer(unsigned(memory(16#A000#)))) &
+               " A001 " & integer'image(to_integer(unsigned(memory(16#A001#)))) &
                " MASTER_9000_9004 " & integer'image(to_integer(unsigned(memory(16#9000#)))) & " " &
                integer'image(to_integer(unsigned(memory(16#9003#)))) & " " &
                integer'image(to_integer(unsigned(memory(16#9004#))));
         for k in 0 to 7 loop
             report "LANE " & integer'image(k) &
                    " A000 " & integer'image(to_integer(unsigned(planes(k)(16#A000#)))) &
+                   " A001 " & integer'image(to_integer(unsigned(planes(k)(16#A001#)))) &
                    " 9000 " & integer'image(to_integer(unsigned(planes(k)(16#9000#)))) &
                    " 9003 " & integer'image(to_integer(unsigned(planes(k)(16#9003#)))) &
                    " 9004 " & integer'image(to_integer(unsigned(planes(k)(16#9004#))));
@@ -270,11 +305,12 @@ class Spec256LanesTest(unittest.TestCase):
         self.assertIn("DESYNC '0'", output, output)
         self.assertIn("REACHED_END true", output, output)
         # The master: no JR, DJNZ 64 times, LDIR of 4 bytes, CALL Z taken, RET C.
-        self.assertIn("MASTER_A000 128 MASTER_9000_9004 17 20 0", output, output)
+        self.assertIn("MASTER_A000 128 A001 0 MASTER_9000_9004 17 20 0", output, output)
         for k in range(8):
             # Each lane: its own bytes, the master's count of four, and its
-            # own RRCA result (plane 8031 is 0) in the final store.
-            self.assertIn(f"LANE {k} A000 0 9000 {0x30 + 16 * k} 9003 {0x33 + 16 * k} 9004 0", output, output)
+            # own RRCA result (plane 8031 is 0) in the final store; the
+            # interrupt handler's store is the lane's own byte.
+            self.assertIn(f"LANE {k} A000 0 A001 {k + 1} 9000 {0x30 + 16 * k} 9003 {0x33 + 16 * k} 9004 0", output, output)
 
     def test_lanes_hold_lockstep_at_3_5_mhz(self) -> None:
         self.check_graphics_run(run(8))

@@ -104,6 +104,13 @@ entity T80Na is
       A        : out   std_logic_vector(15 downto 0);
 --    D        : inout std_logic_vector( 7 downto 0);
       D_i      : in    std_logic_vector( 7 downto 0);
+      -- NextTang: with Split_edge_inputs, the falling-edge samples of the
+      -- data bus and WAIT come from these instead, so a Spec256 lane running
+      -- a cycle behind its master can be given a registered copy of each
+      -- edge's input.
+      Split_edge_inputs : in std_logic := '0';
+      D_i_fall    : in    std_logic_vector( 7 downto 0) := (others => '0');
+      WAIT_n_fall : in    std_logic := '1';
       D_o      : out   std_logic_vector( 7 downto 0);
 
       Spec256_cen : in std_logic := '1';
@@ -124,6 +131,14 @@ entity T80Na is
        Spec256_master_regs : in std_logic_vector(159 downto 0) := (others => '0');
        Spec256_master_control : in std_logic := '0';
        Spec256_master_incdecz : in std_logic := '0';
+       Spec256_fetch_from_master : in std_logic := '0';
+       Spec256_master_ir : in std_logic_vector(7 downto 0) := (others => '0');
+       Spec256_master_vector : in std_logic_vector(7 downto 0) := (others => '0');
+       Spec256_state_ir : out std_logic_vector(7 downto 0);
+       Spec256_state_vector : out std_logic_vector(7 downto 0);
+       -- The data the wrapper latched on the falling edge, for a lane a cycle
+       -- behind to take in place of the data bus.
+       Spec256_state_di : out std_logic_vector(7 downto 0);
       Spec256_state_pc : out std_logic_vector(15 downto 0);
       Spec256_state_sp : out std_logic_vector(15 downto 0);
       Spec256_state_i : out std_logic_vector(7 downto 0);
@@ -272,6 +287,11 @@ begin
           Spec256_master_regs => Spec256_master_regs,
           Spec256_master_control => Spec256_master_control,
           Spec256_master_incdecz => Spec256_master_incdecz,
+          Spec256_fetch_from_master => Spec256_fetch_from_master,
+          Spec256_master_ir => Spec256_master_ir,
+          Spec256_master_vector => Spec256_master_vector,
+          Spec256_state_ir => Spec256_state_ir,
+          Spec256_state_vector => Spec256_state_vector,
          Spec256_state_pc => Spec256_state_pc,
          Spec256_state_sp => Spec256_state_sp,
          Spec256_state_i => Spec256_state_i,
@@ -303,12 +323,18 @@ begin
          i_debug_break     => i_debug_break
       );
 
+   Spec256_state_di <= DI_Reg;
+
    process (CLK_n)
    begin
       if CLK_n'event and CLK_n = '0' and CEN_F = '1' then
          if TState = "011" and BUSAK_n_i = '1' then
 --          DI_Reg <= to_x01(D);
-            DI_Reg <= D_i;
+            if Split_edge_inputs = '1' then
+               DI_Reg <= D_i_fall;
+            else
+               DI_Reg <= D_i;
+            end if;
          end if;
       end if;
    end process;
@@ -350,7 +376,9 @@ begin
       if Reset_s = '0' then
          MReq_Inhibit <= '1'; -- Charlie Ingley 30/10/19 - changed Req_Inhibit polarity
       elsif CLK_n'event and CLK_n = '0' and CEN_F = '1' then
-         if MCycle = "001" and TState = "010" and WAIT_n = '1' then  -- by Fabio Belavenuto - fix behavior of Wait_n
+         if MCycle = "001" and TState = "010" and
+            ((Split_edge_inputs = '0' and WAIT_n = '1') or
+             (Split_edge_inputs = '1' and WAIT_n_fall = '1')) then  -- by Fabio Belavenuto - fix behavior of Wait_n
             MReq_Inhibit <= '0';
          else
             MReq_Inhibit <= '1';

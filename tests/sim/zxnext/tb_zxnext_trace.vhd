@@ -108,8 +108,8 @@ architecture sim of tb_zxnext_trace is
     -- SPEC256 begin
     signal s256_reset_n, s256_m1_n, s256_mreq_n, s256_iorq_n, s256_rd_n, s256_wr_n : std_logic;
     signal s256_wait_n, s256_int_n, s256_nmi_n, s256_busrq_n : std_logic;
-    signal s256_di, s256_i, s256_r, s256_f : std_logic_vector(7 downto 0);
-    signal s256_pc, s256_sp : std_logic_vector(15 downto 0);
+    signal s256_ir, s256_vector, s256_di, s256_i, s256_r, s256_f : std_logic_vector(7 downto 0);
+    signal s256_a, s256_pc, s256_sp : std_logic_vector(15 downto 0);
     signal s256_regs : std_logic_vector(159 downto 0);
     signal s256_iff1, s256_iff2, s256_halted, s256_int_cycle, s256_nmi_cycle : std_logic;
     signal s256_boundary, s256_incdecz, s256_desync : std_logic;
@@ -517,7 +517,9 @@ begin
             o_SPEC256_CPU_RD_n => s256_rd_n, o_SPEC256_CPU_WR_n => s256_wr_n,
             o_SPEC256_CPU_WAIT_n => s256_wait_n, o_SPEC256_CPU_INT_n => s256_int_n,
             o_SPEC256_CPU_NMI_n => s256_nmi_n, o_SPEC256_CPU_BUSRQ_n => s256_busrq_n,
-            o_SPEC256_CPU_DI => s256_di, o_SPEC256_PC => s256_pc, o_SPEC256_SP => s256_sp,
+            o_SPEC256_CPU_A => s256_a,
+            o_SPEC256_IR => s256_ir, o_SPEC256_VECTOR => s256_vector, o_SPEC256_DI => s256_di,
+            o_SPEC256_PC => s256_pc, o_SPEC256_SP => s256_sp,
             o_SPEC256_I => s256_i, o_SPEC256_R => s256_r, o_SPEC256_F => s256_f,
             o_SPEC256_REGS => s256_regs, o_SPEC256_IFF1 => s256_iff1, o_SPEC256_IFF2 => s256_iff2,
             o_SPEC256_HALTED => s256_halted, o_SPEC256_IMODE => s256_imode, o_SPEC256_XY => s256_xy,
@@ -844,10 +846,11 @@ begin
             port map (
                 clock_28 => cpu_clock, cen_r => cen_r, cen_f => cen_f, reset_n => s256_reset_n,
                 graphics => '0',
-                master_m1_n => s256_m1_n, master_mreq_n => s256_mreq_n, master_iorq_n => s256_iorq_n,
+                master_a => s256_a, master_m1_n => s256_m1_n, master_mreq_n => s256_mreq_n, master_iorq_n => s256_iorq_n,
                 master_rd_n => s256_rd_n, master_wr_n => s256_wr_n, master_wait_n => s256_wait_n,
                 master_int_n => s256_int_n, master_nmi_n => s256_nmi_n, master_busrq_n => s256_busrq_n,
-                master_data_in => s256_di, master_pc => s256_pc, master_sp => s256_sp,
+                master_ir => s256_ir, master_vector => s256_vector, master_di => s256_di,
+                master_pc => s256_pc, master_sp => s256_sp,
                 master_i => s256_i, master_r => s256_r, master_f => s256_f, master_regs => s256_regs,
                 master_iff1 => s256_iff1, master_iff2 => s256_iff2, master_halted => s256_halted,
                 master_imode => s256_imode, master_xy => s256_xy, master_int_cycle => s256_int_cycle,
@@ -857,18 +860,23 @@ begin
                 graphics_data_out => open, graphics_write => open, graphics_iorq => open,
                 desync => s256_desync, debug_lane_pc => s256_lane_pc, debug_lane_regs => s256_lane_regs);
 
+        -- The lanes run a 28 MHz cycle behind the CPU: compare them with the
+        -- CPU as it was a cycle ago.
         check : process (cpu_clock)
             variable previous_m1 : std_logic := '1';
             variable boundaries, mismatched, ticks : natural := 0;
             variable l : line;
+            variable regs_d : std_logic_vector(159 downto 0) := (others => '0');
+            variable pc_d : std_logic_vector(15 downto 0) := (others => '0');
+            variable m1_d, boundary_d : std_logic := '1';
         begin
             if rising_edge(cpu_clock) then
                 ticks := ticks + 1;
-                if previous_m1 = '1' and s256_m1_n = '0' and s256_boundary = '1' then
+                if previous_m1 = '1' and m1_d = '0' and boundary_d = '1' then
                     boundaries := boundaries + 1;
                     for k in 0 to 7 loop
-                        if s256_lane_regs(160 * k + 159 downto 160 * k) /= s256_regs or
-                           s256_lane_pc(16 * k + 15 downto 16 * k) /= s256_pc then
+                        if s256_lane_regs(160 * k + 159 downto 160 * k) /= regs_d or
+                           s256_lane_pc(16 * k + 15 downto 16 * k) /= pc_d then
                             if mismatched < 8 then
                                 write(l, string'("SPEC256_MISMATCH lane ") & integer'image(k) &
                                       string'(" at cycle ") & integer'image(ticks) &
@@ -879,7 +887,8 @@ begin
                         end if;
                     end loop;
                 end if;
-                previous_m1 := s256_m1_n;
+                previous_m1 := m1_d;
+                regs_d := s256_regs; pc_d := s256_pc; m1_d := s256_m1_n; boundary_d := s256_boundary;
                 if ticks = CYCLES - 4 then
                     write(l, string'("SPEC256_FOLLOW boundaries ") & integer'image(boundaries) &
                           string'(" mismatched ") & integer'image(mismatched) &

@@ -27,6 +27,11 @@ module testbench;
     reg [7:0] write_data = 0;
     reg [20:0] read_address = 0;
     wire [7:0] read_data;
+    reg spec256_mode = 0;
+    reg [15:0] lane_address = 0, overlay_address = 0;
+    reg lane_write = 0;
+    reg [63:0] lane_write_data = 0;
+    wire [63:0] lane_read_data, overlay_data;
 
     nexttang_layer2_mirror dut (
         .clock_28(clock_28),
@@ -35,7 +40,12 @@ module testbench;
         .write_address(write_address),
         .write_data(write_data),
         .read_address(read_address),
-        .read_data(read_data)
+        .read_data(read_data),
+        .check_data(), .check_hit(),
+        .spec256_mode(spec256_mode),
+        .lane_address(lane_address), .lane_write(lane_write),
+        .lane_write_data(lane_write_data), .lane_read_data(lane_read_data),
+        .overlay_address(overlay_address), .overlay_data(overlay_data)
     );
 
     always #17.857 clock_28 = !clock_28;
@@ -130,7 +140,54 @@ endmodule
 )
 
 
+# In spec256_mode the board's 24-bank copy is eight 48 KiB colour planes:
+# a lane write at a Spectrum address puts each lane's byte in its own plane,
+# the lanes and the overlay read all eight back at once, writes below 0x4000
+# are dropped, and leaving the mode gives Layer 2 its byte view again.
+SPEC256_TESTBENCH = (
+    WIDE_TESTBENCH.split("    initial begin\n        cpu_cycle(21'h060000")[0]
+    + r"""    task automatic plane_write(input [15:0] address, input [63:0] data);
+        begin
+            @(negedge clock_28);
+            lane_address = address; lane_write_data = data; lane_write = 1;
+            @(negedge clock_28);
+            lane_write = 0;
+        end
+    endtask
+
+    initial begin
+        spec256_mode = 1;
+        plane_write(16'h4000, 64'h0807060504030201);
+        plane_write(16'hffff, 64'h8877665544332211);
+        plane_write(16'h3fff, 64'hdeadbeefdeadbeef);
+        @(negedge clock_28);
+        lane_address = 16'h4000; overlay_address = 16'hffff;
+        @(negedge clock_28);
+        if (lane_read_data !== 64'h0807060504030201)
+            $fatal(1, "lanes read %h at 4000", lane_read_data);
+        if (overlay_data !== 64'h8877665544332211)
+            $fatal(1, "overlay read %h at ffff", overlay_data);
+        lane_address = 16'h4001;
+        @(negedge clock_28);
+        if (lane_read_data === 64'hdeadbeefdeadbeef)
+            $fatal(1, "a write below 0x4000 landed in the planes");
+        // Layer 2's view: copy byte k of word 0 is plane k at 0x4000.
+        spec256_mode = 0;
+        expect_read(21'h060000, 8'h01);
+        expect_read(21'h060007, 8'h08);
+        $display("LAYER2_MIRROR_SPEC256_PASS");
+        $finish;
+    end
+endmodule
+"""
+)
+
+
 class Layer2MirrorTest(unittest.TestCase):
+    def test_board_mirror_holds_spec256_planes(self) -> None:
+        output = run_testbench(SPEC256_TESTBENCH, *SOURCES)
+        self.assertIn("LAYER2_MIRROR_SPEC256_PASS", output)
+
     def test_board_mirror_covers_banks_8_to_31(self) -> None:
         output = run_testbench(WIDE_TESTBENCH, *SOURCES)
         self.assertIn("LAYER2_MIRROR_WIDE_PASS", output)

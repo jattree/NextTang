@@ -327,9 +327,10 @@ entity zxnext is
       o_DEBUG_IORQ_n       : out std_logic;
 
       -- NextTang: the CPU as Spec256's graphical lanes follow it, observation
-      -- only. Its strobes and the inputs it sees (cpu_di after the core's data
-      -- mux, and the combined WAIT, INT, NMI and BUSRQ), and the T80's
-      -- Spec256 state. Nothing here changes when they are left unconnected.
+      -- only. Its strobes, the combined WAIT, INT, NMI and BUSRQ it sees, and
+      -- the T80's Spec256 state, including the registers its opcode, IM2
+      -- vector and data were latched into; the data bus itself is not
+      -- exported. Nothing here changes when they are left unconnected.
       o_SPEC256_CPU_RESET_n   : out std_logic;
       o_SPEC256_CPU_M1_n      : out std_logic;
       o_SPEC256_CPU_MREQ_n    : out std_logic;
@@ -340,7 +341,10 @@ entity zxnext is
       o_SPEC256_CPU_INT_n     : out std_logic;
       o_SPEC256_CPU_NMI_n     : out std_logic;
       o_SPEC256_CPU_BUSRQ_n   : out std_logic;
-      o_SPEC256_CPU_DI        : out std_logic_vector(7 downto 0);
+      o_SPEC256_IR            : out std_logic_vector(7 downto 0);
+      o_SPEC256_VECTOR        : out std_logic_vector(7 downto 0);
+      o_SPEC256_DI            : out std_logic_vector(7 downto 0);
+      o_SPEC256_CPU_A         : out std_logic_vector(15 downto 0);
       o_SPEC256_PC            : out std_logic_vector(15 downto 0);
       o_SPEC256_SP            : out std_logic_vector(15 downto 0);
       o_SPEC256_I             : out std_logic_vector(7 downto 0);
@@ -1886,7 +1890,7 @@ end generate;
    o_SPEC256_CPU_INT_n <= z80_int_n;
    o_SPEC256_CPU_NMI_n <= z80_nmi_n;
    o_SPEC256_CPU_BUSRQ_n <= z80_busrq_n;
-   o_SPEC256_CPU_DI <= cpu_di;
+   o_SPEC256_CPU_A <= z80_a;
    o_DEBUG_NR_REG <= nr_wr_reg;
    o_DEBUG_NR_DAT <= nr_wr_dat;
    o_DEBUG_IORQ_n <= cpu_iorq_n;
@@ -2017,6 +2021,9 @@ gen_cpu_00: if (g_option(1 downto 0) = "00") generate
       Spec256_state_nmi_cycle => o_SPEC256_NMI_CYCLE,
       Spec256_state_instruction_boundary => o_SPEC256_BOUNDARY,
       Spec256_state_incdecz => o_SPEC256_INCDECZ,
+      Spec256_state_ir => o_SPEC256_IR,
+      Spec256_state_vector => o_SPEC256_VECTOR,
+      Spec256_state_di => o_SPEC256_DI,
       -- extended functions
       Z80N_dout_o       => Z80N_dout_s,
       Z80N_data_o       => Z80N_data_s,

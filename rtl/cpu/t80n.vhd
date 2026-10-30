@@ -153,6 +153,14 @@ entity T80N is
        -- master; the idea is Alberto Conde's (SPEC256_MISTER, CTRL_F/CTRL_B).
        Spec256_master_control : in std_logic := '0';
        Spec256_master_incdecz : in std_logic := '0';
+       -- A lane a 28 MHz cycle behind its master takes the opcode and the IM2
+       -- vector from the master's IR and TmpAddr, which the master loaded from
+       -- the data bus a cycle before, instead of from the bus itself.
+       Spec256_fetch_from_master : in std_logic := '0';
+       Spec256_master_ir : in std_logic_vector(7 downto 0) := (others => '0');
+       Spec256_master_vector : in std_logic_vector(7 downto 0) := (others => '0');
+       Spec256_state_ir : out std_logic_vector(7 downto 0);
+       Spec256_state_vector : out std_logic_vector(7 downto 0);
       Spec256_state_pc : out std_logic_vector(15 downto 0);
       Spec256_state_sp : out std_logic_vector(15 downto 0);
       Spec256_state_i : out std_logic_vector(7 downto 0);
@@ -229,6 +237,8 @@ architecture rtl of T80N is
    -- Help Registers
    signal TmpAddr       : std_logic_vector(15 downto 0); -- Temporary address register
    signal IR            : std_logic_vector(7 downto 0);     -- Instruction register
+   signal Fetch_IR      : std_logic_vector(7 downto 0);     -- NextTang: DInst, or the master's IR
+   signal Fetch_Vector  : std_logic_vector(7 downto 0);     -- NextTang: DInst, or the master's IM2 vector
    signal ISet          : std_logic_vector(1 downto 0);     -- Instruction set selector
    signal RegBusA_r     : std_logic_vector(15 downto 0);
 
@@ -503,6 +513,10 @@ begin
    Control_F <= Spec256_master_regs(15 downto 8) when Spec256_master_control = '1' else F;
    DJNZ_Z <= Spec256_master_incdecz when Spec256_master_control = '1' else IncDecZ;
    Spec256_state_incdecz <= IncDecZ;
+   Spec256_state_ir <= IR;
+   Spec256_state_vector <= TmpAddr(7 downto 0);
+   Fetch_IR <= Spec256_master_ir when Spec256_fetch_from_master = '1' else DInst;
+   Fetch_Vector <= Spec256_master_vector when Spec256_fetch_from_master = '1' else DInst;
 
    Spec256_master_bc <= Spec256_address_regs(23 downto 16) &
                         Spec256_address_regs(31 downto 24);
@@ -630,12 +644,12 @@ begin
                elsif Halt_FF = '1' or (IntCycle = '1' and IStatus = "10") or NMICycle = '1' then
                   IR <= "00000000";
                else
-                  IR <= DInst;
+                  IR <= Fetch_IR;
                end if;
 
                if IntCycle = '1' and IStatus = "10" then
                   -- IM2 vector address low byte from bus
-                  TmpAddr(7 downto 0) <= DInst;
+                  TmpAddr(7 downto 0) <= Fetch_Vector;
                end if;
 
                ISet <= "00";
@@ -829,7 +843,7 @@ begin
 
             if TState = 2 and WAIT_n = '1' then
                if ISet = "01" and MCycle = "111" then
-                  IR <= DInst;
+                  IR <= Fetch_IR;
                end if;
                if JumpE = '1' then
                   PC <= unsigned(signed(PC) + signed(DI_Reg));

@@ -264,6 +264,26 @@ module `NEXTTANG_ZXNEXT_TOP (
 `else
     localparam [15:0] CORE_OPTION = 16'hDEF2;
 `endif
+    // Spec256: the CPU as the graphical lanes follow it (observation only).
+    wire        s256_cpu_reset_n, s256_m1_n, s256_mreq_n, s256_iorq_n, s256_rd_n, s256_wr_n;
+    wire        s256_wait_n, s256_int_n, s256_nmi_n, s256_busrq_n;
+    wire [7:0]  s256_ir, s256_vector, s256_di, s256_i, s256_r, s256_f;
+    wire [15:0] s256_a, s256_pc, s256_sp;
+    wire [159:0] s256_regs;
+    wire        s256_iff1, s256_iff2, s256_halted, s256_int_cycle, s256_nmi_cycle;
+    wire        s256_boundary, s256_incdecz;
+    wire [1:0]  s256_imode, s256_xy;
+    // The planes, the colour mode and the host loader (DDR3 builds).
+    wire        spec256_mode;
+    reg         spec256_graphics = 1'b0;
+    wire        spec256_desync;
+    wire        spec256_payload;
+    wire [15:0] spec256_lane_address;
+    wire        spec256_lane_write;
+    wire [63:0] spec256_lane_write_data;
+    wire [63:0] spec256_plane_read;
+    wire [15:0] spec256_overlay_address;
+    wire [63:0] spec256_overlay_data;
 
     zxnext #(
         .g_video_def(3'b000),
@@ -447,7 +467,37 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_DEBUG_NR_WE(core_nr_write),
         .o_DEBUG_NR_REG(core_nr_register),
         .o_DEBUG_NR_DAT(core_nr_data),
-        .o_DEBUG_IORQ_n(core_iorq_n)
+        .o_DEBUG_IORQ_n(core_iorq_n),
+
+        .o_SPEC256_CPU_RESET_n(s256_cpu_reset_n),
+        .o_SPEC256_CPU_M1_n(s256_m1_n),
+        .o_SPEC256_CPU_MREQ_n(s256_mreq_n),
+        .o_SPEC256_CPU_IORQ_n(s256_iorq_n),
+        .o_SPEC256_CPU_RD_n(s256_rd_n),
+        .o_SPEC256_CPU_WR_n(s256_wr_n),
+        .o_SPEC256_CPU_WAIT_n(s256_wait_n),
+        .o_SPEC256_CPU_INT_n(s256_int_n),
+        .o_SPEC256_CPU_NMI_n(s256_nmi_n),
+        .o_SPEC256_CPU_BUSRQ_n(s256_busrq_n),
+        .o_SPEC256_IR(s256_ir),
+        .o_SPEC256_VECTOR(s256_vector),
+        .o_SPEC256_DI(s256_di),
+        .o_SPEC256_CPU_A(s256_a),
+        .o_SPEC256_PC(s256_pc),
+        .o_SPEC256_SP(s256_sp),
+        .o_SPEC256_I(s256_i),
+        .o_SPEC256_R(s256_r),
+        .o_SPEC256_F(s256_f),
+        .o_SPEC256_REGS(s256_regs),
+        .o_SPEC256_IFF1(s256_iff1),
+        .o_SPEC256_IFF2(s256_iff2),
+        .o_SPEC256_HALTED(s256_halted),
+        .o_SPEC256_IMODE(s256_imode),
+        .o_SPEC256_XY(s256_xy),
+        .o_SPEC256_INT_CYCLE(s256_int_cycle),
+        .o_SPEC256_NMI_CYCLE(s256_nmi_cycle),
+        .o_SPEC256_BOUNDARY(s256_boundary),
+        .o_SPEC256_INCDECZ(s256_incdecz)
     );
 
     // ------------------------------------------------------------ keyboard, SD
@@ -724,8 +774,105 @@ module `NEXTTANG_ZXNEXT_TOP (
         .read_address(layer2_address),
         .read_data(layer2_data),
         .check_data(),
-        .check_hit()
+        .check_hit(),
+        .spec256_mode(spec256_mode),
+        .lane_address(spec256_lane_address),
+        .lane_write(spec256_lane_write),
+        .lane_write_data(spec256_lane_write_data),
+        .lane_read_data(spec256_plane_read),
+        .overlay_address(spec256_overlay_address),
+        .overlay_data(spec256_overlay_data)
     );
+
+    // ------------------------------------------------------------- Spec256
+    // Eight graphical CPUs beside the core's, in lockstep: they follow it
+    // from reset as exact copies, and from a game's first instruction take
+    // their data from the colour planes in the mirror. The host loads the
+    // planes and the palette over the debug UART (S, W, Q) and arms colour
+    // mode at the game's start address (G); H turns it off. Colour mode needs
+    // 14 MHz or below; Spec256 games run at 3.5.
+    wire [127:0] lanes_address;
+    wire [63:0]  lanes_write_data;
+    wire [7:0]   lanes_write;
+    wire         loader_plane_write;
+    wire [15:0]  loader_plane_address;
+    wire [63:0]  loader_plane_data;
+    wire         loader_arm, loader_disarm;
+    wire [15:0]  loader_arm_pc;
+    wire         spec256_palette_write;
+    wire [7:0]   spec256_palette_index;
+    wire [8:0]   spec256_palette_rgb;
+
+    nexttang_zxnext_spec256_lanes spec256_lanes (
+        .clock_28(clock_28),
+        .cen_r(cpu_rising_enable),
+        .cen_f(cpu_falling_enable),
+        .reset_n(s256_cpu_reset_n),
+        .graphics(spec256_graphics),
+        .master_control(1'b1),
+        .master_m1_n(s256_m1_n),
+        .master_mreq_n(s256_mreq_n),
+        .master_iorq_n(s256_iorq_n),
+        .master_rd_n(s256_rd_n),
+        .master_wr_n(s256_wr_n),
+        .master_wait_n(s256_wait_n),
+        .master_int_n(s256_int_n),
+        .master_nmi_n(s256_nmi_n),
+        .master_busrq_n(s256_busrq_n),
+        .master_a(s256_a),
+        .master_ir(s256_ir),
+        .master_vector(s256_vector),
+        .master_di(s256_di),
+        .master_pc(s256_pc),
+        .master_sp(s256_sp),
+        .master_i(s256_i),
+        .master_r(s256_r),
+        .master_f(s256_f),
+        .master_regs(s256_regs),
+        .master_iff1(s256_iff1),
+        .master_iff2(s256_iff2),
+        .master_halted(s256_halted),
+        .master_imode(s256_imode),
+        .master_xy(s256_xy),
+        .master_int_cycle(s256_int_cycle),
+        .master_nmi_cycle(s256_nmi_cycle),
+        .master_instruction_boundary(s256_boundary),
+        .master_incdecz(s256_incdecz),
+        .graphics_address(lanes_address),
+        .graphics_data_in(spec256_plane_read),
+        .graphics_data_out(lanes_write_data),
+        .graphics_write(lanes_write),
+        .graphics_iorq(),
+        .desync(spec256_desync),
+        .debug_lane_pc(),
+        .debug_lane_regs()
+    );
+
+    // Every lane addresses memory through the master's registers, so lane
+    // 0's address serves all eight planes (the desync check enforces it).
+    // The loader writes only while colour mode is off, when lanes write
+    // nothing.
+    assign spec256_lane_address = loader_plane_write ? loader_plane_address : lanes_address[15:0];
+    assign spec256_lane_write = loader_plane_write || lanes_write[0];
+    assign spec256_lane_write_data = loader_plane_write ? loader_plane_data : lanes_write_data;
+
+    // Colour mode from the first instruction fetched at the armed address.
+    reg spec256_armed = 1'b0;
+    reg s256_previous_m1_n = 1'b1;
+
+    always @(posedge clock_28) begin
+        s256_previous_m1_n <= s256_m1_n;
+        if (!s256_cpu_reset_n || loader_disarm || !spec256_mode) begin
+            spec256_armed <= 1'b0;
+            spec256_graphics <= 1'b0;
+        end else if (loader_arm) begin
+            spec256_armed <= 1'b1;
+        end else if (spec256_armed && s256_previous_m1_n && !s256_m1_n &&
+                     s256_boundary && s256_a == loader_arm_pc) begin
+            spec256_armed <= 1'b0;
+            spec256_graphics <= 1'b1;
+        end
+    end
 
     wire line_request;
     wire line_ready;
@@ -1066,6 +1213,33 @@ module `NEXTTANG_ZXNEXT_TOP (
     // free; the others keep them in block RAM.
 `ifdef NEXTTANG_ZXNEXT_DDR3
     wire frame_store_late;
+    wire overlay_frame_start;
+    wire overlay_pixel_valid;
+    wire [8:0] overlay_x;
+    wire [8:0] overlay_y;
+    wire [8:0] overlay_pixel;
+
+    nexttang_spec256_overlay spec256_overlay (
+        .clock_7(clock_7),
+        .clock_28(clock_28),
+        .reset(!machine_locked),
+        .enable(spec256_graphics),
+        .capture_frame_start(capture_frame_start),
+        .capture_pixel_valid(capture_pixel_valid),
+        .capture_x(capture_x),
+        .capture_y(capture_y),
+        .capture_pixel(capture_pixel),
+        .frame_start(overlay_frame_start),
+        .pixel_valid(overlay_pixel_valid),
+        .x(overlay_x),
+        .y(overlay_y),
+        .pixel(overlay_pixel),
+        .plane_address(spec256_overlay_address),
+        .plane_data(spec256_overlay_data),
+        .palette_write(spec256_palette_write),
+        .palette_index(spec256_palette_index),
+        .palette_rgb(spec256_palette_rgb)
+    );
     // V0 from the debug UART stops the frame store's DDR3 traffic and V1
     // restarts it, so the CPU's wait for main memory can be measured with
     // and without it under one workload. The picture is stale while it is
@@ -1082,12 +1256,12 @@ module `NEXTTANG_ZXNEXT_TOP (
     ) scaler (
         .source_clock(clock_7),
         .source_reset(!machine_locked),
-        .source_frame_start(capture_frame_start),
+        .source_frame_start(overlay_frame_start),
         .source_short(capture_60_sync[1]),
-        .source_pixel_valid(capture_pixel_valid),
-        .source_x(capture_x),
-        .source_y(capture_y),
-        .source_pixel(capture_pixel),
+        .source_pixel_valid(overlay_pixel_valid),
+        .source_x(overlay_x),
+        .source_y(overlay_y),
+        .source_pixel(overlay_pixel),
         .source_overrun(scaled_overrun),
         .output_clock(pixel_clock),
         .output_reset(pixel_reset),
@@ -1451,6 +1625,16 @@ module `NEXTTANG_ZXNEXT_TOP (
             divider_phase <= divider_phase | (clock_14 ? 4'b1000 : 4'b0100);
     end
 
+    // The live wait and contention lines, registered: a status sample a
+    // cycle old is as good, and unregistered they joined the CPU's decoder to
+    // the status message in one path.
+    reg cpu_wait_sampled = 1'b0, cpu_contend_sampled = 1'b0;
+
+    always @(posedge clock_28) begin
+        cpu_wait_sampled <= cpu_wait;
+        cpu_contend_sampled <= cpu_contend;
+    end
+
     nexttang_debug_status_uart #(
         .CLOCK_HZ(7000000),
         .GAP_CLOCKS(1750000),
@@ -1462,10 +1646,10 @@ module `NEXTTANG_ZXNEXT_TOP (
         .value(status_value),
         .extra({
             wait_holds_reported, wait_longest_reported,
-            8'h00, wait_cycles_reported,
+            spec256_mode, spec256_graphics, spec256_desync, 5'b0, wait_cycles_reported,
             last_io_write_data, sd_byte_count,
             sd_checksum,
-            cpu_wait, cpu_contend, 2'b00, double_interrupts, cpu_enable_count
+            cpu_wait_sampled, cpu_contend_sampled, 2'b00, double_interrupts, cpu_enable_count
         }),
         .transmit(status_transmit)
     );
@@ -1477,7 +1661,10 @@ module `NEXTTANG_ZXNEXT_TOP (
     // fetch trace now, R re-arms it, and T followed by four hex digits sets the
     // address whose fetch freezes it, and re-arms.
     wire [7:0] command_byte;
-    wire command_valid;
+    wire uart_byte_valid;
+    // While the Spec256 loader takes raw plane or palette bytes, no other
+    // command may see them.
+    wire command_valid = uart_byte_valid && !spec256_payload;
 
     nexttang_uart_receiver #(
         .CLOCK_HZ(28000000),
@@ -1487,7 +1674,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .reset(!machine_locked),
         .receive(debug_uart_rx),
         .data(command_byte),
-        .data_valid(command_valid)
+        .data_valid(uart_byte_valid)
     );
 
     // The official Pi debug protocol over this UART: X, a length and that many
@@ -1575,6 +1762,29 @@ module `NEXTTANG_ZXNEXT_TOP (
         .spi_mosi(pi_spi_mosi),
         .spi_miso(core_gpio[9])
     );
+`ifdef NEXTTANG_ZXNEXT_DDR3
+    nexttang_spec256_uart_loader spec256_loader (
+        .clock(clock_28),
+        .reset(!machine_locked),
+        .byte_in(command_byte),
+        .byte_valid(uart_byte_valid),
+        .payload(spec256_payload),
+        .spec256_mode(spec256_mode),
+        .plane_write(loader_plane_write),
+        .plane_address(loader_plane_address),
+        .plane_data(loader_plane_data),
+        .palette_write(spec256_palette_write),
+        .palette_index(spec256_palette_index),
+        .palette_rgb(spec256_palette_rgb),
+        .arm(loader_arm),
+        .arm_pc(loader_arm_pc),
+        .disarm(loader_disarm)
+    );
+`else
+    assign spec256_payload = 1'b0;
+    assign spec256_mode = 1'b0;
+    assign spec256_desync = 1'b0;
+`endif
 
     reg [2:0]  trigger_digits_left = 3'd0;
     reg [15:0] trigger_command_address = 16'h0000;
