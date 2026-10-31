@@ -79,3 +79,22 @@ When a conversion has no graphical ROM, omit `--rom-gfx` and pass the ordinary
 eight graphical execution planes, matching GZX initialization. It never embeds
 a ROM unless the user explicitly supplies it, and generated packs remain
 private build artifacts.
+
+## English text patches
+
+Some of Alberto Conde's conversions are of the Spanish releases (Army Moves,
+for one). `patches/` holds English text for them as patches, so anyone can
+apply them to their own copy of the `.256`; the games themselves are not
+included. Only the game's text changes, never the colours, and each English
+string is exactly as long as the Spanish one it replaces, because the games
+print strings inline in their code.
+
+```sh
+python3 tools/spec256/patch256.py tools/spec256/patches/army-moves-1-en.txt \
+    "Army Moves (Part 1).256" "Army Moves (Part 1) (English).256"
+```
+
+The patch checks the `.256`'s SHA-256 first and refuses any other version.
+The `.ips` files beside each patch are the same change for IPS tools (Lunar
+IPS, Floating IPS); `patch256.py PATCH GAME.256 --ips OUT.ips` regenerates
+them.

@@ -1,0 +1,15 @@
+# Army Moves (Part 2): English text for Alberto Conde's Spec256 conversion (SPEC256_MISTER).
+# Apply with tools/spec256/patch256.py to your own copy; the .256 is not
+# included. Only the game's text changes; the colours are untouched.
+# English text: NextTang.
+game: Army Moves (Part 2)
+sha256: 35a33f7c2b5ac46ea36f88f4a6be46f319a540fd67ada772d56b5d80d66fd4b7
+"DERECHA  " = "RIGHT    "
+"IZQUIERDA  SUBIR   FUEGO-1   BAJAR   FUEGO-2 REINICIAR  PAUSA  " = "LEFT       UP      FIRE-1    DOWN    FIRE-2  RESTART    PAUSE  " x2
+"1-TECLADO" = "1-KEYS   "
+"3-JUGAR" = "3-PLAY "
+"PROGRAMA POR VICTOR RUIZ" = "PROGRAM BY VICTOR RUIZ  "
+"LA MISION HA FRACASADO" = "THE MISSION HAS FAILED"
+"COMPLETADA FASE " = "COMPLETED STAGE "
+"LO HAS CONSEGUIDO" = "YOU HAVE DONE IT!"
+"CONTINUARA EN NAVY MOVES." = "CONTINUES IN NAVY MOVES. "

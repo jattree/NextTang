@@ -1,0 +1,20 @@
+# Army Moves (Part 1): English text for Alberto Conde's Spec256 conversion (SPEC256_MISTER).
+# Apply with tools/spec256/patch256.py to your own copy; the .256 is not
+# included. Only the game's text changes; the colours are untouched.
+# English text: NextTang.
+game: Army Moves (Part 1)
+sha256: 08be3e9dcdb2a7bab1ac2009f23bb6708cdf895b2050577d049cd9ca4b1c0b56
+"DERECHA  " = "RIGHT    "
+"IZQUIERDA  SUBIR   FUEGO-1   BAJAR   FUEGO-2 REINICIAR  PAUSA  " = "LEFT       UP      FIRE-1    DOWN    FIRE-2  RESTART    PAUSE  " x2
+"1-TECLADO" = "1-KEYS   "
+"3-JUGAR" = "3-PLAY "
+"PROGRAMA POR VICTOR RUIZ" = "PROGRAM BY VICTOR RUIZ  "
+"LA MISION HA FRACASADO" = "THE MISSION HAS FAILED"
+"COMPLETADA FASE " = "COMPLETED STAGE "
+"CLAVE DE ACCESO? " = "ACCESS CODE?     "
+"CLAVE ERRONEA**ACCESO DENEGADO" = "WRONG CODE   **ACCESS DENIED  "
+"HAS PERDIDO TUS EFECTIVOS." = "YOU HAVE LOST YOUR TROOPS."
+"HELICOPTERO SIN GASOLINA" = "HELICOPTER OUT OF FUEL  "
+"CODIGO PARA LOAD: " = "CODE FOR LOADING: "
+"BONUS ATERRIZAJE " = "LANDING BONUS    "
+"LO SIENTO**TE HAS PASADO" = "SORRY    **YOU OVERSHOT "

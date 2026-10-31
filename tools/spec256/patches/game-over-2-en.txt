@@ -1,0 +1,16 @@
+# Game Over (Part 2): English text for Alberto Conde's Spec256 conversion (SPEC256_MISTER).
+# Apply with tools/spec256/patch256.py to your own copy; the .256 is not
+# included. Only the game's text changes; the colours are untouched.
+# English text: NextTang.
+game: Game Over (Part 2)
+sha256: 60b3a1b588dfb4ded6c2cad2798a23434f521528d978d5370374d758a439f76c
+"DINAMIC PRESENTA......." = "DINAMIC PRESENTS......."
+"1 TECLADO" = "1 KEYS   "
+"3 JUGAR" = "3 PLAY "
+"4 CLAVE ACCESO" = "4 ACCESS CODE "
+"COPYRIGHT SNATCHO Y DINAMIC 1987" = "COPYRIGHT SNATCHO & DINAMIC 1987"
+"INTRODUCE CLAVE " = "ENTER CODE      "
+"  ACCESO PERMITIDO " = "  ACCESS GRANTED   "
+"ACCESO DENEGADO" = "ACCESS DENIED  "
+"SUBIR  BAJAR  IZQUIERDERECHADISPAROGRANADAPARAR  ABORTAR" = "UP     DOWN   LEFT   RIGHT  FIRE   GRENADEPAUSE  ABORT  "
+" PUNTOS " = " POINTS "

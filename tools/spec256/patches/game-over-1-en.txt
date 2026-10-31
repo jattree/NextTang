@@ -1,0 +1,13 @@
+# Game Over (Part 1): English text for Alberto Conde's Spec256 conversion (SPEC256_MISTER).
+# Apply with tools/spec256/patch256.py to your own copy; the .256 is not
+# included. Only the game's text changes; the colours are untouched.
+# English text: NextTang.
+game: Game Over (Part 1)
+sha256: 9c1a51d976561fc28c3315cde253ef72567a2d764aa5c8f603d3db79eeec803b
+"DINAMIC PRESENTA......." = "DINAMIC PRESENTS......."
+"CLAVE ACCESO PLANETA SCKUN 18024" = "PLANET SCKUN ACCESS CODE:  18024"
+"1 TECLADO" = "1 KEYS   "
+"3 JUGAR" = "3 PLAY "
+"COPYRIGHT SNATCHO Y DINAMIC SOFT" = "COPYRIGHT SNATCHO & DINAMIC SOFT"
+"SUBIR  BAJAR  IZQUIERDERECHADISPAROGRANADAPARAR  ABORTAR" = "UP     DOWN   LEFT   RIGHT  FIRE   GRENADEPAUSE  ABORT  "
+" PUNTOS " = " POINTS "
