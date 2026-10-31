@@ -17,12 +17,17 @@ scripts/build_spec256_dot.py --output out --palette spec256-palette.pal
 - Each game needs only its `.256`.
 - `C:/TMP/` must exist (it does on the standard card); the system drive is
   assumed to be `C:`.
-- Add to `C:/NEXTZXOS/BROWSER.CFG`, before the `Z80,SNA` lines:
+- Add to `C:/NEXTZXOS/BROWSER.CFG`, before the `Z80,SNA` lines (CRLF line
+  endings, as the file has; `<7F>` is the single byte 0x7F, which the
+  browser replaces with `c:/nextzxos/`, as in the card's own lines):
 
 ```
-256:.spec256 "|":clear 65367:load "snapload.bas":f$="c:/tmp/spec256.z80":adj=0:goto 1
-256:.spec256 "|":clear 65367:load "snapload.bas":f$="c:/tmp/spec256.z80":adj=1:goto 1
+256:.spec256 "|":clear 65367:load "<7F>snapload.bas":f$="c:/tmp/spec256.z80":adj=0:goto 1
+256:.spec256 "|":clear 65367:load "<7F>snapload.bas":f$="c:/tmp/spec256.z80":adj=1:goto 1
 ```
+
+  The first runs on ENTER, the second on SYMBOL SHIFT + ENTER (the snapshot
+  loader's options page).
 
 Selecting `GAME.256` in the browser then sends its colour, writes the
 game's memory and CPU state as `/tmp/SPEC256.Z80`, and starts that with
