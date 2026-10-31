@@ -31,7 +31,9 @@ the pixels stay as they are but for a mark or two (that text is on screen,
 perhaps with a menu's selection mark over it), again with the new text, once
 on the game's bytes and once on each colour plane, as Spec256's nine CPUs
 would, and writes the pixel bytes that change, leaving the marks and the
-attributes as they were. Games
+attributes as they were. "redraw-run: START END" (hex) does the same for a
+block of the game's code that prints a whole screen of text, such as a
+menu printed from a table. Games
 print through the Spectrum ROM, so this needs a 48K ROM image (--rom) and
 `pip install z80`; the .ips files have it done already. The input must
 match the sha256, so a patch never lands on a different version of a game.
@@ -128,8 +130,9 @@ def run_print(memory: bytearray, game: bytes, start: int, end: int) -> bytes | N
 
 
 def redraw(game: bytes, patched: bytes, occurrences: list[tuple[int, bytes, bytes]],
-           setup: int, rom: bytes | None) -> dict[int, int]:
-    """Screen bytes, by file offset, of the strings on screen printed anew."""
+           setup: int | None, runs: list[tuple[int, int]], rom: bytes | None) -> dict[int, int]:
+    """Screen bytes, by file offset, of the text on screen printed anew: each
+    inline string after its setup code, and each block of code in runs."""
     try:
         import z80  # noqa: F401, PLC0415
     except ImportError as error:
@@ -139,16 +142,17 @@ def redraw(game: bytes, patched: bytes, occurrences: list[tuple[int, bytes, byte
     out: dict[int, int] = {}
     original = layer_memory(game, RECORD - 1, rom)
     screen = bytes(original[SCREEN.start:SCREEN.stop])
-    for at, old, _new in occurrences:
+    blocks: list[tuple[int, int, str]] = list((start, end, f"{start:04x}") for start, end in runs)
+    for at, old, _new in occurrences if setup is not None else []:
         address = {5: 0x4000, 2: 0x8000}.get(at // BANK_BYTES)
         if address is None:
             if at // BANK_BYTES != game[REGISTERS_AT + 28] & 7:
                 continue
             address = 0xC000
         address += at % BANK_BYTES
-        start, end = address - setup, address + len(old) + 1
-        if original[address - 3] != 0xCD:
-            continue
+        if original[address - 3] == 0xCD:
+            blocks.append((address - setup, address + len(old) + 1, old.decode()))
+    for start, end, name in blocks:
         printed = run_print(original, game, start, end)
         if printed is None:
             continue
@@ -159,7 +163,7 @@ def redraw(game: bytes, patched: bytes, occurrences: list[tuple[int, bytes, byte
             memory = layer_memory(patched, layer, rom)
             after = run_print(memory, patched, start, end)
             if after is None:
-                raise PatchError(f"{old.decode()!r}: printing the new text did not finish")
+                raise PatchError(f"{name!r}: printing the new text did not finish")
             for i, byte in enumerate(after):
                 if i not in marks and byte != memory[SCREEN.start + i]:
                     out[(5 * BANK_BYTES + SCREEN.start + i - 0x4000) * RECORD + layer] = byte
@@ -201,11 +205,14 @@ def changes(game: bytes, patch_text: str, rom: bytes | None = None) -> dict[int,
                     if out.get(offset, byte) != byte:
                         raise PatchError(f"{old.decode()!r} overlaps another rule")
                     out[offset] = byte
-    if "redraw" in header:
+    if "redraw" in header or "redraw-run" in header:
         patched = bytearray(game)
         for offset, byte in out.items():
             patched[offset] = byte
-        out.update(redraw(game, bytes(patched), occurrences, int(header["redraw"]), rom))
+        setup = int(header["redraw"]) if "redraw" in header else None
+        numbers = [int(n, 16) for n in header.get("redraw-run", "").split()]
+        runs = list(zip(numbers[0::2], numbers[1::2]))
+        out.update(redraw(game, bytes(patched), occurrences, setup, runs, rom))
     return out
 
 
