@@ -33,7 +33,17 @@ on the game's bytes and once on each colour plane, as Spec256's nine CPUs
 would, and writes the pixel bytes that change, leaving the marks and the
 attributes as they were. "redraw-run: START END" (hex) does the same for a
 block of the game's code that prints a whole screen of text, such as a
-menu printed from a table. Games
+menu printed from a table.
+
+A label drawn as a picture (Army Moves' PUNTOS on its panel) is replaced
+with "label: ADDRESS WIDTH HEIGHT" (hex address, width in bytes) and
+"pixels:" (the new picture's bytes, hex, row by row). Its colour comes from
+the old picture in the game being patched: "take: X0-X1 S0-S1, ..." copies
+pixel columns S0-S1 of the old picture, all nine bytes' bits, to X0-X1 of
+the new (the two must hold the same letter: the same pixels), and
+"shade: X0-X1 I0 I1 ..." colours each run of a new letter's pixels in those
+columns with palette entries I0, I1, ... from its left end. Other pixels
+take "background: INDEX". So the patch carries no colour of its own. Games
 print through the Spectrum ROM, so this needs a 48K ROM image (--rom) and
 `pip install z80`; an IPS patch made with --ips has it done already. The input must
 match the sha256, so a patch never lands on a different version of a game.
@@ -170,6 +180,88 @@ def redraw(game: bytes, patched: bytes, occurrences: list[tuple[int, bytes, byte
     return out
 
 
+def address_offset(game: bytes, address: int) -> int:
+    """File offset of the record for a 48K address, as 7FFD pages it."""
+    bank = (None, 5, 2, game[REGISTERS_AT + 28] & 7)[address >> 14]
+    if bank is None:
+        raise PatchError(f"{address:04x} is in the ROM")
+    return (bank * BANK_BYTES + (address & 0x3FFF)) * RECORD
+
+
+def span(text: str) -> tuple[int, int]:
+    first, _, last = text.partition("-")
+    return int(first), int(last or first)
+
+
+def relabel(game: bytes, header: dict[str, str]) -> dict[int, int]:
+    """File offset -> byte for a picture label redrawn with its own colours."""
+    address, width, height = (int(n, 16) for n in header["label"].split())
+    pixels = bytes.fromhex(header.get("pixels", ""))
+    if len(pixels) != width * height:
+        raise PatchError(f"label: {len(pixels)} pixel bytes, {width} x {height} wanted")
+    base = address_offset(game, address)
+    if address_offset(game, address + width * height - 1) != base + (width * height - 1) * RECORD:
+        raise PatchError("label: the picture runs across a bank")
+    columns = width * 8
+
+    def old(x: int, y: int) -> int:
+        """Old picture's pixel as nine bits: palette index, then the game's bit << 8."""
+        record = game[base + (y * width + x // 8) * RECORD:][:RECORD]
+        bit = 7 - x % 8
+        return sum(((record[k] >> bit) & 1) << k for k in range(RECORD))
+
+    def new_bit(x: int, y: int) -> int:
+        return (pixels[y * width + x // 8] >> (7 - x % 8)) & 1
+
+    background = int(header.get("background", "0"))
+    picture = [[background for _ in range(columns)] for _ in range(height)]
+    for x in range(columns):
+        for y in range(height):
+            if new_bit(x, y):
+                picture[y][x] = -1   # a letter pixel nothing has coloured yet
+    for pair in header.get("take", "").split(","):
+        if not pair.strip():
+            continue
+        target, source = (span(t) for t in pair.split())
+        if target[1] - target[0] != source[1] - source[0]:
+            raise PatchError(f"take {pair.strip()}: spans differ in width")
+        for dx in range(target[1] - target[0] + 1):
+            for y in range(height):
+                value = old(source[0] + dx, y)
+                if (value >> 8) != new_bit(target[0] + dx, y):
+                    raise PatchError(f"take {pair.strip()}: the letters' pixels differ")
+                picture[y][target[0] + dx] = value
+    for rule in header.get("shade", "").split(","):
+        if not rule.strip():
+            continue
+        words = rule.split()
+        first, last = span(words[0])
+        shades = [int(w) for w in words[1:]]
+        for y in range(height):
+            run = 0
+            for x in range(first, last + 1):
+                if new_bit(x, y):
+                    picture[y][x] = 0x100 | shades[min(run, len(shades) - 1)]
+                    run += 1
+                else:
+                    run = 0
+    out: dict[int, int] = {}
+    for y in range(height):
+        for x in range(columns):
+            if picture[y][x] == -1:
+                raise PatchError(f"label: letter pixel {x},{y} has no colour (take or shade it)")
+    for y in range(height):
+        for c in range(width):
+            record = [0] * RECORD
+            for b in range(8):
+                value = picture[y][c * 8 + b]
+                for k in range(RECORD):
+                    record[k] |= ((value >> k) & 1) << (7 - b)
+            for k in range(RECORD):
+                out[base + (y * width + c) * RECORD + k] = record[k]
+    return out
+
+
 def changes(game: bytes, patch_text: str, rom: bytes | None = None) -> dict[int, int]:
     """File offset -> new byte for every byte the patch changes."""
     header, rules = read_patch(patch_text)
@@ -205,6 +297,8 @@ def changes(game: bytes, patch_text: str, rom: bytes | None = None) -> dict[int,
                     if out.get(offset, byte) != byte:
                         raise PatchError(f"{old.decode()!r} overlaps another rule")
                     out[offset] = byte
+    if "label" in header:
+        out.update(relabel(game, header))
     if "redraw" in header or "redraw-run" in header:
         patched = bytearray(game)
         for offset, byte in out.items():

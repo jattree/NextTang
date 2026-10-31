@@ -90,6 +90,37 @@ class Patch256Test(unittest.TestCase):
                 patch256.apply(good, patch)
             self.assertIn(message, str(raised.exception))
 
+    def test_label_takes_colour_from_the_old_picture(self) -> None:
+        game = make_game()
+        game[patch256.REGISTERS_AT + 28] = 0x30           # 48K: bank 0 at 0xC000
+        # Old picture at 0x8100 (bank 2), 2 bytes x 1 row: pixels 0-2 a letter
+        # coloured 5, 6, 7; the rest index 1. All nine bits per pixel.
+        old = [(1, 5), (1, 6), (1, 7)] + [(0, 1)] * 13
+        for c in range(2):
+            record = [0] * 9
+            for b in range(8):
+                master, index = old[c * 8 + b]
+                for k in range(8):
+                    record[k] |= ((index >> k) & 1) << (7 - b)
+                record[8] |= master << (7 - b)
+            at = (2 * 16_384 + 0x100 + c) * 9
+            game[at:at + 9] = bytes(record)
+        # New picture: the letter moved to pixels 8-10, a new one at 13-14.
+        patch = patch_for(bytes(game), "label: 8100 2 1\npixels: 00e6\n"
+                                       "take: 8-10 0-2\nshade: 12-15 9 10\nbackground: 1")
+        patched = patch256.apply(bytes(game), patch)
+        pixels = []
+        for c in range(2):
+            record = patched[(2 * 16_384 + 0x100 + c) * 9:][:9]
+            for b in range(8):
+                pixels.append((record[8] >> (7 - b) & 1, sum(((record[k] >> (7 - b)) & 1) << k for k in range(8))))
+        self.assertEqual(pixels[8:11], [(1, 5), (1, 6), (1, 7)])
+        self.assertEqual(pixels[13:15], [(1, 9), (1, 10)])
+        self.assertEqual([p for i, p in enumerate(pixels) if i not in (8, 9, 10, 13, 14)], [(0, 1)] * 11)
+        wrong = patch_for(bytes(game), "label: 8100 2 1\npixels: 00f0\ntake: 8-11 0-3\nbackground: 1")
+        with self.assertRaises(patch256.PatchError):
+            patch256.apply(bytes(game), wrong)
+
     def test_shipped_patches_keep_lengths(self) -> None:
         patches = sorted((REPO_ROOT / "tools" / "spec256" / "patches").glob("*.txt"))
         self.assertTrue(patches)

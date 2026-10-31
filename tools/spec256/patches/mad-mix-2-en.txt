@@ -1,0 +1,10 @@
+# Mad Mix 2 - En el Castillo de los Fantasmas: English text for Alberto Conde's Spec256 conversion (SPEC256_MISTER).
+# Apply with tools/spec256/patch256.py to your own copy; the .256 is not
+# included. Only the game's text changes; the colours are untouched.
+# The game is in English but for its two tape messages, whose last letter
+# carries bit 7 as the end mark; each rule leaves that letter as it is.
+# English text: NextTang.
+game: Mad Mix 2 - En el Castillo de los Fantasmas
+sha256: 4ea6ec218898d81c06ae69377d3b07bffef754e921d76e4982e0e98c790a9d95
+"PON EN MARCHA EL CASET" = " PRESS PLAY ON THE TAP"
+"CARGANDO MAS FASE" = "LOADING NEW LEVEL"
