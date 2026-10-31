@@ -48,6 +48,7 @@ GENERATED_SUFFIXES = {
     ".fst",
     ".ghw",
     ".img",
+    ".ips",
     ".iso",
     ".jed",
     ".mcs",

@@ -108,6 +108,7 @@ pip install z80
 python3 tools/spec256/patch256.py tools/spec256/patches/army-moves-1-en.txt \
     "Army Moves (Part 1).256" "Army Moves (Part 1) (English).256" --rom 48.rom
 ```
-The `.ips` files beside each patch are the same change for IPS tools (Lunar
-IPS, Floating IPS); `patch256.py PATCH GAME.256 --ips OUT.ips` regenerates
-them.
+For IPS tools (Lunar IPS, Floating IPS), `patch256.py PATCH GAME.256 --ips
+OUT.ips` writes the same change as an IPS patch, with any redraw already
+done; IPS files are release downloads, generated from the `.256`, and are
+not kept in the repository.

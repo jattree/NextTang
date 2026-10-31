@@ -35,7 +35,7 @@ attributes as they were. "redraw-run: START END" (hex) does the same for a
 block of the game's code that prints a whole screen of text, such as a
 menu printed from a table. Games
 print through the Spectrum ROM, so this needs a 48K ROM image (--rom) and
-`pip install z80`; the .ips files have it done already. The input must
+`pip install z80`; an IPS patch made with --ips has it done already. The input must
 match the sha256, so a patch never lands on a different version of a game.
 The original file is never changed.
 
