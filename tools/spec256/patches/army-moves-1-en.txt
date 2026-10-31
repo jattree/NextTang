@@ -4,6 +4,7 @@
 # English text: NextTang.
 game: Army Moves (Part 1)
 sha256: 08be3e9dcdb2a7bab1ac2009f23bb6708cdf895b2050577d049cd9ca4b1c0b56
+redraw: 13
 "DERECHA  " = "RIGHT    "
 "IZQUIERDA  SUBIR   FUEGO-1   BAJAR   FUEGO-2 REINICIAR  PAUSA  " = "LEFT       UP      FIRE-1    DOWN    FIRE-2  RESTART    PAUSE  " x2
 "1-TECLADO" = "1-KEYS   "

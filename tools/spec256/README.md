@@ -95,6 +95,19 @@ python3 tools/spec256/patch256.py tools/spec256/patches/army-moves-1-en.txt \
 ```
 
 The patch checks the `.256`'s SHA-256 first and refuses any other version.
+In the game's text all nine bytes of a character (eight planes and the
+game's byte) hold its code, and the patch changes all nine.
+
+A conversion's snapshot is often taken with the menu already on screen, so
+patches marked `redraw` also print the visible text again, by running the
+game's own print code on a Z80 emulator for the game's bytes and each colour
+plane. That needs a 48K ROM image and the `z80` package:
+
+```sh
+pip install z80
+python3 tools/spec256/patch256.py tools/spec256/patches/army-moves-1-en.txt \
+    "Army Moves (Part 1).256" "Army Moves (Part 1) (English).256" --rom 48.rom
+```
 The `.ips` files beside each patch are the same change for IPS tools (Lunar
 IPS, Floating IPS); `patch256.py PATCH GAME.256 --ips OUT.ips` regenerates
 them.

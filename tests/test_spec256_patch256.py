@@ -1,9 +1,10 @@
-"""tools/spec256/patch256.py must change only the game's own bytes of the text it names.
+"""tools/spec256/patch256.py must change only the text it names, all nine bytes of each character.
 
-On a synthetic .256: a rule replaces the game byte of every occurrence it
-expects and nothing else (the planes and all other bytes stay); a wrong
-occurrence count, a different .256 (sha256), strings of different lengths or
-a string split across two banks are refused; the IPS patch it writes gives
+On a synthetic .256: a rule replaces every byte (eight planes and the game's
+byte) of every character of every occurrence it expects, and nothing else; a
+wrong occurrence count, a different .256 (sha256), strings of different
+lengths, a string split across two banks, or text whose planes are not its
+code eight times (colour data) are refused; the IPS patch it writes gives
 the same file as applying it directly. The shipped patches parse and keep
 every string's length.
 """
@@ -29,9 +30,12 @@ def make_game() -> bytearray:
     return game
 
 
-def put_text(game: bytearray, address: int, text: bytes) -> None:
+def put_text(game: bytearray, address: int, text: bytes, planes: bool = True) -> None:
     for i, byte in enumerate(text):
-        game[(address + i) * 9 + 8] = byte
+        record = (address + i) * 9
+        game[record + 8] = byte
+        if planes:
+            game[record:record + 8] = bytes((byte,)) * 8
 
 
 def patch_for(game: bytes, rules: str) -> str:
@@ -61,21 +65,25 @@ class Patch256Test(unittest.TestCase):
         self.assertEqual(memory[5 * 16_384 + 100:5 * 16_384 + 109], b"1-KEYS   ")
         self.assertEqual(memory[50:57], b"FIRE-1 ")
         self.assertEqual(memory[3 * 16_384 + 7:3 * 16_384 + 14], b"FIRE-1 ")
+        for address, text in ((5 * 16_384 + 100, b"1-KEYS   "), (50, b"FIRE-1 "), (3 * 16_384 + 7, b"FIRE-1 ")):
+            for i, byte in enumerate(text):
+                self.assertEqual(patched[(address + i) * 9:(address + i + 1) * 9], bytes((byte,)) * 9)
         changed = [i for i in range(len(game)) if game[i] != patched[i]]
-        self.assertTrue(all(i % 9 == 8 for i in changed))
-        self.assertEqual(len(changed), 9 + 6 + 6 - 3)   # trailing spaces replace letters
+        self.assertEqual(len(changed), 9 * (6 + 6 + 6))   # "1-", the E of KEYS and "F" stay
         self.assertEqual(apply_ips(bytes(game), patch256.ips(bytes(game), patch)), patched)
 
     def test_refusals(self) -> None:
         game = make_game()
         put_text(game, 200, b"JUGAR")
         put_text(game, 16_384 - 2, b"PAUSA")             # across banks 0 and 1
+        put_text(game, 900, b"SUBIR", planes=False)       # colour data, not text
         good = bytes(game)
         cases = {
             "found 1 times": patch_for(good, '"JUGAR" = "PLAY " x2'),
             "not the one": "sha256: " + "0" * 64 + '\n"JUGAR" = "PLAY "\n',
             "characters": patch_for(good, '"JUGAR" = "PLAY"'),
             "found 0 times": patch_for(good, '"PAUSA" = "PAUSE"'),
+            "not plain text": patch_for(good, '"SUBIR" = "UP   "'),
         }
         for message, patch in cases.items():
             with self.assertRaises(patch256.PatchError) as raised:

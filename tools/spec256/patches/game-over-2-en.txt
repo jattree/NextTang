@@ -4,6 +4,7 @@
 # English text: NextTang.
 game: Game Over (Part 2)
 sha256: 60b3a1b588dfb4ded6c2cad2798a23434f521528d978d5370374d758a439f76c
+redraw: 13
 "DINAMIC PRESENTA......." = "DINAMIC PRESENTS......."
 "1 TECLADO" = "1 KEYS   "
 "3 JUGAR" = "3 PLAY "
