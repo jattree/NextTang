@@ -7,6 +7,11 @@ parameter INJECT_UNDECIDED_SPEED = 0;
 parameter DEVICE_LOW_SPEED = 0;
 parameter CONFIG_LEADING_SHORT = 0;
 parameter CHECK_PREFIXED_MODIFIER = 0;
+parameter XBOX = 0;
+parameter EP0_SIZE = 8;
+parameter STRICT_STATUS = 0;
+parameter BOOT_NAK_SOFS = 0;
+parameter SIM_NS = 10000000;  // two 50-frame bus resets before the first report
 
 reg host_clock = 0;
 always #8.3333 host_clock = ~host_clock;
@@ -87,6 +92,7 @@ wire [63:0] hid_registers;
 wire [63:0] config_snapshot;
 wire config_snapshot_valid;
 wire full_speed;
+wire pad_up, pad_a;
 
 usb_hid_host #(
   .FULL_SPEED(1),
@@ -103,8 +109,8 @@ usb_hid_host #(
   .key_modifiers(modifiers), .key_0(key0), .key_1(key1),
   .key_2(), .key_3(), .key_4(), .key_5(),
   .mouse_btn(), .mouse_dx(), .mouse_dy(),
-  .game_l(), .game_r(), .game_u(), .game_d(),
-  .game_a(), .game_b(), .game_x(), .game_y(),
+  .game_l(), .game_r(), .game_u(pad_up), .game_d(),
+  .game_a(pad_a), .game_b(), .game_x(), .game_y(),
   .game_sel(), .game_sta(), .game_extra(),
   .dbg_hid_report(raw_report), .dbg_hid_regs(hid_registers),
   .dbg_config_snapshot(config_snapshot),
@@ -124,14 +130,18 @@ usb_hid_host_dual_rom #(
 integer setup_seen;
 integer endpoint_zero_reads;
 integer endpoint_one_reads;
+integer status_missed;
 usb_full_speed_keyboard_model #(
   .LOW_SPEED(DEVICE_LOW_SPEED),
-  .CONFIG_LEADING_SHORT(CONFIG_LEADING_SHORT)
+  .CONFIG_LEADING_SHORT(CONFIG_LEADING_SHORT),
+  .XBOX(XBOX), .EP0_SIZE(EP0_SIZE), .STRICT_STATUS(STRICT_STATUS),
+  .BOOT_NAK_SOFS(BOOT_NAK_SOFS)
 ) keyboard (
   .clk(device_clock), .dp(dp), .dm(dm),
   .setup_seen(setup_seen),
   .in0_seen(endpoint_zero_reads),
-  .in1_seen(endpoint_one_reads)
+  .in1_seen(endpoint_one_reads),
+  .status_missed(status_missed)
 );
 
 integer report_count = 0;
@@ -150,11 +160,30 @@ always @(posedge host_clock)
   end
 
 initial begin
-  #6000000;
+  #SIM_NS;
   if (!dut.connected)
     $fatal(1, "full-speed keyboard did not enumerate");
   if (connection_error)
     $fatal(1, "host reported a connection error");
+  if (XBOX) begin
+    if ({dut.regs[1], dut.regs[0], dut.regs[3], dut.regs[2]} != 32'h045e028e)
+      $fatal(1, "wrong VID:PID: %02x%02x:%02x%02x",
+             dut.regs[1], dut.regs[0], dut.regs[3], dut.regs[2]);
+    if ({dut.regs[4], dut.regs[5], dut.regs[6]} != 24'hff5d01)
+      $fatal(1, "wrong X-Input interface: %02x %02x %02x",
+             dut.regs[4], dut.regs[5], dut.regs[6]);
+    if (status_missed != 0)
+      $fatal(1, "%0d control reads had no status stage", status_missed);
+    if (device_type != 2'd3 || endpoint_one_reads < 1 || report_count < 1)
+      $fatal(1, "pad gave no reports: type=%0d ep1=%0d reports=%0d",
+             device_type, endpoint_one_reads, report_count);
+    if (!pad_up || !pad_a)
+      $fatal(1, "pad report not decoded: up=%0d a=%0d report=%016x",
+             pad_up, pad_a, raw_report);
+    $display("USB_XBOX_PAD_PASS setup=%0d ep0=%0d ep1=%0d reports=%0d",
+             setup_seen, endpoint_zero_reads, endpoint_one_reads, report_count);
+    $finish;
+  end
   if ({dut.regs[1], dut.regs[0]} != 16'h258a)
     $fatal(1, "wrong VID: %04x", {dut.regs[1], dut.regs[0]});
   if ({dut.regs[3], dut.regs[2]} != 16'h0049)

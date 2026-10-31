@@ -38,6 +38,10 @@ module usb_hid_host #(
   output reg  full_report,  // pulse after full report received from device
   output wire connerr,      // connection or protocol error
   output wire busy,
+  // NextTang diagnostics: the microcode has reached report polling, and one
+  // cycle for each report packet received while it has
+  output wire link_connected,
+  output reg  report_seen,
 
   // keyboard
   output reg [7:0] key_modifiers,
@@ -62,6 +66,14 @@ module usb_hid_host #(
   output reg         dbg_config_snapshot_valid,
   output wire        dbg_full_speed,
   output wire [15:0] dbg_speed_sample,
+  // NextTang enumeration trace, kept across connection errors:
+  // {attempts[3:0], fail_return[9:0], fail_pc[9:0], interface class,
+  //  PID, VID}. fail_pc is three nibbles past the last branch taken to the
+  // microcode's connerr; fail_return is the innermost call's return address.
+  output wire [63:0] dbg_trace,
+  output wire [9:0]  dbg_watchdog_pc,  // where the last watchdog reset struck
+  output wire [3:0]  dbg_data0_handshake,
+  output wire [3:0]  dbg_idle_states,
 
   // rom
   output wire [9:0] rom_addr,
@@ -81,6 +93,26 @@ wire       connected;
 wire       full_speed;
 
 reg [7:0] load_data;
+
+wire [9:0] trace_fail_pc, trace_fail_return;
+wire [3:0] trace_attempts;
+reg [31:0] trace_id = 32'd0;
+reg  [7:0] trace_class = 8'd0;
+reg        trace_id_pending = 1'b0, trace_class_pending = 1'b0;
+
+// Latched a cycle after the descriptor saves, and not cleared by connerr, so
+// the identity of a device that later fails enumeration survives.
+always @(posedge clk) begin
+  trace_id_pending <= save && addra == 3;
+  trace_class_pending <= save && addra == 6;
+  if (trace_id_pending)
+    trace_id <= {regs[3], regs[2], regs[1], regs[0]};
+  if (trace_class_pending)
+    trace_class <= regs[4];
+end
+
+assign dbg_trace = {trace_attempts, trace_fail_return, trace_fail_pc,
+                    trace_class, trace_id};
 
 ukp #(
   .FULL_SPEED(FULL_SPEED)
@@ -105,6 +137,12 @@ ukp #(
   .connected(connected),
   .full_speed(full_speed),
   .dbg_speed_sample(dbg_speed_sample),
+  .dbg_fail_pc(trace_fail_pc),
+  .dbg_fail_return(trace_fail_return),
+  .dbg_watchdog_pc(dbg_watchdog_pc),
+  .dbg_attempts(trace_attempts),
+  .dbg_data0_handshake(dbg_data0_handshake),
+  .dbg_idle_states(dbg_idle_states),
   .connerr(connerr),
   .busy(busy),
   .rom_addr(rom_addr),
@@ -121,6 +159,11 @@ reg [7:0] dat  [0:7];         // data in last response (up to 8 bytes, wraps-aro
 reg [7:0] regs [0:7];         // 0 (VID_L), 1 (VID_H), 2 (PID_L), 3 (PID_H), 4 (INTERFACE_CLASS), 5 (INTERFACE_SUBCLASS), 6 (INTERFACE_PROTOCOL), 7 (UNUSED)
 reg [2:0] rcvct;
 reg [1:0] typ_next;
+reg       hid_device;         // registered: typ_next decodes after the descriptor scan
+
+always @(posedge clk)
+  hid_device <= (typ_next != 0);
+
 reg       ukprdy_r;
 reg       connected_r;
 
@@ -285,11 +328,19 @@ always @(posedge clk) begin
         load_data <= x_input ? 8'b1 : 8'b0;
       else if (addra == 13)  // polling interval
         load_data <= polling_interval;
+      else if (addra == 14)  // a device this host can decode
+        load_data <= {7'b0, hid_device};
     end
   end
 end
 
 integer j;
+
+assign link_connected = connected;
+
+// The branch of the block below that completes a report while connected.
+always @(posedge clk)
+  report_seen <= !(reset || connerr) && !ukpstart && !ukprdy && ukprdy_r && connected;
 
 // handle ukp data from packets
 always @(posedge clk) begin
@@ -463,17 +514,25 @@ always @(*) begin
         end
       end
       {1'b0, 16'h0079, 16'h0006}: begin  // supplied DragonRise USB controller
-        // Observed report layout:
-        //   d[0]/d[1] primary X/Y axes, d[2] buttons 0..7,
-        //   d[3]/d[4] secondary axes, d[5][3:0] hat and
-        //   d[5][7:4] buttons 8..11.
+        // Report layout seen on a PC (hidraw, 2026-10-30): d[0]/d[1] X/Y
+        // axes (the d-pad: 00 or ff), d[2] 00, d[3]/d[4] second axes,
+        // d[5][3:0] hat (f when centred), d[5][7:4] the four face buttons,
+        // d[6] shoulder and centre buttons (01, 02, 10, 20). An earlier
+        // layout put buttons in d[2]; both are read.
         {game_l, game_r} = {dat[0][7:6] == 2'b00, dat[0][7:6] == 2'b11};
         {game_u, game_d} = {dat[1][7:6] == 2'b00, dat[1][7:6] == 2'b11};
+        if (dat[5][3] == 1'b0) begin  // hat pressed
+          hat = dat[5][2:0];
+          game_u = game_u | (hat == 3'd0 || hat == 3'd1 || hat == 3'd7);
+          game_d = game_d | (hat == 3'd3 || hat == 3'd4 || hat == 3'd5);
+          game_l = game_l | (hat == 3'd5 || hat == 3'd6 || hat == 3'd7);
+          game_r = game_r | (hat == 3'd1 || hat == 3'd2 || hat == 3'd3);
+        end
 
         // Established SDL mapping: Y/B/A/X are buttons 0/1/2/3.
-        {game_x, game_a, game_b, game_y} = dat[2][3:0];
-        {game_sel, game_sta} = {dat[5][4], dat[5][5]};
-        game_extra = dat[2][7:4];
+        {game_x, game_a, game_b, game_y} = dat[2][3:0] | dat[5][7:4];
+        {game_sel, game_sta} = {dat[6][4], dat[6][5]};
+        game_extra = dat[2][7:4] | dat[6][3:0];
       end
       {1'b0, 16'h0738, 16'h2217}: begin  // SpeedLink COMPETITION PRO Extra
         {game_y, game_x, game_b, game_a} = {dat[0][2], dat[0][0], dat[0][3], dat[0][1]};
@@ -503,7 +562,8 @@ end
 endmodule
 
 module ukp #(
-  parameter FULL_SPEED = 1
+  parameter FULL_SPEED = 1,
+  parameter CONNERR_ADDR = 10'h110  // the connerr label in ukp/ukp.s
 ) (
   input wire clk,
   input wire reset,
@@ -531,6 +591,15 @@ module ukp #(
   output reg  connected,
   output reg  full_speed,
   output reg  [15:0] dbg_speed_sample,
+  output reg  [9:0] dbg_fail_pc = 10'd0,
+  output reg  [9:0] dbg_fail_return = 10'd0,
+  output reg  [9:0] dbg_watchdog_pc = 10'd0,
+  output reg  [3:0] dbg_attempts = 4'd0,
+  // Handshake PID nibble after the host's last DATA0 packet (a SETUP's data):
+  // 2 ACK, a NAK, e STALL, 0 no answer. Sticky raw line states seen while the
+  // host waits for a frame tick with its drivers off: {K, SE1, SE0, J}.
+  output reg  [3:0] dbg_data0_handshake = 4'd0,
+  output reg  [3:0] dbg_idle_states = 4'd0,
   output wire connerr,
   output wire busy
 );
@@ -692,6 +761,47 @@ end
 always @(posedge clk) begin
   state <= state_next;
   pc    <= pc_next;
+end
+
+// NextTang enumeration trace
+reg [7:0] trace_tx_last = 8'd0, trace_tx_pid = 8'd0;
+reg       trace_handshake_wait = 1'b0;
+
+always @(posedge clk) begin
+  if (state == S_TX1) begin
+    if (trace_tx_last == 8'h80)
+      trace_tx_pid <= {inst, sb[3:0]};
+    trace_tx_last <= {inst, sb[3:0]};
+  end
+  if (state != S_RX0 && state_next == S_RX0)
+    trace_handshake_wait <= trace_tx_pid == 8'hc3;
+  if (trace_handshake_wait && state == S_RX0 && state_next == S_SYNC) begin
+    dbg_data0_handshake <= 4'h0;
+    trace_handshake_wait <= 1'b0;
+  end
+  if (trace_handshake_wait && sample && bitaddr == 16) begin
+    dbg_data0_handshake <= data[3:0];
+    trace_handshake_wait <= 1'b0;
+  end
+  if (state == S_WAIT && !ug) begin
+    case ({usb_dp_i, usb_dm_i})
+      2'b10: dbg_idle_states[0] <= 1'b1;  // J (full speed)
+      2'b00: dbg_idle_states[1] <= 1'b1;  // SE0
+      2'b11: dbg_idle_states[2] <= 1'b1;  // SE1
+      default: dbg_idle_states[3] <= 1'b1;  // K
+    endcase
+  end
+end
+
+always @(posedge clk) begin
+  if (!reset && (&conct))
+    dbg_watchdog_pc <= pc;
+  if (!reset && !(&conct) && state == S_B1 && {inst, lb4, 2'b0} == CONNERR_ADDR) begin
+    dbg_fail_pc <= pc;
+    dbg_fail_return <= wpc[0];
+  end
+  if (!reset && !(&conct) && cs && state == S_SAVE1 && addra == 15 && inst == 0)
+    dbg_attempts <= dbg_attempts + 1'b1;
 end
 
 // state machine combinational
@@ -872,8 +982,10 @@ always @(posedge clk) begin
     if (!timeout && prescaler == 0)
       delay <= delay + 1;
 
-    // WDT (data byte valid or connected and NAK)
-    if (ukpstb || (connected && nak))
+    // WDT (data byte valid or NAK). NextTang: a NAK feeds it during
+    // enumeration too. A pad still starting up can NAK descriptor reads for
+    // longer than the watchdog, whose reset then restarts it, forever.
+    if (ukpstb || nak)
       conct <= 0;
     else if (interval_frame)
       conct <= conct + 1;
@@ -1029,7 +1141,8 @@ always @(posedge clk) begin
         nrzrxct <= nrzrxct + 1;
       else
         nrzrxct <= 0;
-      if (ukprdy && bitaddr[2:0] == 3'b000) begin  // strobe whenever we have a full byte ready
+      // A stuffed bit holds bitaddr; defer the byte strobe to the next data bit.
+      if (ukprdy && nrzrxct != 6 && bitaddr[2:0] == 3'b000) begin
         ukpdat <= data;
         if (wk >= 15)  // ignore last two bytes (CRC of last part-packet)
           ukpstb <= 1;

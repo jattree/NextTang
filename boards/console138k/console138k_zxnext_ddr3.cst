@@ -191,11 +191,13 @@ IO_LOC "sd_mosi" Y16;
 IO_PORT "sd_mosi" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
 
 // USB-A sockets for the direct hosts, as in console138k_spectrum128_usb_ddr3_extra.cst.
+// The board holds D+ and D- low with 15k resistors (R113-R115 on the
+// 32001C schematic), so the FPGA's own pulls stay off.
 IO_LOC "usb1_dp" H13;
-IO_PORT "usb1_dp" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_PORT "usb1_dp" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
 IO_LOC "usb1_dn" G13;
-IO_PORT "usb1_dn" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_PORT "usb1_dn" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
 IO_LOC "usb2_dp" M15;
-IO_PORT "usb2_dp" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_PORT "usb2_dp" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
 IO_LOC "usb2_dn" M16;
-IO_PORT "usb2_dn" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_PORT "usb2_dn" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;

@@ -384,6 +384,77 @@ class UsbKeyboardMatrixTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("USB_FULL_SPEED_KEYBOARD_PASS", result.stdout)
 
+    def test_xbox_pad_completes_every_control_read_and_reports(self) -> None:
+        # The 8BitDo M30 2.4G enumerates as 045e:028e with a 64-byte EP0. The
+        # strict model withholds reports until each control read has had its
+        # status stage, which the pre-2026-10-30 microcode skipped.
+        for ep0_size in (8, 64):
+            with self.subTest(ep0_size=ep0_size), tempfile.TemporaryDirectory() as directory:
+                simulation = Path(directory) / "usb-host-xbox-sim"
+                build = subprocess.run(
+                    [
+                        "iverilog", "-g2012", "-DNEXTTANG_USB_SIM_FAST",
+                        "-Ptestbench.XBOX=1",
+                        "-Ptestbench.STRICT_STATUS=1",
+                        f"-Ptestbench.EP0_SIZE={ep0_size}",
+                        "-o", str(simulation),
+                        str(USB_HOST_TESTBENCH), str(USB_DEVICE_MODEL),
+                        str(USB_HOST_RTL), str(USB_HOST_ROM_RTL),
+                    ],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=30,
+                )
+                self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+                result = subprocess.run(
+                    [str(simulation)],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("USB_XBOX_PAD_PASS", result.stdout)
+
+    def test_slow_starting_pad_survives_the_watchdog(self) -> None:
+        # A pad that NAKs descriptor reads for longer than the ~1023-frame
+        # watchdog after each bus reset. With only data bytes feeding the
+        # watchdog, its reset restarted the pad and enumeration never ended.
+        with tempfile.TemporaryDirectory() as directory:
+            simulation = Path(directory) / "usb-host-slow-pad-sim"
+            build = subprocess.run(
+                [
+                    "iverilog", "-g2012", "-DNEXTTANG_USB_SIM_FAST",
+                    "-Ptestbench.XBOX=1",
+                    "-Ptestbench.STRICT_STATUS=1",
+                    "-Ptestbench.EP0_SIZE=64",
+                    "-Ptestbench.BOOT_NAK_SOFS=1200",
+                    "-Ptestbench.SIM_NS=30000000",
+                    "-o", str(simulation),
+                    str(USB_HOST_TESTBENCH), str(USB_DEVICE_MODEL),
+                    str(USB_HOST_RTL), str(USB_HOST_ROM_RTL),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            result = subprocess.run(
+                [str(simulation)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=180,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("USB_XBOX_PAD_PASS", result.stdout)
+
     def test_full_speed_latch_rejects_a_one_sample_idle_dip(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             simulation = Path(directory) / "usb-host-dip-sim"

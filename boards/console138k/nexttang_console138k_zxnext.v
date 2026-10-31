@@ -565,6 +565,34 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire usb2_game_a, usb2_game_b, usb2_game_x, usb2_game_y;
     wire usb1_game_select, usb1_game_start, usb2_game_select, usb2_game_start;
     wire [3:0] usb1_game_extra, usb2_game_extra;
+    wire usb1_connerr, usb2_connerr, usb1_connected, usb2_connected;
+    wire usb1_report, usb2_report;
+    wire [63:0] usb1_hid_report;    // the socket 1 device's last report, byte 0 lowest
+    wire [63:0] usb1_trace;         // socket 1's enumeration trace
+    wire [3:0]  usb1_data0_handshake;  // socket 1's answer to the last SETUP data
+    wire [3:0]  usb1_idle_states;      // socket 1's raw idle line states seen
+
+    // USB diagnostics for the status line, per socket: a protocol error was
+    // ever seen, the host has reached report polling, the device type, and
+    // a count of reports received. They tell a device that never enumerates
+    // from one whose reports arrive but are not decoded.
+    reg       usb1_error_seen = 1'b0, usb2_error_seen = 1'b0;
+    reg [7:0] usb1_reports = 8'd0, usb2_reports = 8'd0;
+    always @(posedge usb_clock) begin
+        if (usb1_connerr) usb1_error_seen <= 1'b1;
+        if (usb2_connerr) usb2_error_seen <= 1'b1;
+        if (usb1_report) usb1_reports <= usb1_reports + 1'b1;
+        if (usb2_report) usb2_reports <= usb2_reports + 1'b1;
+    end
+    wire [31:0] usb_diagnostics = {
+        usb1_error_seen, usb1_connected, usb1_type,
+        usb2_error_seen, usb2_connected, usb2_type,
+        usb1_reports, usb2_reports, usb1_data0_handshake, usb1_idle_states
+    };
+    // Socket 1's enumeration trace (see usb_hid_host dbg_trace). It changes
+    // only on enumeration events, so the two-flop crossing into clock_7 is
+    // enough.
+    wire [63:0] usb_debug_word = usb1_trace;
 
     // A device already plugged in when the FPGA loads keeps the address an
     // earlier host gave it, so it never answers this one and stays absent
@@ -598,7 +626,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .usb_dm_i(usb1_dn), .usb_dp_i(usb1_dp),
         .usb_dm_o(usb1_dm_out), .usb_dp_o(usb1_dp_out),
         .usb_oe(usb1_output_enable),
-        .typ(usb1_type), .full_report(), .connerr(), .busy(),
+        .typ(usb1_type), .full_report(), .connerr(usb1_connerr), .busy(),
+        .link_connected(usb1_connected), .report_seen(usb1_report),
         .key_modifiers(usb1_modifiers),
         .key_0(usb1_key1), .key_1(usb1_key2), .key_2(usb1_key3),
         .key_3(usb1_key4), .key_4(usb1_key5), .key_5(usb1_key6),
@@ -609,9 +638,12 @@ module `NEXTTANG_ZXNEXT_TOP (
         .game_x(usb1_game_x), .game_y(usb1_game_y),
         .game_sel(usb1_game_select), .game_sta(usb1_game_start),
         .game_extra(usb1_game_extra),
-        .dbg_hid_report(), .dbg_hid_regs(), .dbg_byte_strobe(),
+        .dbg_hid_report(usb1_hid_report), .dbg_hid_regs(), .dbg_byte_strobe(),
         .dbg_packet_valid(), .dbg_config_snapshot(),
         .dbg_config_snapshot_valid(), .dbg_full_speed(), .dbg_speed_sample(),
+        .dbg_trace(usb1_trace), .dbg_watchdog_pc(),
+        .dbg_data0_handshake(usb1_data0_handshake),
+        .dbg_idle_states(usb1_idle_states),
         .rom_addr(usb1_rom_address), .rom_dout(usb1_rom_data),
         .rom_en(usb1_rom_enable)
     );
@@ -623,7 +655,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .usb_dm_i(usb2_dn), .usb_dp_i(usb2_dp),
         .usb_dm_o(usb2_dm_out), .usb_dp_o(usb2_dp_out),
         .usb_oe(usb2_output_enable),
-        .typ(usb2_type), .full_report(), .connerr(), .busy(),
+        .typ(usb2_type), .full_report(), .connerr(usb2_connerr), .busy(),
+        .link_connected(usb2_connected), .report_seen(usb2_report),
         .key_modifiers(usb2_modifiers),
         .key_0(usb2_key1), .key_1(usb2_key2), .key_2(usb2_key3),
         .key_3(usb2_key4), .key_4(usb2_key5), .key_5(usb2_key6),
@@ -725,6 +758,8 @@ module `NEXTTANG_ZXNEXT_TOP (
     assign spi_sd_miso = 1'b1;
     wire keyboard_connected = 1'b0;
     wire input_active = 1'b0;
+    wire [31:0] usb_diagnostics = 32'd0;
+    wire [63:0] usb_debug_word = 64'd0;
 `endif
 
     // ---------------------------------------------------------- main memory
@@ -1721,10 +1756,9 @@ module `NEXTTANG_ZXNEXT_TOP (
     end
 
     // Every byte the SD card sends: MISO shifted in on each rising SCK while
-    // the card is selected, counted and summed, so boots that read the same
-    // files can be compared.
+    // the card is selected, and counted. (Its sum, once reported beside the
+    // count, made way for the USB diagnostics.)
     reg [23:0] sd_byte_count = 24'd0;
-    reg [31:0] sd_checksum = 32'd0;
 `ifdef NEXTTANG_ZXNEXT_IO
     reg        sd_clock_previous = 1'b0;
     reg        sd_miso_previous = 1'b1;
@@ -1741,10 +1775,8 @@ module `NEXTTANG_ZXNEXT_TOP (
             sd_bit_count <= sd_bit_count + 3'd1;
             // 0xff is what the card sends while it has nothing to say, and how
             // many of those come varies, so they are left out.
-            if (sd_bit_count == 3'd7 && {sd_shift[6:0], sd_miso_previous} != 8'hff) begin
+            if (sd_bit_count == 3'd7 && {sd_shift[6:0], sd_miso_previous} != 8'hff)
                 sd_byte_count <= sd_byte_count + 24'd1;
-                sd_checksum <= sd_checksum + {24'd0, sd_shift[6:0], sd_miso_previous};
-            end
         end
     end
 `endif
@@ -1788,6 +1820,17 @@ module `NEXTTANG_ZXNEXT_TOP (
         cpu_contend_sampled <= cpu_contend;
     end
 
+    // The USB diagnostics cross from the USB clock on two flops; a count
+    // caught mid-change reads one off, which is harmless in a report.
+    reg [31:0] usb_diagnostics_meta = 32'd0, usb_diagnostics_7 = 32'd0;
+    reg [63:0] usb_debug_meta = 64'd0, usb_debug_7 = 64'd0;
+    always @(posedge clock_7) begin
+        usb_diagnostics_meta <= usb_diagnostics;
+        usb_diagnostics_7 <= usb_diagnostics_meta;
+        usb_debug_meta <= usb_debug_word;
+        usb_debug_7 <= usb_debug_meta;
+    end
+
     nexttang_debug_status_uart #(
         .CLOCK_HZ(7000000),
         .GAP_CLOCKS(1750000),
@@ -1800,9 +1843,9 @@ module `NEXTTANG_ZXNEXT_TOP (
         .extra({
             wait_holds_reported, wait_longest_reported,
             spec256_mode, spec256_graphics, spec256_desync, 5'b0, wait_cycles_reported,
-            last_io_write_data, sd_byte_count,
-            sd_checksum,
-            cpu_wait_sampled, cpu_contend_sampled, 2'b00, double_interrupts, cpu_enable_count
+            usb_debug_7[63:32],
+            usb_diagnostics_7,
+            usb_debug_7[31:0]
         }),
         .transmit(status_transmit)
     );
