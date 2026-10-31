@@ -736,6 +736,9 @@ module `NEXTTANG_ZXNEXT_TOP (
     // Keys held from the host over the debug UART (K command below), in the
     // same order as the USB keyboards' and ORed with them.
     reg [39:0] host_keys = 40'b0;
+    // A Kempston joystick held from the host (N command below): bit 0 right,
+    // 1 left, 2 down, 3 up, 4 fire, ORed with the USB pads'.
+    reg [4:0] host_kempston = 5'b0;
     reg [4:0] kempston_meta = 5'b0;
     reg [4:0] kempston_sync = 5'b0;
     // F1-F10 for the core's hot keys (F1 hard reset, F3 50/60 Hz, F4 soft
@@ -750,7 +753,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         keys_sync <= keys_meta;
         functions_meta <= usb1_functions | usb2_functions | host_functions;
         functions_sync <= functions_meta;
-        kempston_meta <= usb1_kempston | usb2_kempston;
+        kempston_meta <= usb1_kempston | usb2_kempston | host_kempston;
         kempston_sync <= kempston_meta;
     end
 
@@ -1062,7 +1065,10 @@ module `NEXTTANG_ZXNEXT_TOP (
     // the snapshot with a RETN from its NMI handler.
     reg spec256_armed = 1'b0;
     reg spec256_retn_seen = 1'b0;
-    assign spec256_nr_status = {spec256_cpu_owned, 1'b0, spec256_background_present,
+    // Bit 6: this core takes the loader's E, M and P (BGX1 rules, more
+    // backgrounds, planes for other 128K banks); a .SPEC256 that finds it
+    // clear leaves them out.
+    assign spec256_nr_status = {spec256_cpu_owned, 1'b1, spec256_background_present,
                                 spec256_desync, spec256_graphics, spec256_armed,
                                 spec256_payload, spec256_mode};
     reg s256_previous_m1_n = 1'b1;
@@ -2317,7 +2323,8 @@ module `NEXTTANG_ZXNEXT_TOP (
     //                 abort (the parser waits for a command again);
     //                 read: bit 0 planes mode (S1), 1 inside a raw payload,
     //                 2 armed, 3 colour running, 4 desync, 5 background
-    //                 present, 7 the CPU owns the loader
+    //                 present, 6 E/M/P understood (always 1 here), 7 the
+    //                 CPU owns the loader
     // A NextREG write reaches o_DEBUG_NR_* once, in the cycle the core takes
     // it, so each one is one loader byte.
     wire spec256_nr_byte = core_nr_write && core_nr_register == 8'h3E;
@@ -2407,6 +2414,11 @@ module `NEXTTANG_ZXNEXT_TOP (
     // the next J.
     reg [1:0]  function_digits_left = 2'd0;
     reg [11:0] function_command_mask = 12'b0;
+    // N followed by two hex digits holds the Kempston joystick (bit 0 right,
+    // 1 left, 2 down, 3 up, 4 fire) until the next N. Digits are lower case,
+    // as for K and J: upper-case B, C and E are Spectrum loader commands.
+    reg [1:0]  joystick_digits_left = 2'd0;
+    reg [3:0]  joystick_command_high = 4'd0;
 
     always @(posedge clock_28) begin
         if (board_command_valid) begin
@@ -2421,6 +2433,19 @@ module `NEXTTANG_ZXNEXT_TOP (
 `endif
             end else begin
                 key_digits_left <= 4'd0;
+            end
+
+            if (command_byte == "N") begin
+                joystick_digits_left <= 2'd2;
+            end else if (joystick_digits_left != 2'd0 && command_is_digit) begin
+                joystick_command_high <= command_digit;
+                joystick_digits_left <= joystick_digits_left - 2'd1;
+`ifdef NEXTTANG_ZXNEXT_IO
+                if (joystick_digits_left == 2'd1)
+                    host_kempston <= {joystick_command_high[0], command_digit};
+`endif
+            end else begin
+                joystick_digits_left <= 2'd0;
             end
 
             if (command_byte == "J") begin

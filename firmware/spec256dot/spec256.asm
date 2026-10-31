@@ -17,6 +17,9 @@
 ;   W planes at 0xC000 for each of banks 1, 3, 4, 6, 7 with colour, P0],
 ;   G start
 ;
+; E, M and P go only to a core whose NextREG 0x3F reads with bit 6 set;
+; an older core would take their raw bytes for commands.
+;
 ; It also writes the game's own memory and CPU state from the .256 as a .z80
 ; (version 3) snapshot, /tmp/SPEC256.Z80 on the system drive, exactly as
 ; tools/spec256/z80_from_256.py does: the master's byte of each address (the
@@ -96,6 +99,10 @@ start:
         cp      SPEC256_ID
         ld      hl,msg_no_core
         jp      nz,fail_early
+        ld      a,NR_CTRL                   ; bit 6: the core takes E, M and P
+        call    nr_read
+        and     $40
+        ld      (extended),a
 
         ld      a,NR_SPEED                  ; 28 MHz while loading
         call    nr_read
@@ -258,6 +265,9 @@ start:
         call    send_image
 .no_background:
 
+        ld      a,(extended)                ; an older core: no BGX1, no banks
+        or      a
+        jr      z,.no_bgx
         NEED    $0015,$0228                 ; BGX1 complete
         jr      c,.no_bgx
         READ_AT $0012,$c020,8,bgx_head
@@ -304,9 +314,13 @@ start:
         xor     a
         ld      (out_opened),a
 
+        ld      a,(extended)
+        or      a
+        jr      z,.no_other_planes
         ld      a,(regs+28)                 ; 128K: planes of the other banks
         and     $20
         call    z,send_other_planes
+.no_other_planes:
 
         ld      a,'G'
         call    send_byte
@@ -1325,6 +1339,7 @@ msg_palette:    db "SPEC256.RGB not foun", 'd' | $80
 
 handle:         db 0
 owned:          db 0
+extended:       db 0                        ; NextREG 0x3F bit 6 (E, M, P)
 speed:          db 0
 interrupts:     db 0
 count:          db 0

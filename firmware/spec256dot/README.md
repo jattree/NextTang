@@ -48,7 +48,7 @@ UART or from NextREG writes (see the board top,
 | NextREG | Write | Read |
 |---|---|---|
 | 0x3E | one loader byte | 0xA1: interface ID (marker A, version 1) |
-| 0x3F | bit 0: the CPU owns the loader; bit 7: abort to idle | status: bit 0 planes mode, 1 inside a payload, 2 armed, 3 colour running, 4 desync, 5 background, 7 CPU owns |
+| 0x3F | bit 0: the CPU owns the loader; bit 7: abort to idle | status: bit 0 planes mode, 1 inside a payload, 2 armed, 3 colour running, 4 desync, 5 background, 6 takes E, M and P (BGX1, more backgrounds, other banks), 7 CPU owns |
 
 The command sends exactly what `tools/spec256/send_next.py` sends for the
 same `.256` and palette (H, S1, U, C, Y, Z, the planes of banks 5, 2 and 0,
@@ -60,6 +60,9 @@ reader for all 43 games. It refuses a file whose OPT1 asks for a newer core
 level than 1, checks the tagged blocks after OPT1, prints the game's CRD1
 credits, and on any error aborts the loader, turns colour off and leaves
 the CPU speed as it found it.
+
+It sends E, M and P only when NextREG 0x3F reads with bit 6 set, so it
+loads games safely, without those, on a core older than them.
 
 The core keeps the four backgrounds in DDR3 and applies BGX1's rules as
 SPEC256_MISTER does: once a frame the first rule whose conditions hold picks

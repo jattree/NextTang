@@ -227,14 +227,18 @@ def colour_stream(words: bytes, flags: int, cfg: bytes, rules: bytes | None, zxp
     return out + b"G%04x" % pc
 
 
-def game_colour_stream(game: bytes, palette: bytes, pc: int | None = None) -> bytes:
-    """colour_stream for a .256; the start from the .256 unless given."""
+def game_colour_stream(game: bytes, palette: bytes, pc: int | None = None,
+                       extended: bool = True) -> bytes:
+    """colour_stream for a .256; the start from the .256 unless given. Without
+    extended (a core whose NextREG 0x3F bit 6 is clear) E, M and P are left
+    out, as .SPEC256 leaves them out for it."""
     return colour_stream(game_plane_words(game), game_rules_flags(game), game_cfg(game),
                          game_rules(game), game_zxpoly_mode(game), game_rom_font_words(game),
                          game_background(game), palette,
                          game_start_pc(game) if pc is None else pc,
-                         game_bgx(game), game_extra_backgrounds(game),
-                         None if game[PORT_7FFD_AT] & 0x20 else game_other_banks(game))
+                         game_bgx(game) if extended else None,
+                         game_extra_backgrounds(game) if extended else None,
+                         None if game[PORT_7FFD_AT] & 0x20 or not extended else game_other_banks(game))
 
 
 SNA_128K_SIZE = 131_103

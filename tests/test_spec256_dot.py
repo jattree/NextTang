@@ -9,7 +9,8 @@ owns the loader is collected and must equal send_next.game_colour_stream for
 the same .256 and palette: H, S1, U, C, Y, Z, the planes of banks 5, 2 and 0,
 the ROM font, Q, B, E and M (BGX1's rules and its backgrounds that have a
 pixel), P and W for a 128K game's other coloured banks (bank 4 here has
-none), and G, the start taken from the .256 (PC 0x0072 means the
+none), and G, the start; E, M and P only when NextREG 0x3F bit 6 says the
+core takes them taken from the .256 (PC 0x0072 means the
 address on the stack, here in bank 3 paged at 0xC000). The file it writes to
 /tmp/SPEC256.Z80 on the system drive must equal z80_from_256.py's for the
 same .256: a 128K game (all eight banks, 7FFD, the AY state) and a 48K one
@@ -108,7 +109,7 @@ class Machine:
         self.written: dict[str, bytearray] = {}
         self.next_handle = 3
         self.selected = 0
-        self.nextregs = {0x07: 0}
+        self.nextregs = {0x07: 0, 0x3F: 0x40}   # 0x3F bit 6: E, M and P understood
         self.nr_writes: list[tuple[int, int]] = []
         self.owned = False
         self.stream = bytearray()
@@ -271,6 +272,20 @@ class Spec256DotCommandTest(unittest.TestCase):
         self.assertIn(b"Coloured by Someone", machine.printed)
         self.assertIn((0x07, 3), machine.nr_writes)
         self.assertEqual(bytes(machine.written["$/tmp/spec256.z80"]), z80_from_256(bytes(game)))
+        self.check_clean(machine)
+
+    def test_older_core_gets_no_bgx_or_banks(self) -> None:
+        # A core whose NextREG 0x3F bit 6 is clear would take E, M and P's
+        # raw bytes for commands; they are left out, the rest is the same.
+        game = make_game()
+        machine = self.machine(game)
+        machine.nextregs[0x3F] = 0x00
+        failed, message = machine.run('"game.256"')
+        self.assertFalse(failed, message)
+        expected = send_next.game_colour_stream(bytes(game), self.palette, extended=False)
+        self.assertNotIn(b"E\x04\x03\xff", expected)
+        self.assertEqual(bytes(machine.stream), expected)
+        self.assertLess(len(expected), len(send_next.game_colour_stream(bytes(game), self.palette)))
         self.check_clean(machine)
 
     def test_48k_game_snapshot(self) -> None:
