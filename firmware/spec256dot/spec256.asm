@@ -12,7 +12,10 @@
 ; order, byte for byte:
 ;
 ;   H, S1, U flags, C cfg, [Y rules], Z mode, W planes for 0x4000-0xFFFF
-;   (banks 5, 2, 0), [W ROM font], Q palette, [B background], G start
+;   (banks 5, 2, 0), [W ROM font], Q palette, [B background], [E BGX1
+;   rules, M1-M3 its other backgrounds that have a pixel], [128K: P bank and
+;   W planes at 0xC000 for each of banks 1, 3, 4, 6, 7 with colour, P0],
+;   G start
 ;
 ; It also writes the game's own memory and CPU state from the .256 as a .z80
 ; (version 3) snapshot, /tmp/SPEC256.Z80 on the system drive, exactly as
@@ -252,20 +255,43 @@ start:
         ld      bc,$0012
         ld      de,$0020
         call    seek
-        ld      a,24                        ; 49152 bytes, 24 x 2048
-        ld      (count),a
-.background:
-        ld      hl,buffer
-        ld      bc,2048
-        call    read_exact
-        ld      hl,buffer
-        ld      de,2048
-        call    send_block
-        ld      a,(count)
-        dec     a
-        ld      (count),a
-        jr      nz,.background
+        call    send_image
 .no_background:
+
+        NEED    $0015,$0228                 ; BGX1 complete
+        jr      c,.no_bgx
+        READ_AT $0012,$c020,8,bgx_head
+        ld      hl,bgx_head
+        ld      de,magic_bgx1
+        call    same_magic
+        jr      nz,.no_bgx
+        ld      a,'E'                       ; count, rules, default, reserved
+        call    send_byte
+        ld      hl,bgx_head+4
+        ld      de,4
+        call    send_block
+        READ_AT $0015,$0028,512,buffer      ; the eight rules
+        ld      hl,buffer
+        ld      de,512
+        call    send_block
+        ld      a,1
+.extra: ld      (image_number),a
+        call    image_offset
+        call    image_used
+        jr      z,.next_extra
+        ld      a,'M'
+        call    send_byte
+        ld      a,(image_number)
+        call    send_nibble
+        call    image_offset
+        call    seek
+        call    send_image
+.next_extra:
+        ld      a,(image_number)
+        inc     a
+        cp      4
+        jr      c,.extra
+.no_bgx:
 
         ld      a,(regs+28)                 ; 128K: the other five banks
         and     $20
@@ -277,6 +303,10 @@ start:
         jp      c,fail
         xor     a
         ld      (out_opened),a
+
+        ld      a,(regs+28)                 ; 128K: planes of the other banks
+        and     $20
+        call    z,send_other_planes
 
         ld      a,'G'
         call    send_byte
@@ -438,6 +468,101 @@ write_other_banks:
 other_banks:
         db      1, 3, 4, 6, 7
 
+; A 128K game's banks 1, 3, 4, 6 and 7 that carry colour (a record whose
+; planes are not its master's byte eight times): P bank, then W at 0xC000.
+send_other_planes:
+        ld      hl,other_banks
+        ld      a,5
+.bank:  ld      (banks_left),a
+        ld      a,(hl)
+        inc     hl
+        ld      (bank_next),hl
+        ld      (image_number),a
+        call    bank_offset
+        call    seek
+        call    bank_coloured
+        jr      z,.next
+        ld      a,'P'
+        call    send_byte
+        ld      a,(image_number)
+        call    send_nibble
+        ld      hl,str_bank
+        call    send_string
+        call    bank_offset
+        call    seek
+        ld      a,16384 / RECORDS
+        ld      (count),a
+.chunk: ld      hl,buffer
+        ld      bc,CHUNK
+        call    read_exact
+        ld      hl,buffer
+        ld      bc,NR_ACCESS
+        ld      d,RECORDS & $ff
+.record:
+        rept    8
+        ld      a,(hl)
+        inc     hl
+        out     (c),a
+        endr
+        inc     hl
+        dec     d
+        jr      nz,.record
+        ld      a,(count)
+        dec     a
+        ld      (count),a
+        jr      nz,.chunk
+.next:  ld      hl,(bank_next)
+        ld      a,(banks_left)
+        dec     a
+        jr      nz,.bank
+        ld      hl,str_p0
+        jp      send_string
+
+; BC:DE = the .256 offset of bank (image_number).
+bank_offset:
+        ld      a,(image_number)
+        add     a,a
+        add     a,a
+        ld      e,a
+        ld      d,0
+        ld      hl,bank_bases
+        add     hl,de
+        jp      load32
+
+; NZ when a record of the bank at the file position has planes that are not
+; its master's byte eight times.
+bank_coloured:
+        ld      a,16384 / RECORDS
+        ld      (count),a
+.chunk: ld      hl,buffer
+        ld      bc,CHUNK
+        call    read_exact
+        ld      hl,buffer
+        ld      d,RECORDS & $ff
+.record:
+        push    hl
+        ld      bc,8
+        add     hl,bc
+        ld      a,(hl)                      ; the master's byte
+        pop     hl
+        ld      b,8
+.plane: cp      (hl)
+        jr      nz,.coloured
+        inc     hl
+        djnz    .plane
+        inc     hl
+        dec     d
+        jr      nz,.record
+        ld      a,(count)
+        dec     a
+        ld      (count),a
+        jr      nz,.chunk
+        xor     a                           ; Z: no colour
+        ret
+.coloured:
+        or      1
+        ret
+
 ; Write BC bytes from HL to the snapshot; anything less is an error. Leaves
 ; interrupts off and NextREG 0x3E selected.
 write_out:
@@ -570,6 +695,8 @@ build_header:
 background_used:
         ld      bc,$0012
         ld      de,$0020
+; Z when all 49152 bytes from file offset BC:DE are 0.
+image_used:
         call    seek
         ld      a,24
         ld      (count),a
@@ -593,6 +720,41 @@ background_used:
         xor     a                           ; Z: none
         ret
 .used:  or      1                           ; NZ
+        ret
+
+; BC:DE = the file offset of BGX1 background (image_number), 1 to 3.
+image_offset:
+        ld      a,(image_number)
+        dec     a
+        add     a,a
+        add     a,a
+        ld      e,a
+        ld      d,0
+        ld      hl,image_offsets
+        add     hl,de
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        inc     hl
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)
+        ret
+
+; Send 49152 bytes from the file's position, 24 x 2048.
+send_image:
+        ld      a,24
+        ld      (count),a
+.chunk: ld      hl,buffer
+        ld      bc,2048
+        call    read_exact
+        ld      hl,buffer
+        ld      de,2048
+        call    send_block
+        ld      a,(count)
+        dec     a
+        ld      (count),a
+        jr      nz,.chunk
         ret
 
 ; ------------------------------------------------------------- the start
@@ -1133,11 +1295,15 @@ print:  ld      a,(hl)
 str_s1:         db "S1",0
 str_planes:     db "W4000c000",0
 str_font:       db "W3d000300",0
+str_bank:       db "Wc0004000",0
+str_p0:         db "P0",0
 magic_rul1:     db "RUL1"
 magic_grx1:     db "GRX1"
 magic_crd1:     db "CRD1"
 magic_opt1:     db "OPT1"
 magic_ays1:     db "AYS1"
+magic_bgx1:     db "BGX1"
+image_offsets:  dd 1228840, 1277992, 1327144   ; BGX1's B01, B02, B03
 snapshot_name:  db "/tmp/SPEC256.Z80",0
 
 msg_usage:      db ".SPEC256 \"GAME.256\"",13
@@ -1162,6 +1328,8 @@ owned:          db 0
 speed:          db 0
 interrupts:     db 0
 count:          db 0
+image_number:   db 0
+bgx_head:       ds 8
 banks_left:     db 0
 opened:         db 0
 out_opened:     db 0

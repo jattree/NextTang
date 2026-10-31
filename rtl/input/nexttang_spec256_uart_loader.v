@@ -18,6 +18,15 @@
 //   B               then 49152 raw bytes: the 256 x 192 background, one
 //                   palette index per pixel, row by row (0: none); shown
 //                   once the last byte has arrived
+//   Mn              then 49152 raw bytes: background n (0 to 3; 1 to 3 are
+//                   BGX1's B01 to B03) likewise; M0 is B
+//   E               then 516 raw bytes: BGX1's bytes 4 to 7 (count, rule
+//                   count, default, reserved) and its eight 64-byte rules,
+//                   which pick the background shown
+//   Pn              W's words for 0xC000 to 0xFFFF are bank n's (0 to 7;
+//                   0 after H): the board keeps banks other than 5, 2 and
+//                   0 in DDR3; banks_with_planes marks each n given (H
+//                   clears it)
 //   Cuuddff         the game's .CFG colours: UpColorsMixed, DownColorsMixed
 //                   and flags (bit 3 BkOverFF, bit 7 CFG present)
 //   Y               then 64 raw bytes: RUL1's eight rules (bytes 8 to 71 of
@@ -27,7 +36,8 @@
 //   Xnn             the paper's horizontal trim, a signed pixel count added
 //                   to the left edge the board measures (kept by H)
 //   H               everything off: colour mode, the planes (S0), rules
-//                   flags, CFG, rules, ZX-Poly mode and background
+//                   flags, CFG, rules, ZX-Poly mode, backgrounds and BGX1
+//                   rules
 //
 // abort returns the parser to waiting for a command from any state, the
 // middle of a raw payload included, without changing what was loaded.
@@ -61,13 +71,21 @@ module nexttang_spec256_uart_loader (
     output reg  [7:0]  rules_flags,
 
     output reg         background_write,
+    output reg  [1:0]  background_image,
     output reg  [15:0] background_address,
     output reg  [7:0]  background_index,
-    output reg         background_present,   // set by B, cleared by H
+    output wire        background_present,   // set by B, cleared by H
+    output reg  [3:0]  backgrounds_present,  // image n complete, cleared by H
+    output reg         bgx_clear,            // one cycle: H
+    output reg         bgx_write,
+    output reg  [9:0]  bgx_index,
+    output reg  [7:0]  bgx_data,
     output reg  [23:0] cfg,                  // up, down, flags
     output reg  [511:0] rules,               // rule i in 64i+63..64i, byte j at 8j
     output reg  [2:0]  zxpoly_mode,
-    output reg  [7:0]  paper_trim
+    output reg  [7:0]  paper_trim,
+    output reg  [2:0]  plane_bank,
+    output reg  [7:0]  banks_with_planes
 );
     localparam [2:0] IDLE = 3'd0;
     localparam [2:0] MODE = 3'd1;
@@ -76,6 +94,7 @@ module nexttang_spec256_uart_loader (
     localparam [2:0] PALETTE = 3'd4;
     localparam [2:0] BACKGROUND = 3'd5;
     localparam [2:0] RULES = 3'd6;
+    localparam [2:0] BGX = 3'd7;
 
     reg [2:0]  state;
     reg [7:0]  command;
@@ -93,7 +112,8 @@ module nexttang_spec256_uart_loader (
     wire [3:0] digit = byte_in <= "9" ? byte_in[3:0] : byte_in[3:0] + 4'd9;
 
     assign payload = state == PLANES || state == PALETTE || state == BACKGROUND ||
-                     state == RULES;
+                     state == RULES || state == BGX;
+    assign background_present = backgrounds_present[0];
 
     always @(posedge clock) begin
         plane_write <= 1'b0;
@@ -101,16 +121,21 @@ module nexttang_spec256_uart_loader (
         arm <= 1'b0;
         disarm <= 1'b0;
         background_write <= 1'b0;
+        bgx_clear <= 1'b0;
+        bgx_write <= 1'b0;
         if (reset) begin
             state <= IDLE;
             spec256_mode <= 1'b0;
             arm_pc <= 16'd0;
             rules_flags <= 8'd0;
-            background_present <= 1'b0;
+            backgrounds_present <= 4'd0;
+            bgx_clear <= 1'b1;
             cfg <= 24'd0;
             rules <= 512'd0;
             zxpoly_mode <= 3'd0;
             paper_trim <= 8'd0;
+            plane_bank <= 3'd0;
+            banks_with_planes <= 8'd0;
         end else if (abort) begin
             state <= IDLE;
         end else if (byte_valid) begin
@@ -124,12 +149,19 @@ module nexttang_spec256_uart_loader (
                         "G": begin digits_left <= 4'd4; state <= HEX; end
                         "U": begin digits_left <= 4'd2; state <= HEX; end
                         "C": begin digits_left <= 4'd6; state <= HEX; end
-                        "B": begin next_address <= 16'd0; background_present <= 1'b0; state <= BACKGROUND; end
+                        "B": begin
+                            next_address <= 16'd0; background_image <= 2'd0;
+                            backgrounds_present[0] <= 1'b0; state <= BACKGROUND;
+                        end
+                        "M": begin digits_left <= 4'd1; state <= HEX; end
+                        "P": begin digits_left <= 4'd1; state <= HEX; end
+                        "E": begin next_address <= 16'd0; state <= BGX; end
                         "Q": begin palette_bytes <= 10'd0; state <= PALETTE; end
                         "H": begin
-                            disarm <= 1'b1; spec256_mode <= 1'b0; background_present <= 1'b0;
+                            disarm <= 1'b1; spec256_mode <= 1'b0; backgrounds_present <= 4'd0;
+                            bgx_clear <= 1'b1;
                             rules_flags <= 8'd0; cfg <= 24'd0; rules <= 512'd0;
-                            zxpoly_mode <= 3'd0;
+                            zxpoly_mode <= 3'd0; plane_bank <= 3'd0; banks_with_planes <= 8'd0;
                         end
                         "Z": begin digits_left <= 4'd1; state <= HEX; end
                         "X": begin digits_left <= 4'd2; state <= HEX; end
@@ -164,6 +196,15 @@ module nexttang_spec256_uart_loader (
                             end else if (command == "X") begin
                                 paper_trim <= {value[3:0], digit};
                                 state <= IDLE;
+                            end else if (command == "P") begin
+                                plane_bank <= digit[2:0];
+                                banks_with_planes[digit[2:0]] <= 1'b1;
+                                state <= IDLE;
+                            end else if (command == "M") begin
+                                next_address <= 16'd0;
+                                background_image <= digit[1:0];
+                                backgrounds_present[digit[1:0]] <= 1'b0;
+                                state <= BACKGROUND;
                             end else if (command == "C") begin
                                 cfg <= {value[19:0], digit};
                                 state <= IDLE;
@@ -209,7 +250,7 @@ module nexttang_spec256_uart_loader (
                     background_index <= byte_in;
                     next_address <= next_address + 16'd1;
                     if (next_address == 16'd49151) begin
-                        background_present <= 1'b1;
+                        backgrounds_present[background_image] <= 1'b1;
                         state <= IDLE;
                     end
                 end
@@ -218,6 +259,15 @@ module nexttang_spec256_uart_loader (
                     rules <= {byte_in, rules[511:8]};
                     next_address <= next_address + 16'd1;
                     if (next_address == 16'd63)
+                        state <= IDLE;
+                end
+
+                BGX: begin
+                    bgx_write <= 1'b1;
+                    bgx_index <= next_address[9:0];
+                    bgx_data <= byte_in;
+                    next_address <= next_address + 16'd1;
+                    if (next_address == 16'd515)
                         state <= IDLE;
                 end
 

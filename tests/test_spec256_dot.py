@@ -7,7 +7,9 @@ close) and ROM printing (RST $10) answered by the test. NextREG 0x3E reads as
 the core's interface ID; every byte written to NextREG 0x3E while the command
 owns the loader is collected and must equal send_next.game_colour_stream for
 the same .256 and palette: H, S1, U, C, Y, Z, the planes of banks 5, 2 and 0,
-the ROM font, Q, B and G, the start taken from the .256 (PC 0x0072 means the
+the ROM font, Q, B, E and M (BGX1's rules and its backgrounds that have a
+pixel), P and W for a 128K game's other coloured banks (bank 4 here has
+none), and G, the start taken from the .256 (PC 0x0072 means the
 address on the stack, here in bank 3 paged at 0xC000). The file it writes to
 /tmp/SPEC256.Z80 on the system drive must equal z80_from_256.py's for the
 same .256: a 128K game (all eight banks, 7FFD, the AY state) and a 48K one
@@ -49,6 +51,7 @@ OPT1_AT = 1_383_117
 OPT1_END = 1_383_373
 GRX1_AT = send_next.GRX1_AT
 RUL1_AT = send_next.RUL1_AT
+BGX1_AT = send_next.BGX1_AT
 
 
 def assemble() -> bytes:
@@ -69,12 +72,21 @@ def make_game(seed: int = 1, size: int = OPT1_END, port_7ffd: int = 0x13) -> byt
     game[send_next.PORT_7FFD_AT] = port_7ffd
     for address, byte in ((0xFF10, 0x5D), (0xFF11, 0xB1)):
         game[((port_7ffd & 7) * 16_384 + (address & 0x3FFF)) * 9 + 8] = byte
+    # Bank 4 without colour: every record's planes are its master's byte, so
+    # a 128K game's P/W stream skips it.
+    for offset in range(16_384):
+        at = (4 * 16_384 + offset) * 9
+        game[at:at + 8] = bytes((game[at + 8],)) * 8
     if size >= AYS1_AT + 21:
         game[AYS1_AT:AYS1_AT + 21] = b"AYS1" + bytes(range(7, 24))
     if size >= RUL1_AT + 72:
         game[RUL1_AT:RUL1_AT + 8] = b"RUL1" + bytes((1, 0x03, 2, 4))
     if size >= GRX1_AT + 4:
         game[GRX1_AT:GRX1_AT + 4] = b"GRX1"
+        # BGX1 with background 2 empty: E, then M1 and M3 only.
+        game[BGX1_AT:BGX1_AT + 8] = b"BGX1" + bytes((4, 3, 0xFF, 0))
+        image_2 = BGX1_AT + 8 + send_next.BACKGROUND_BYTES
+        game[image_2:image_2 + send_next.BACKGROUND_BYTES] = bytes(send_next.BACKGROUND_BYTES)
     if size >= CRD1_AT + 68:
         game[CRD1_AT:CRD1_AT + 68] = b"CRD1" + b"Test Game".ljust(32) + b"Coloured by Someone".ljust(32)
     if size >= OPT1_AT + 256:

@@ -16,7 +16,10 @@ words from 0x3D00. Only the 48K banks are sent: 5, 2 and 0 at 0x4000, 0x8000
 and 0xC000. H goes first, so a previous game's font and background are
 dropped. A .256's background (256 x 192 palette indices, 0 for none) goes
 with B when it has any pixel, its .CFG colours with C, and RUL1's eight
-per-plane read rules with Y.
+per-plane read rules with Y. A 128K game's banks 1, 3, 4, 6 and 7 that carry
+colour go with P (the bank) and W at 0xC000 each, then P0. With a BGX1 block, E sends its header's count,
+rule count, default and reserved byte and its eight rules, which pick the
+background shown, and M1 to M3 its other backgrounds, each that has a pixel.
 
 Without --palette a test palette is sent, the index's bits spread over RGB333,
 enough to see whether the planes land in the right places.
@@ -53,6 +56,10 @@ GRX1_AT = 1_376_808
 CFG_AT = 1_179_677
 BACKGROUND_AT = 1_179_680
 BACKGROUND_BYTES = 256 * 192
+BGX1_AT = BACKGROUND_AT + BACKGROUND_BYTES
+BGX1_IMAGES_AT = BGX1_AT + 8
+BGX1_RULES_AT = BGX1_IMAGES_AT + 3 * BACKGROUND_BYTES
+BGX1_END = BGX1_RULES_AT + 8 * 64
 ROM_FONT_START = 0x3D00
 ROM_FONT_WORDS = 768
 SPECTRUM_48K_BANKS = (5, 2, 0)
@@ -95,6 +102,49 @@ def game_background(game: bytes) -> bytes | None:
     if len(background) != BACKGROUND_BYTES or not any(background):
         return None
     return background
+
+
+def game_bgx(game: bytes) -> bytes | None:
+    """E's 516 bytes: BGX1's count, rule count, default, reserved, rules."""
+    if len(game) < BGX1_END or game[BGX1_AT:BGX1_AT + 4] != b"BGX1":
+        return None
+    return game[BGX1_AT + 4:BGX1_AT + 8] + game[BGX1_RULES_AT:BGX1_END]
+
+
+def game_extra_backgrounds(game: bytes) -> list[tuple[int, bytes]]:
+    """BGX1's backgrounds 1 to 3 that have a pixel, with their numbers."""
+    if game_bgx(game) is None:
+        return []
+    images = []
+    for number in range(1, 4):
+        at = BGX1_IMAGES_AT + (number - 1) * BACKGROUND_BYTES
+        image = game[at:at + BACKGROUND_BYTES]
+        if any(image):
+            images.append((number, image))
+    return images
+
+
+OTHER_128K_BANKS = (1, 3, 4, 6, 7)
+
+
+def game_other_banks(game: bytes) -> list[tuple[int, bytes]]:
+    """A 128K game's plane words for banks 1, 3, 4, 6 and 7, each bank with
+    any record whose planes are not its master's byte eight times (the rest
+    read as the board shows a bank without planes)."""
+    if game[PORT_7FFD_AT] & 0x20:
+        return []
+    banks = []
+    for bank in OTHER_128K_BANKS:
+        words = bytearray()
+        coloured = False
+        for offset in range(16_384):
+            at = bank * BANK_BYTES + offset * 9
+            record = game[at : at + 9]
+            words += record[:8]
+            coloured = coloured or record[:8] != bytes((record[8],)) * 8
+        if coloured:
+            banks.append((bank, bytes(words)))
+    return banks
 
 
 def game_cfg(game: bytes) -> bytes:
@@ -151,7 +201,10 @@ def game_start_pc(game: bytes) -> int:
 
 
 def colour_stream(words: bytes, flags: int, cfg: bytes, rules: bytes | None, zxpoly: int,
-                  font: bytes | None, background: bytes | None, palette: bytes, pc: int) -> bytes:
+                  font: bytes | None, background: bytes | None, palette: bytes, pc: int,
+                  bgx: bytes | None = None,
+                  extra_backgrounds: list[tuple[int, bytes]] | None = None,
+                  other_banks: list[tuple[int, bytes]] | None = None) -> bytes:
     """The loader's commands for one game, in the order it takes them."""
     out = b"H" + b"S1" + b"U%02x" % flags + b"C" + cfg.hex().encode()
     if rules is not None:
@@ -163,6 +216,14 @@ def colour_stream(words: bytes, flags: int, cfg: bytes, rules: bytes | None, zxp
     out += b"Q" + palette
     if background is not None:
         out += b"B" + background
+    if bgx is not None:
+        out += b"E" + bgx
+        for number, image in extra_backgrounds or []:
+            out += b"M%d" % number + image
+    if other_banks is not None:
+        for bank, bank_words in other_banks:
+            out += b"P%d" % bank + b"Wc000%04x" % (len(bank_words) // 8) + bank_words
+        out += b"P0"
     return out + b"G%04x" % pc
 
 
@@ -171,7 +232,9 @@ def game_colour_stream(game: bytes, palette: bytes, pc: int | None = None) -> by
     return colour_stream(game_plane_words(game), game_rules_flags(game), game_cfg(game),
                          game_rules(game), game_zxpoly_mode(game), game_rom_font_words(game),
                          game_background(game), palette,
-                         game_start_pc(game) if pc is None else pc)
+                         game_start_pc(game) if pc is None else pc,
+                         game_bgx(game), game_extra_backgrounds(game),
+                         None if game[PORT_7FFD_AT] & 0x20 else game_other_banks(game))
 
 
 SNA_128K_SIZE = 131_103
@@ -230,6 +293,9 @@ def main() -> int:
         cfg = game_cfg(game)
         rules = game_rules(game)
         zxpoly = game_zxpoly_mode(game)
+        bgx = game_bgx(game)
+        extra = game_extra_backgrounds(game)
+        other = None if game[PORT_7FFD_AT] & 0x20 else game_other_banks(game)
     else:
         words = plane_words(read_exact_file(args.gfx, GFX_SIZE, "Spec256 GFX"))
         flags = 0
@@ -238,6 +304,9 @@ def main() -> int:
         cfg = bytes(3)
         rules = None
         zxpoly = 0
+        bgx = None
+        extra = []
+        other = None
     palette = palette_bytes(args.palette)
     pc = snapshot_pc(args.snapshot.read_bytes())
     count = len(words) // 8
@@ -251,13 +320,15 @@ def main() -> int:
     attrs[4] = attrs[5] = termios.B115200
     termios.tcsetattr(fd, termios.TCSANOW, attrs)
     started = time.time()
-    send(fd, colour_stream(words, flags, cfg, rules, zxpoly, font, background, palette, pc))
+    send(fd, colour_stream(words, flags, cfg, rules, zxpoly, font, background, palette, pc,
+                           bgx, extra, other))
     time.sleep(0.2)
     os.close(fd)
     print(f"sent {count} plane words, palette ({'test' if args.palette is None else args.palette.name}), "
           f"rules flags 0x{flags:02x}, CFG {cfg.hex()}, {'ROM font, ' if font is not None else ''}"
           f"{'background, ' if background is not None else ''}"
           f"{'rules, ' if rules is not None else ''}"
+          f"{f'BGX1 rules and {len(extra)} more backgrounds, ' if bgx is not None else ''}"
           f"armed at PC 0x{pc:04x}, "
           f"{time.time() - started:.0f} s")
     return 0

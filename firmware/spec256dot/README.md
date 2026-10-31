@@ -52,7 +52,8 @@ UART or from NextREG writes (see the board top,
 
 The command sends exactly what `tools/spec256/send_next.py` sends for the
 same `.256` and palette (H, S1, U, C, Y, Z, the planes of banks 5, 2 and 0,
-the ROM font, Q, B and G) and writes exactly the snapshot `z80_from_256.py`
+the ROM font, Q, B, then for a BGX1 block E with its rules and M1 to M3 with
+each other background that has a pixel, and G) and writes exactly the snapshot `z80_from_256.py`
 writes. Both are checked byte for byte by `tests/test_spec256_dot.py` on a
 Z80 emulator, and the snapshot writer was checked against SkoolKit's .z80
 reader for all 43 games. It refuses a file whose OPT1 asks for a newer core
@@ -60,5 +61,9 @@ level than 1, checks the tagged blocks after OPT1, prints the game's CRD1
 credits, and on any error aborts the loader, turns colour off and leaves
 the CPU speed as it found it.
 
-Not yet: 128K colour beyond banks 5, 2 and 0, and the extra backgrounds
-(BGX1).
+The core keeps the four backgrounds in DDR3 and applies BGX1's rules as
+SPEC256_MISTER does: once a frame the first rule whose conditions hold picks
+the background (4: none; 255: keep the current one), and the picked one is
+copied into the overlay during the border.
+
+Not yet: 128K colour beyond banks 5, 2 and 0.

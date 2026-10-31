@@ -84,6 +84,8 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire clock_7;
     wire cpu_rising_enable;
     wire cpu_wait;              // main memory not ready: the Z80 waits
+    wire memory_wait;           // DDR3 main memory's part of it
+    wire port_a_wait;           // that, as port A sees it through the port C mux
     wire cpu_falling_enable;
     wire cpu_enables_locked;
     wire psg_enable;
@@ -296,6 +298,19 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire        spec256_background_write;
     wire [15:0] spec256_background_address;
     wire [7:0]  spec256_background_index;
+    wire [1:0]  spec256_background_image;
+    wire [3:0]  spec256_backgrounds_present;
+    wire        spec256_bgx_clear;
+    wire        spec256_bgx_write;
+    wire [9:0]  spec256_bgx_index;
+    wire [7:0]  spec256_bgx_data;
+    wire [2:0]  spec256_plane_bank;
+    wire [7:0]  spec256_banks_with_planes;
+    // What the overlay's background memory takes and shows (below).
+    wire        overlay_background_write;
+    wire [15:0] overlay_background_address;
+    wire [7:0]  overlay_background_index;
+    wire        overlay_background_shown;
     wire [23:0] spec256_cfg;
     wire [511:0] spec256_rules;
     wire [2:0]  spec256_zxpoly_mode;
@@ -786,7 +801,6 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [20:0] memory_address;
     wire [7:0]  memory_write_data;
     wire [7:0]  memory_read_data;
-    wire        memory_wait;
 
     nexttang_zxnext_port_c_mux port_c_mux (
         .clock(clock_28),
@@ -795,7 +809,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .a_read_n(ram_a_read_n),
         .a_address(ram_a_address),
         .a_write_data(ram_a_write_data),
-        .a_wait(cpu_wait),
+        .a_wait(port_a_wait),
         .c_request(ram_c_request),
         .c_read_n(ram_c_read_n),
         .c_address(ram_c_address),
@@ -863,6 +877,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [127:0] lanes_address;
     // Which 8K slots have planes behind them, and where (below).
     reg [7:0]  spec256_slot_present = 8'hfc;
+    reg [7:0]  spec256_slot_ddr3 = 8'h00;   // planes in DDR3 (below)
     reg [23:0] spec256_slot_high = 24'o76543210;
     wire [63:0]  lanes_write_data;
     wire [7:0]   lanes_write;
@@ -885,7 +900,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .rom_planes(spec256_rom_planes),
         .arith_mono(spec256_rules_flags[1]),
         .rules(spec256_rules),
-        .plane_present(spec256_slot_present),
+        .plane_present(spec256_slot_present | spec256_slot_ddr3),
         .master_m1_n(s256_m1_n),
         .master_mreq_n(s256_mreq_n),
         .master_iorq_n(s256_iorq_n),
@@ -949,7 +964,12 @@ module `NEXTTANG_ZXNEXT_TOP (
             spec256_rom_planes <= 1'b1;
     end
 
-    assign spec256_lane_read = spec256_rom_font_hit ? spec256_rom_font_q : spec256_plane_read;
+    reg spec256_lane_ddr3 = 1'b0;   // the lanes' address is in a DDR3 bank
+    wire [63:0] plane_cache_data;
+    always @(posedge clock_28)
+        spec256_lane_ddr3 <= spec256_slot_ddr3[lanes_address[15:13]];
+    assign spec256_lane_read = spec256_rom_font_hit ? spec256_rom_font_q :
+                               spec256_lane_ddr3 ? plane_cache_data : spec256_plane_read;
 
     // The mirror holds the planes of the three banks a 48K game has, where
     // a 48K machine pages them: bank 5 at 0x4000, bank 2 at 0x8000, bank 0
@@ -971,6 +991,11 @@ module `NEXTTANG_ZXNEXT_TOP (
             spec256_slot_present[slot] <= s256_mmu[8*slot+1 +: 7] == 7'd5 ||
                                           s256_mmu[8*slot+1 +: 7] == 7'd2 ||
                                           s256_mmu[8*slot+1 +: 7] == 7'd0;
+            spec256_slot_ddr3[slot] <= s256_mmu[8*slot+4 +: 4] == 4'd0 &&
+                                       s256_mmu[8*slot+1 +: 3] != 3'd5 &&
+                                       s256_mmu[8*slot+1 +: 3] != 3'd2 &&
+                                       s256_mmu[8*slot+1 +: 3] != 3'd0 &&
+                                       spec256_banks_with_planes[s256_mmu[8*slot+1 +: 3]];
         end
 
     wire [127:0] lanes_plane_address;
@@ -986,9 +1011,48 @@ module `NEXTTANG_ZXNEXT_TOP (
     // Every lane writes at the master's address, so lane 0's write serves
     // all eight planes. The loader writes only while colour mode is off,
     // when lanes write nothing.
+    // Banks 1, 3, 4, 6 and 7 have their planes in DDR3 behind
+    // nexttang_spec256_plane_cache: the loader's words for 0xC000 up after
+    // P with such a bank, and the lanes' accesses in a slot holding one
+    // (spec256_slot_ddr3), go there rather than to the mirror. A lane read
+    // there waits for the cache through the core's WAIT, which holds the
+    // master and so every lane with it. Address: bank * 0x4000 + offset,
+    // that is the slot's page and the low 13 bits.
+    wire loader_bank_ddr3 = spec256_plane_bank != 3'd5 && spec256_plane_bank != 3'd2 &&
+                            spec256_plane_bank != 3'd0;
+    wire loader_ddr3_write = loader_plane_write && loader_plane_address[15:14] == 2'b11 &&
+                             loader_bank_ddr3;
+    wire lanes_write_ddr3 = spec256_slot_ddr3[lanes_address[15:13]];
+
     assign spec256_lane_address = loader_plane_write ? {8{loader_plane_address}} : lanes_plane_address;
-    assign spec256_lane_write = loader_plane_write || lanes_write[0];
+    assign spec256_lane_write = (loader_plane_write && !loader_ddr3_write) ||
+                                (lanes_write[0] && !lanes_write_ddr3);
     assign spec256_lane_write_data = loader_plane_write ? loader_plane_data : lanes_write_data;
+
+    // A lane write is taken from its last cycle, like the rules' (below).
+    reg        lane_writing = 1'b0;
+    reg [16:0] lane_write_bank_address = 17'd0;
+    reg [63:0] lane_write_word = 64'd0;
+    always @(posedge clock_28) begin
+        lane_writing <= lanes_write[0] && lanes_write_ddr3;
+        if (lanes_write[0] && lanes_write_ddr3) begin
+            lane_write_bank_address <= {s256_mmu[8*lanes_address[15:13] +: 4], lanes_address[12:0]};
+            lane_write_word <= lanes_write_data;
+        end
+    end
+    wire lane_write_done = lane_writing && !(lanes_write[0] && lanes_write_ddr3);
+
+    // A read by the CPUs in such a slot (not an opcode fetch: the lanes take
+    // opcodes and operands from the master), from the master's bus.
+    reg        plane_lookup = 1'b0;
+    reg [16:0] plane_lookup_address = 17'd0;
+    always @(posedge clock_28) begin
+        plane_lookup <= spec256_graphics && !s256_mreq_n && !s256_rd_n && s256_m1_n &&
+                        spec256_slot_ddr3[s256_a[15:13]];
+        plane_lookup_address <= {s256_mmu[8*s256_a[15:13] +: 4], s256_a[12:0]};
+    end
+    wire plane_wait;
+    wire plane_lost;
 
     // Colour mode from the first instruction fetched at the armed address.
     // A game that resumes in the ROM (a PAUSE loop, the interrupt routine at
@@ -1058,6 +1122,9 @@ module `NEXTTANG_ZXNEXT_TOP (
         .fault_overrun(fault_overrun),
         .fault_calibration_lost(fault_calibration_lost)
     );
+
+    // The core waits for main memory, and for a DDR3 plane the lanes read.
+    assign cpu_wait = port_a_wait || plane_wait;
 
     wire controller_command_ready;
     wire [2:0] controller_command;
@@ -1134,6 +1201,287 @@ module `NEXTTANG_ZXNEXT_TOP (
         .controller_burst(cpu_controller_burst)
     );
 
+    // Spec256's backgrounds (nexttang_spec256_background_store) share the
+    // frame store's turn: a second arbiter between the two takes the place
+    // of one client, so the CPU's path to the controller is unchanged.
+    wire background_controller_request;
+    wire background_controller_command_ready;
+    wire [2:0] background_controller_command;
+    wire background_controller_command_enable;
+    wire [28:0] background_controller_address;
+    wire background_controller_write_data_ready;
+    wire [255:0] background_controller_write_data;
+    wire background_controller_write_data_enable;
+    wire background_controller_write_data_end;
+    wire [31:0] background_controller_write_data_mask;
+    wire background_controller_read_data_valid;
+    wire background_controller_burst;
+    wire shared_controller_request = video_controller_request || background_controller_request;
+    wire shared_controller_command_ready;
+    wire [2:0] shared_controller_command;
+    wire shared_controller_command_enable;
+    wire [28:0] shared_controller_address;
+    wire shared_controller_write_data_ready;
+    wire [255:0] shared_controller_write_data;
+    wire shared_controller_write_data_enable;
+    wire shared_controller_write_data_end;
+    wire [31:0] shared_controller_write_data_mask;
+    wire shared_controller_read_data_valid;
+    wire shared_controller_burst;
+
+    nexttang_ddr3_ui_arbiter video_arbiter (
+        .clock(controller_clock),
+        .reset(!controller_reset_n),
+        .a_request(video_controller_request),
+        .a_command_ready(video_controller_command_ready),
+        .a_command(video_controller_command),
+        .a_command_enable(video_controller_command_enable),
+        .a_address(video_controller_address),
+        .a_write_data_ready(video_controller_write_data_ready),
+        .a_write_data(video_controller_write_data),
+        .a_write_data_enable(video_controller_write_data_enable),
+        .a_write_data_end(video_controller_write_data_end),
+        .a_write_data_mask(video_controller_write_data_mask),
+        .a_read_data_valid(video_controller_read_data_valid),
+        .a_burst(video_controller_burst),
+        .b_request(background_controller_request),
+        .b_command_ready(background_controller_command_ready),
+        .b_command(background_controller_command),
+        .b_command_enable(background_controller_command_enable),
+        .b_address(background_controller_address),
+        .b_write_data_ready(background_controller_write_data_ready),
+        .b_write_data(background_controller_write_data),
+        .b_write_data_enable(background_controller_write_data_enable),
+        .b_write_data_end(background_controller_write_data_end),
+        .b_write_data_mask(background_controller_write_data_mask),
+        .b_read_data_valid(background_controller_read_data_valid),
+        .b_burst(background_controller_burst),
+        .controller_command_ready(shared_controller_command_ready),
+        .controller_command(shared_controller_command),
+        .controller_command_enable(shared_controller_command_enable),
+        .controller_address(shared_controller_address),
+        .controller_write_data_ready(shared_controller_write_data_ready),
+        .controller_write_data(shared_controller_write_data),
+        .controller_write_data_enable(shared_controller_write_data_enable),
+        .controller_write_data_end(shared_controller_write_data_end),
+        .controller_write_data_mask(shared_controller_write_data_mask),
+        .controller_read_data_valid(shared_controller_read_data_valid),
+        .controller_burst(shared_controller_burst)
+    );
+
+    // Spec256 backgrounds: the loader's images go to DDR3 (image 0 also
+    // straight into the overlay's memory, which shows it first), and the
+    // BGX1 rules pick which one the overlay's memory holds. A new pick is
+    // copied in from DDR3 during the border after the picture (ULA line
+    // 192), about 2 ms, before the next picture starts.
+    reg [1:0] background_frame_sync = 2'b00;
+    reg       background_frame_7 = 1'b0;
+    reg       background_frame_d = 1'b0;
+    always @(posedge clock_7)
+        background_frame_7 <= s256_ula_vc == 9'd192;
+    always @(posedge clock_28) begin
+        background_frame_sync <= {background_frame_sync[0], background_frame_7};
+        background_frame_d <= background_frame_sync[1];
+    end
+    wire background_frame = background_frame_sync[1] && !background_frame_d;
+
+    // The game's RAM writes, as bank * 0x4000 + offset: the slot's MMU page,
+    // pages 0 to 15 being banks 0 to 7; other pages (the ROM's 0xFF, the
+    // Next's own RAM) are not a 128K machine's. Taken from the last cycle
+    // of the write, when its address and data are certain.
+    reg        s256_writing = 1'b0;
+    reg [15:0] s256_write_a = 16'd0;
+    reg [7:0]  s256_write_page = 8'hff;
+    reg [7:0]  s256_write_value = 8'd0;
+    wire       s256_write_now = !s256_mreq_n && !s256_wr_n;
+    always @(posedge clock_28) begin
+        s256_writing <= s256_write_now;
+        if (s256_write_now) begin
+            s256_write_a <= s256_a;
+            s256_write_page <= s256_mmu[8*s256_a[15:13] +: 8];
+            s256_write_value <= s256_bank5_data;
+        end
+    end
+    wire background_rule_write = s256_writing && !s256_write_now && s256_write_page < 8'd16;
+
+    wire [2:0] background_selected;
+    wire       background_rules_valid;
+    nexttang_spec256_background_rules background_rules (
+        .clock(clock_28),
+        .reset(!machine_locked),
+        .clear(spec256_bgx_clear),
+        .load_write(spec256_bgx_write),
+        .load_index(spec256_bgx_index),
+        .load_data(spec256_bgx_data),
+        .running(spec256_graphics),
+        .frame(background_frame),
+        .write(background_rule_write),
+        .write_address({s256_write_page[3:0], s256_write_a[12:0]}),
+        .write_data(s256_write_value),
+        .valid(background_rules_valid),
+        .selected(background_selected)
+    );
+
+    wire        background_copy_busy;
+    wire        background_copy_write;
+    wire [15:0] background_copy_address;
+    wire [7:0]  background_copy_data;
+    wire        background_lost;
+    reg  [2:0]  background_displayed = 3'd0;   // the image in the overlay's memory
+    wire        background_wanted = background_selected < 3'd4 &&
+                                    spec256_backgrounds_present[background_selected[1:0]];
+    wire        background_copy_start = spec256_graphics && background_wanted &&
+                                        background_selected != background_displayed &&
+                                        !background_copy_busy;
+    wire        loader_background_0 = spec256_background_write && spec256_background_image == 2'd0;
+    always @(posedge clock_28)
+        if (loader_background_0)
+            background_displayed <= 3'd0;
+        else if (background_copy_start)
+            background_displayed <= background_selected;
+
+    assign overlay_background_write = loader_background_0 || background_copy_write;
+    assign overlay_background_address = loader_background_0 ? spec256_background_address
+                                                            : background_copy_address;
+    assign overlay_background_index = loader_background_0 ? spec256_background_index
+                                                          : background_copy_data;
+    assign overlay_background_shown = background_wanted &&
+                                      background_displayed == background_selected;
+
+    nexttang_spec256_background_store #(
+        .BASE_BEAT('h20000)
+    ) background_store (
+        .clock(clock_28),
+        .reset(!machine_locked),
+        .load_write(spec256_background_write),
+        .load_image(spec256_background_image),
+        .load_address(spec256_background_address),
+        .load_data(spec256_background_index),
+        .lost(background_lost),
+        .copy_start(background_copy_start),
+        .copy_image(background_selected[1:0]),
+        .copy_busy(background_copy_busy),
+        .copy_write(background_copy_write),
+        .copy_address(background_copy_address),
+        .copy_data(background_copy_data),
+        .memory_clock(controller_clock),
+        .memory_reset(!controller_reset_n),
+        .controller_request(bgstore_controller_request),
+        .controller_command_ready(bgstore_controller_command_ready),
+        .controller_command(bgstore_controller_command),
+        .controller_command_enable(bgstore_controller_command_enable),
+        .controller_address(bgstore_controller_address),
+        .controller_write_data_ready(bgstore_controller_write_data_ready),
+        .controller_write_data(bgstore_controller_write_data),
+        .controller_write_data_enable(bgstore_controller_write_data_enable),
+        .controller_write_data_end(bgstore_controller_write_data_end),
+        .controller_write_data_mask(bgstore_controller_write_data_mask),
+        .controller_read_data(controller_read_data),
+        .controller_read_data_valid(bgstore_controller_read_data_valid),
+        .controller_burst(bgstore_controller_burst)
+    );
+
+
+    // The backgrounds and the DDR3 planes take turns as the frame store's
+    // partner (above).
+    wire bgstore_controller_request;
+    wire bgstore_controller_command_ready;
+    wire [2:0] bgstore_controller_command;
+    wire bgstore_controller_command_enable;
+    wire [28:0] bgstore_controller_address;
+    wire bgstore_controller_write_data_ready;
+    wire [255:0] bgstore_controller_write_data;
+    wire bgstore_controller_write_data_enable;
+    wire bgstore_controller_write_data_end;
+    wire [31:0] bgstore_controller_write_data_mask;
+    wire bgstore_controller_read_data_valid;
+    wire bgstore_controller_burst;
+    wire planes_controller_request;
+    wire planes_controller_command_ready;
+    wire [2:0] planes_controller_command;
+    wire planes_controller_command_enable;
+    wire [28:0] planes_controller_address;
+    wire planes_controller_write_data_ready;
+    wire [255:0] planes_controller_write_data;
+    wire planes_controller_write_data_enable;
+    wire planes_controller_write_data_end;
+    wire [31:0] planes_controller_write_data_mask;
+    wire planes_controller_read_data_valid;
+    wire planes_controller_burst;
+
+    nexttang_ddr3_ui_arbiter spec256_arbiter (
+        .clock(controller_clock),
+        .reset(!controller_reset_n),
+        .a_request(bgstore_controller_request),
+        .a_command_ready(bgstore_controller_command_ready),
+        .a_command(bgstore_controller_command),
+        .a_command_enable(bgstore_controller_command_enable),
+        .a_address(bgstore_controller_address),
+        .a_write_data_ready(bgstore_controller_write_data_ready),
+        .a_write_data(bgstore_controller_write_data),
+        .a_write_data_enable(bgstore_controller_write_data_enable),
+        .a_write_data_end(bgstore_controller_write_data_end),
+        .a_write_data_mask(bgstore_controller_write_data_mask),
+        .a_read_data_valid(bgstore_controller_read_data_valid),
+        .a_burst(bgstore_controller_burst),
+        .b_request(planes_controller_request),
+        .b_command_ready(planes_controller_command_ready),
+        .b_command(planes_controller_command),
+        .b_command_enable(planes_controller_command_enable),
+        .b_address(planes_controller_address),
+        .b_write_data_ready(planes_controller_write_data_ready),
+        .b_write_data(planes_controller_write_data),
+        .b_write_data_enable(planes_controller_write_data_enable),
+        .b_write_data_end(planes_controller_write_data_end),
+        .b_write_data_mask(planes_controller_write_data_mask),
+        .b_read_data_valid(planes_controller_read_data_valid),
+        .b_burst(planes_controller_burst),
+        .controller_command_ready(background_controller_command_ready),
+        .controller_command(background_controller_command),
+        .controller_command_enable(background_controller_command_enable),
+        .controller_address(background_controller_address),
+        .controller_write_data_ready(background_controller_write_data_ready),
+        .controller_write_data(background_controller_write_data),
+        .controller_write_data_enable(background_controller_write_data_enable),
+        .controller_write_data_end(background_controller_write_data_end),
+        .controller_write_data_mask(background_controller_write_data_mask),
+        .controller_read_data_valid(background_controller_read_data_valid),
+        .controller_burst(background_controller_burst)
+    );
+    assign background_controller_request = bgstore_controller_request || planes_controller_request;
+
+    nexttang_spec256_plane_cache #(
+        .BASE_BEAT('h30000)
+    ) plane_cache (
+        .clock(clock_28),
+        .reset(!machine_locked),
+        .invalidate(loader_disarm),
+        .lookup(plane_lookup),
+        .address(plane_lookup_address),
+        .read_data(plane_cache_data),
+        .wait_request(plane_wait),
+        .write(loader_ddr3_write || lane_write_done),
+        .write_address(loader_ddr3_write ? {spec256_plane_bank, loader_plane_address[13:0]}
+                                         : lane_write_bank_address),
+        .write_data(loader_ddr3_write ? loader_plane_data : lane_write_word),
+        .lost(plane_lost),
+        .memory_clock(controller_clock),
+        .memory_reset(!controller_reset_n),
+        .controller_request(planes_controller_request),
+        .controller_command_ready(planes_controller_command_ready),
+        .controller_command(planes_controller_command),
+        .controller_command_enable(planes_controller_command_enable),
+        .controller_address(planes_controller_address),
+        .controller_write_data_ready(planes_controller_write_data_ready),
+        .controller_write_data(planes_controller_write_data),
+        .controller_write_data_enable(planes_controller_write_data_enable),
+        .controller_write_data_end(planes_controller_write_data_end),
+        .controller_write_data_mask(planes_controller_write_data_mask),
+        .controller_burst(planes_controller_burst),
+        .controller_read_data(controller_read_data),
+        .controller_read_data_valid(planes_controller_read_data_valid)
+    );
+
     // The HDMI frame store keeps its frames in DDR3 above the Next's 2 MiB
     // and shares the controller with the CPU, one transaction at a time.
     nexttang_ddr3_ui_arbiter memory_arbiter (
@@ -1151,18 +1499,18 @@ module `NEXTTANG_ZXNEXT_TOP (
         .a_write_data_mask(cpu_controller_write_data_mask),
         .a_read_data_valid(cpu_controller_read_data_valid),
         .a_burst(cpu_controller_burst),
-        .b_request(video_controller_request),
-        .b_command_ready(video_controller_command_ready),
-        .b_command(video_controller_command),
-        .b_command_enable(video_controller_command_enable),
-        .b_address(video_controller_address),
-        .b_write_data_ready(video_controller_write_data_ready),
-        .b_write_data(video_controller_write_data),
-        .b_write_data_enable(video_controller_write_data_enable),
-        .b_write_data_end(video_controller_write_data_end),
-        .b_write_data_mask(video_controller_write_data_mask),
-        .b_read_data_valid(video_controller_read_data_valid),
-        .b_burst(video_controller_burst),
+        .b_request(shared_controller_request),
+        .b_command_ready(shared_controller_command_ready),
+        .b_command(shared_controller_command),
+        .b_command_enable(shared_controller_command_enable),
+        .b_address(shared_controller_address),
+        .b_write_data_ready(shared_controller_write_data_ready),
+        .b_write_data(shared_controller_write_data),
+        .b_write_data_enable(shared_controller_write_data_enable),
+        .b_write_data_end(shared_controller_write_data_end),
+        .b_write_data_mask(shared_controller_write_data_mask),
+        .b_read_data_valid(shared_controller_read_data_valid),
+        .b_burst(shared_controller_burst),
         .controller_command_ready(controller_command_ready),
         .controller_command(controller_command),
         .controller_command_enable(controller_command_enable),
@@ -1224,6 +1572,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     // the address, far inside the CPU's own read window at 3.5 MHz.
     wire ram_a_write = ram_a_request && ram_a_read_n;
     assign cpu_wait = 1'b0;
+    assign memory_wait = 1'b0;
     assign layer2_data = 8'h00;
     // No port C without DDR3 (CORE_OPTION leaves its commands out).
     assign ram_c_ack = 1'b0;
@@ -1420,10 +1769,10 @@ module `NEXTTANG_ZXNEXT_TOP (
         .zxpoly_mode(spec256_zxpoly_mode),
         .bk_over_ff(spec256_cfg[3]),
         .cfg(spec256_cfg),
-        .background_present(spec256_background_present),
-        .background_write(spec256_background_write),
-        .background_address(spec256_background_address),
-        .background_index(spec256_background_index),
+        .background_present(overlay_background_shown),
+        .background_write(overlay_background_write),
+        .background_address(overlay_background_address),
+        .background_index(overlay_background_index),
         .bank5_write(s256_bank5_write),
         .bank5_address(s256_bank5_address),
         .bank5_data(s256_bank5_data)
@@ -2002,13 +2351,21 @@ module `NEXTTANG_ZXNEXT_TOP (
         .disarm(loader_disarm),
         .rules_flags(spec256_rules_flags),
         .background_write(spec256_background_write),
+        .background_image(spec256_background_image),
         .background_address(spec256_background_address),
         .background_index(spec256_background_index),
         .background_present(spec256_background_present),
+        .backgrounds_present(spec256_backgrounds_present),
+        .bgx_clear(spec256_bgx_clear),
+        .bgx_write(spec256_bgx_write),
+        .bgx_index(spec256_bgx_index),
+        .bgx_data(spec256_bgx_data),
         .cfg(spec256_cfg),
         .rules(spec256_rules),
         .zxpoly_mode(spec256_zxpoly_mode),
-        .paper_trim(spec256_paper_trim)
+        .paper_trim(spec256_paper_trim),
+        .plane_bank(spec256_plane_bank),
+        .banks_with_planes(spec256_banks_with_planes)
     );
 `else
     assign spec256_payload = 1'b0;
@@ -2019,10 +2376,18 @@ module `NEXTTANG_ZXNEXT_TOP (
     assign spec256_background_write = 1'b0;
     assign spec256_background_address = 16'd0;
     assign spec256_background_index = 8'd0;
+    assign spec256_background_image = 2'd0;
+    assign spec256_backgrounds_present = 4'd0;
+    assign spec256_bgx_clear = 1'b0;
+    assign spec256_bgx_write = 1'b0;
+    assign spec256_bgx_index = 10'd0;
+    assign spec256_bgx_data = 8'd0;
     assign spec256_cfg = 24'd0;
     assign spec256_rules = 512'd0;
     assign spec256_zxpoly_mode = 3'd0;
     assign spec256_paper_trim = 8'd0;
+    assign spec256_plane_bank = 3'd0;
+    assign spec256_banks_with_planes = 8'd0;
     assign spec256_nr_status = 8'd0;
 `endif
 
