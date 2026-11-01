@@ -31,8 +31,8 @@ paper shows the core's pixel whatever its index.
 The overlay counts frames. In the flash's on phase (bit 4 of the count set,
 here after frame starts given without pixels) four sweeps follow: without
 flash_blink (OPT1 byte 8 bit 0) nothing changes; with it every cell with FLASH
-shows the core's pixel instead of its colour, in ZX-Poly mode 4 as well, but
-not in mode 7. Every earlier sweep falls in the off phase.
+shows the core's pixel instead of its colour, but not in ZX-Poly modes (4 and
+7 swept), as SPEC256_MISTER does. Every earlier sweep falls in the off phase.
 """
 
 from pathlib import Path
@@ -153,7 +153,7 @@ module testbench;
                 ink = attribute_of((py / 8) * 32 + px / 8);
                 if (attr_hide && ink[2:0] == ink[5:3])
                     expected = core_pixel(x, y);
-                else if (flash_blink && ink[7] && frames[4] && zxpoly != 3'd7)
+                else if (flash_blink && ink[7] && frames[4] && zxpoly == 3'd0)
                     expected = core_pixel(x, y);
                 else if (zxpoly != 3'd0) begin
                     if (zxpoly == 3'd7 && !ink[7])
@@ -221,7 +221,7 @@ module testbench;
             if (o_frame !== (ox == 0 && oy == 0))
                 $fatal(1, "frame start out of step at (%0d,%0d)", ox, oy);
             checked = checked + 1;
-            if (enable && flash_blink && frames[4] && zxpoly != 3'd7 && ox >= 52 && ox < 308 && oy >= top &&
+            if (enable && flash_blink && frames[4] && zxpoly == 3'd0 && ox >= 52 && ox < 308 && oy >= top &&
                 oy < top + 192 && attribute_of(((oy - top) / 8) * 32 + (ox - 52) / 8) >= 8'h80)
                 flashed = flashed + 1;
             if (enable && attr_hide && ox >= 52 && ox < 308 && oy >= top && oy < top + 192 &&
