@@ -26,23 +26,29 @@
 ## Current status
 
 > [!IMPORTANT]
-> The Console 138K now runs the ZX Spectrum Next core: NextZXOS boots from the
-> SD card and Next games play at full speed with 720p50 HDMI video and audio.
-> It is not yet a complete Next. Below 28 MHz the browser is black and 48K
-> games do not load, and boot still fails on many loads. The 48K, 128K and
-> Spec256 profiles below remain standalone, hardware-verified platform slices.
+> The Console 138K runs the ZX Spectrum Next core: NextZXOS boots from the SD
+> card and runs at 28, 14, 7 and 3.5 MHz, Next games play at full speed, and
+> classic 48K and 128K games load from the card at the speeds they were
+> written for, with 720p HDMI video and audio at 50 or 60 Hz. It is not yet a
+> complete Next. The 48K, 128K and Spec256 profiles below remain standalone,
+> hardware-verified platform slices.
 
-The Next core is the imported ZXNext machine core from the MiSTer port (see
+The Next core is the official ZX Spectrum Next core 3.02.03, merged file by
+file onto the MiSTer port it started from; three MiSTer pieces are kept (see
 [provenance](docs/provenance.md)). Its 2 MB main memory lives in DDR3 behind a
 16 KiB CPU line cache, its CPU runs on the 28 MHz machine clock with speed and
-contention enables, and Layer 2 is mirrored into block RAM for two bank ranges.
+contention enables and MiSTer's glitch-free speed changeover, the HDMI frame
+store is in DDR3, and Layer 2 is mirrored into block RAM for banks 8 to 31.
 The official System/Next boot loader, built from its GPL source, loads
-`TBBLUE.FW` from the card and boots NextZXOS 2.09 to its menu and browser at
-28 MHz. Gods – Fogjaw Edition and Warhawk play at full speed with clean Layer 2,
-720p50 HDMI and HDMI audio. Not done yet: the slower CPU speeds, reliable boot
-(on most images only about two loads in six reach the welcome page), 60 Hz output, the F1/F3/F4 keys,
-Layer 2 outside the two mirrored ranges, and the real-time debugger. The
-bring-up is shown in [Episode 6](https://youtu.be/sYmfuHmmCgw).
+`TBBLUE.FW` from the card and boots NextZXOS 2.09; 10 of 10 repeat boots
+reached the welcome page. Sanxion runs at 7 MHz and Trashman at 3.5 MHz from
+tape files, Castlevania: Spectral Interlude loads as a 128K game to its title
+and menu with music, and Gods – Fogjaw Edition plays at full speed with clean
+Layer 2. F1 (hard reset), F4 (soft reset) and F8 (CPU speed) work from the USB
+keyboard, and F3 switches the machine and its HDMI output between 50 and
+60 Hz. Not done yet: Layer 2 in banks 32 and above, and the real-time
+debugger. The bring-up is shown in [Episode 6](https://youtu.be/sYmfuHmmCgw)
+and the slower speeds in [Episode 7](https://youtu.be/IYaPcpsD9Rs).
 
 The 48K path boots a user-supplied Sinclair ROM through the imported T80 and
 standard upstream ULA. The ULA-visible lower 16 KiB remains local while the
