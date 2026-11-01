@@ -6,6 +6,8 @@
 game: Army Moves (Part 1)
 sha256: 08be3e9dcdb2a7bab1ac2009f23bb6708cdf895b2050577d049cd9ca4b1c0b56
 redraw: 13
+# The menu lines' clean copies, which the game puts back as the jeeps pass.
+buffer: 6540 10 1 30, 7310 10 1 30
 # The panel's PUNTOS is a picture: POINTS laid out as Imagine's English
 # release draws it, with Dinamic's own O, its letters coloured from this
 # game's PUNTOS (the I shaded the same way, left to right).

@@ -5,7 +5,8 @@ byte) of every character of every occurrence it expects, and nothing else; a
 wrong occurrence count, a different .256 (sha256), strings of different
 lengths, a string split across two banks, or text whose planes are not its
 code eight times (colour data) are refused; the IPS patch it writes gives
-the same file as applying it directly. The shipped patches parse and keep
+the same file as applying it directly. A menu line's clean copy (buffer)
+is filled from the new screen, and refused unless it was a copy. The shipped patches parse and keep
 every string's length.
 """
 
@@ -120,6 +121,25 @@ class Patch256Test(unittest.TestCase):
         wrong = patch_for(bytes(game), "label: 8100 2 1\npixels: 00f0\ntake: 8-11 0-3\nbackground: 1")
         with self.assertRaises(patch256.PatchError):
             patch256.apply(bytes(game), wrong)
+
+    def test_buffer_follows_the_screen(self) -> None:
+        game = make_game()
+        screen = 5 * 16_384             # 0x4000: character row 0, line 0, column 0
+        put_text(game, screen + 3, b"QZ")
+        # A copy of column 3's eight lines, one byte wide, at 0x6000.
+        for line in range(8):
+            source = (screen + line * 256 + 3) * 9
+            copy = (screen + 0x2000 + line) * 9
+            game[copy:copy + 9] = game[source:source + 9]
+        rules = '"QZ" = "KX"\nbuffer: 6000 0 3 1'
+        patched = patch256.apply(bytes(game), patch_for(bytes(game), rules))
+        self.assertEqual(patched[(screen + 0x2000) * 9:][:9], b"K" * 9)
+        changed = [i for i in range(len(game)) if game[i] != patched[i]]
+        self.assertEqual(len(changed), 9 * 3)
+        game[(screen + 0x2000 + 5) * 9] ^= 1     # no longer a copy
+        with self.assertRaises(patch256.PatchError) as raised:
+            patch256.apply(bytes(game), patch_for(bytes(game), rules))
+        self.assertIn("not a copy", str(raised.exception))
 
     def test_shipped_patches_keep_lengths(self) -> None:
         patches = sorted((REPO_ROOT / "tools" / "spec256" / "patches").glob("*.txt"))

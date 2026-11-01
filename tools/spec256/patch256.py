@@ -33,7 +33,13 @@ on the game's bytes and once on each colour plane, as Spec256's nine CPUs
 would, and writes the pixel bytes that change, leaving the marks and the
 attributes as they were. "redraw-run: START END" (hex) does the same for a
 block of the game's code that prints a whole screen of text, such as a
-menu printed from a table.
+menu printed from a table. Some games also keep a clean copy of a menu
+line, which they copy back over the screen (Army Moves restores its lines
+from one as the jeeps drive past); "buffer: ADDRESS ROW COLUMN WIDTH, ..."
+(hex address, the rest in characters) names a copy of screen character row
+ROW, columns COLUMN on, as eight pixel rows of WIDTH bytes, and the tool
+fills it from the redrawn screen, refusing it unless it matches the screen
+in all nine bytes before the patch.
 
 A label drawn as a picture (Army Moves' PUNTOS on its panel) is replaced
 with "label: ADDRESS WIDTH HEIGHT" (hex address, width in bytes) and
@@ -262,6 +268,36 @@ def relabel(game: bytes, header: dict[str, str]) -> dict[int, int]:
     return out
 
 
+def screen_offset(row: int, line: int, column: int) -> int:
+    """File offset of the record for a screen byte: character row, pixel line, column."""
+    address = 0x4000 | (row & 0x18) << 8 | line << 8 | (row & 7) << 5 | column
+    return (5 * BANK_BYTES + address - 0x4000) * RECORD
+
+
+def refill_buffers(game: bytes, header: dict[str, str], out: dict[int, int]) -> dict[int, int]:
+    """File offset -> byte for each menu-line copy filled from the new screen."""
+    filled: dict[int, int] = {}
+    for spec in header["buffer"].split(","):
+        words = spec.split()
+        if len(words) != 4:
+            raise PatchError(f"buffer {spec.strip()}: give ADDRESS ROW COLUMN WIDTH")
+        address, (row, column, width) = int(words[0], 16), (int(w) for w in words[1:])
+        if not (0 <= row < 24 and 0 <= column and column + width <= 32):
+            raise PatchError(f"buffer {spec.strip()}: not on the screen")
+        for line in range(8):
+            for x in range(width):
+                screen = screen_offset(row, line, column + x)
+                copy = address_offset(game, address + line * width + x)
+                if game[screen:screen + RECORD] != game[copy:copy + RECORD]:
+                    raise PatchError(f"buffer {spec.strip()}: not a copy of the screen "
+                                     f"at line {line}, column {column + x}")
+                for k in range(RECORD):
+                    byte = out.get(screen + k, game[screen + k])
+                    if byte != game[copy + k]:
+                        filled[copy + k] = byte
+    return filled
+
+
 def changes(game: bytes, patch_text: str, rom: bytes | None = None) -> dict[int, int]:
     """File offset -> new byte for every byte the patch changes."""
     header, rules = read_patch(patch_text)
@@ -307,6 +343,8 @@ def changes(game: bytes, patch_text: str, rom: bytes | None = None) -> dict[int,
         numbers = [int(n, 16) for n in header.get("redraw-run", "").split()]
         runs = list(zip(numbers[0::2], numbers[1::2]))
         out.update(redraw(game, bytes(patched), occurrences, setup, runs, rom))
+    if "buffer" in header:
+        out.update(refill_buffers(game, header, out))
     return out
 
 
