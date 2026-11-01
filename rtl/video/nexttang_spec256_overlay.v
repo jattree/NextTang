@@ -17,6 +17,11 @@
 //   index 0      the background; palette entry 0 until backgrounds exist
 //   otherwise    the palette entry
 //
+// With attr_hide (the .256's RUL1 flag bit 5, as SPEC256_MISTER's ATTR_HIDE)
+// a cell whose ink equals its paper shows the core's pixel whatever its index:
+// what a game hides with the attribute (sprites entering at the sides of the
+// play area, for example) stays hidden.
+//
 // With render_dos (the .256's RUL1 flag for Spec256 DOS v1.2 games) indices
 // 0xC0 to 0xFF take the cell's attribute ink instead: palette entry
 // 11 iii xxx, iii the ink and xxx the index's low bits, so a game's text
@@ -44,6 +49,12 @@
 // levels. Mode 6 fills a cell whose ink equals its paper with the ink; mode 7
 // does both only in cells with FLASH and shows every other cell as the
 // Spectrum does (the core's own pixel). As SPEC256_MISTER's video.
+//
+// FLASH: in a cell with FLASH, during the flash's on phase (bit 4 of a count
+// of frames, 16 frames on, 16 off, as SPEC256_MISTER's flash_count), the
+// core's own pixel shows instead of the palette colour, so a coloured line
+// the game marks with FLASH (the Ultimate games' selected menu option) blinks
+// as on the Spectrum. ZX-Poly keeps its own FLASH meaning.
 //
 // Outside the paper, or with enable low, the core's pixel passes through.
 // Everything leaves two 7 MHz cycles after it arrived, the capture's own
@@ -82,6 +93,7 @@ module nexttang_spec256_overlay (
     input  wire [8:0]  palette_rgb,
 
     input  wire        render_dos,
+    input  wire        attr_hide,
     input  wire [2:0]  zxpoly_mode,
     input  wire        bk_over_ff,
     // The .CFG: UpColorsMixed, DownColorsMixed, flags (bit 0 UseBrightInMix,
@@ -132,6 +144,14 @@ module nexttang_spec256_overlay (
         background_q <= background[{paper_y[7:0], paper_x[7:0]}];
     end
 
+    // Frames counted for FLASH; capture_frame_start comes once a frame.
+    reg [4:0] flash_count = 5'd0;
+    always @(posedge clock_7)
+        if (reset)
+            flash_count <= 5'd0;
+        else if (capture_frame_start)
+            flash_count <= flash_count + 5'd1;
+
     // Stage 1: the pixel and its plane word.
     reg        s1_frame_start, s1_valid, s1_paper;
     reg [8:0]  s1_x, s1_y, s1_pixel;
@@ -167,8 +187,12 @@ module nexttang_spec256_overlay (
             y <= s1_y;
             if (!s1_paper)
                 pixel <= s1_pixel;
+            else if (attr_hide && s1_attribute[2:0] == s1_attribute[5:3])
+                pixel <= s1_pixel;
             else if (zxpoly_on)
                 pixel <= zxpoly_plain ? s1_pixel : spectrum_rgb(zxpoly_colour, zxpoly_bright);
+            else if (s1_attribute[7] && flash_count[4])
+                pixel <= s1_pixel;
             else if (show_background)
                 pixel <= palette[s1_background];
             else if (!render_dos && index == 8'hff)

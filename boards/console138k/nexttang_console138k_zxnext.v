@@ -1772,6 +1772,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .palette_index(spec256_palette_index),
         .palette_rgb(spec256_palette_rgb),
         .render_dos(spec256_rules_flags[0]),
+        .attr_hide(spec256_rules_flags[5]),
         .zxpoly_mode(spec256_zxpoly_mode),
         .bk_over_ff(spec256_cfg[3]),
         .cfg(spec256_cfg),

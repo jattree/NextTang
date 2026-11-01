@@ -24,6 +24,13 @@ must not reach the copy, and 0xFF no longer passes the core's pixel.
 Two more sweeps run with a background loaded (with zeros in it): in DOS mode
 index 0 shows the background; otherwise a non-zero background shows where the
 index is 0, or 0xFF in a cell whose ink is not 7 when BkOverFF is set.
+
+A sweep sets attr_hide (RUL1 flag bit 5): every cell whose ink equals its
+paper shows the core's pixel whatever its index.
+
+The overlay counts frames; with bit 4 of the count set (the flash's on phase,
+here after frame starts given without pixels), every cell with FLASH shows the
+core's pixel instead of its colour. Every earlier sweep falls in the off phase.
 """
 
 from pathlib import Path
@@ -47,7 +54,9 @@ module testbench;
     reg palette_write = 0;
     reg [7:0] palette_index = 0;
     reg [8:0] palette_rgb = 0;
-    reg render_dos = 0, bank5_write = 0, bk_over_ff = 0;
+    reg render_dos = 0, bank5_write = 0, bk_over_ff = 0, attr_hide = 0;
+    integer hidden = 0, flashed = 0;
+    reg [4:0] frames = 0;               // the model's count of frame starts
     reg [8:0] top = 9'd48;
     reg [2:0] zxpoly = 3'd0;
     reg [23:0] cfg = 24'd0;
@@ -67,7 +76,7 @@ module testbench;
         .frame_start(o_frame), .pixel_valid(o_valid), .x(ox), .y(oy), .pixel(opixel),
         .plane_address(plane_address), .plane_data(plane_data),
         .palette_write(palette_write), .palette_index(palette_index), .palette_rgb(palette_rgb),
-        .paper_top(top), .paper_left(9'd52), .render_dos(render_dos), .zxpoly_mode(zxpoly), .bk_over_ff(bk_over_ff), .cfg(cfg),
+        .paper_top(top), .paper_left(9'd52), .render_dos(render_dos), .attr_hide(attr_hide), .zxpoly_mode(zxpoly), .bk_over_ff(bk_over_ff), .cfg(cfg),
         .background_present(background_present), .background_write(background_write),
         .background_address(background_address), .background_index(background_index),
         .bank5_write(bank5_write), .bank5_address(bank5_address),
@@ -140,7 +149,11 @@ module testbench;
                     index[j] = b[7 - (px % 8)];
                 end
                 ink = attribute_of((py / 8) * 32 + px / 8);
-                if (zxpoly != 3'd0) begin
+                if (attr_hide && ink[2:0] == ink[5:3])
+                    expected = core_pixel(x, y);
+                else if (zxpoly == 3'd0 && ink[7] && frames[4])
+                    expected = core_pixel(x, y);
+                else if (zxpoly != 3'd0) begin
                     if (zxpoly == 3'd7 && !ink[7])
                         expected = core_pixel(x, y);
                     else if (zxpoly[1] && ink[2:0] == ink[5:3])
@@ -171,6 +184,7 @@ module testbench;
         begin
             enable = on;
             render_dos = dos;
+            frames = frames + 1;
             for (y = 0; y < 288; y = y + 1)
                 for (x = 0; x < 360; x = x + 1) begin
                     @(posedge clock_7); #1;
@@ -178,6 +192,18 @@ module testbench;
                     cpixel = core_pixel(x, y);
                 end
             @(posedge clock_7); #1 valid = 0;
+            repeat (3) @(posedge clock_7);
+        end
+    endtask
+
+    // Frame starts without a picture, to move the flash phase on.
+    task frame_starts(input integer n);
+        integer k;
+        begin
+            for (k = 0; k < n; k = k + 1) begin
+                @(posedge clock_7); #1 frame_start = 1; frames = frames + 1;
+                @(posedge clock_7); #1 frame_start = 0;
+            end
             repeat (3) @(posedge clock_7);
         end
     endtask
@@ -193,6 +219,13 @@ module testbench;
             if (o_frame !== (ox == 0 && oy == 0))
                 $fatal(1, "frame start out of step at (%0d,%0d)", ox, oy);
             checked = checked + 1;
+            if (enable && frames[4] && zxpoly == 3'd0 && ox >= 52 && ox < 308 && oy >= top &&
+                oy < top + 192 && attribute_of(((oy - top) / 8) * 32 + (ox - 52) / 8) >= 8'h80)
+                flashed = flashed + 1;
+            if (enable && attr_hide && ox >= 52 && ox < 308 && oy >= top && oy < top + 192 &&
+                attribute_of(((oy - top) / 8) * 32 + (ox - 52) / 8) % 8 ==
+                (attribute_of(((oy - top) / 8) * 32 + (ox - 52) / 8) / 8) % 8)
+                hidden = hidden + 1;
             if (enable && !render_dos && ox >= 52 && ox < 308 && oy >= top && oy < top + 192) begin
                 if (opixel === core_pixel(ox, oy)) passed_ff = passed_ff + 1;
                 else coloured = coloured + 1;
@@ -251,8 +284,16 @@ module testbench;
         zxpoly = 3'd6; sweep(1, 0);
         zxpoly = 3'd7; sweep(1, 0);
         zxpoly = 3'd0;
-        $display("OVERLAY_PASS checked %0d coloured %0d passthrough %0d inked %0d background %0d",
-                 checked, coloured, passed_ff, inked, shown_background);
+        attr_hide = 1; sweep(1, 0); attr_hide = 0;
+        if (hidden == 0) $fatal(1, "no cell with ink = paper was swept with attr_hide");
+        if (frames[4]) $fatal(1, "an earlier sweep fell in the flash's on phase");
+        // Into the flash's on phase, then a sweep.
+        frame_starts(16 - frames[3:0]);
+        if (!frames[4]) $fatal(1, "flash phase not reached");
+        sweep(1, 0);
+        if (flashed == 0) $fatal(1, "no FLASH cell was swept in the on phase");
+        $display("OVERLAY_PASS checked %0d coloured %0d passthrough %0d inked %0d background %0d hidden %0d flashed %0d",
+                 checked, coloured, passed_ff, inked, shown_background, hidden, flashed);
         $finish;
     end
 endmodule
@@ -266,7 +307,8 @@ class Spec256OverlayTest(unittest.TestCase):
         counts = output.split("OVERLAY_PASS ")[1].split()
         checked, coloured, passthrough = int(counts[1]), int(counts[3]), int(counts[5])
         inked, background = int(counts[7]), int(counts[9])
-        self.assertEqual(checked, 11 * 360 * 288, output)
+        self.assertEqual(checked, 13 * 360 * 288, output)
+        self.assertGreater(int(counts[13]), 10000, output)   # pixels in FLASH cells, on phase
         self.assertGreater(background, 1000, output)
         self.assertGreater(coloured, 40000, output)
         self.assertGreater(passthrough, 100, output)
