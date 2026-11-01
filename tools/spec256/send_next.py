@@ -168,6 +168,18 @@ def game_zxpoly_mode(game: bytes) -> int:
     return game[RUL1_AT + 7] & 7
 
 
+OPT1_AT = 1_383_117
+OPT1_SIZE = 256
+
+
+def game_options(game: bytes) -> int:
+    """OPT1 byte 8, the options agreed with Alberto Conde (bit 0: FLASH cells
+    show the Spectrum's pixel in the on phase), or 0 without a whole OPT1."""
+    if len(game) < OPT1_AT + OPT1_SIZE or game[OPT1_AT : OPT1_AT + 4] != b"OPT1":
+        return 0
+    return game[OPT1_AT + 8]
+
+
 def game_rules_flags(game: bytes) -> int:
     """RUL1's flags (bit 0: DOS render), or 0 for a .256 without RUL1."""
     if game[RUL1_AT : RUL1_AT + 4] != b"RUL1" or game[RUL1_AT + 4] != 1:
@@ -204,12 +216,16 @@ def colour_stream(words: bytes, flags: int, cfg: bytes, rules: bytes | None, zxp
                   font: bytes | None, background: bytes | None, palette: bytes, pc: int,
                   bgx: bytes | None = None,
                   extra_backgrounds: list[tuple[int, bytes]] | None = None,
-                  other_banks: list[tuple[int, bytes]] | None = None) -> bytes:
-    """The loader's commands for one game, in the order it takes them."""
+                  other_banks: list[tuple[int, bytes]] | None = None,
+                  options: int = 0) -> bytes:
+    """The loader's commands for one game, in the order it takes them. O (the
+    OPT1 options) only when non-zero, so other games' streams are unchanged."""
     out = b"H" + b"S1" + b"U%02x" % flags + b"C" + cfg.hex().encode()
     if rules is not None:
         out += b"Y" + rules
     out += b"Z%d" % zxpoly
+    if options:
+        out += b"O%02x" % options
     out += b"W4000%04x" % (len(words) // 8) + words
     if font is not None:
         out += b"W%04x%04x" % (ROM_FONT_START, ROM_FONT_WORDS) + font
@@ -238,7 +254,8 @@ def game_colour_stream(game: bytes, palette: bytes, pc: int | None = None,
                          game_start_pc(game) if pc is None else pc,
                          game_bgx(game) if extended else None,
                          game_extra_backgrounds(game) if extended else None,
-                         None if game[PORT_7FFD_AT] & 0x20 or not extended else game_other_banks(game))
+                         None if game[PORT_7FFD_AT] & 0x20 or not extended else game_other_banks(game),
+                         game_options(game))
 
 
 SNA_128K_SIZE = 131_103

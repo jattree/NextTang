@@ -33,11 +33,15 @@
 //                   the block), cleared by H
 //   Zn              the ZX-Poly video mode, RUL1 byte 7 (0: none), cleared
 //                   by H
+//   Onn             the game's options, byte 8 of the .256's OPT1 block (bit 0:
+//                   FLASH cells show the Spectrum's pixel in the on phase),
+//                   cleared by H; senders give it only when non-zero, and an
+//                   older core ignores the letter and its lower-case digits
 //   Xnn             the paper's horizontal trim, a signed pixel count added
 //                   to the left edge the board measures (kept by H)
 //   H               everything off: colour mode, the planes (S0), rules
-//                   flags, CFG, rules, ZX-Poly mode, backgrounds and BGX1
-//                   rules
+//                   flags, CFG, rules, ZX-Poly mode, options, backgrounds and
+//                   BGX1 rules
 //
 // abort returns the parser to waiting for a command from any state, the
 // middle of a raw payload included, without changing what was loaded.
@@ -83,6 +87,7 @@ module nexttang_spec256_uart_loader (
     output reg  [23:0] cfg,                  // up, down, flags
     output reg  [511:0] rules,               // rule i in 64i+63..64i, byte j at 8j
     output reg  [2:0]  zxpoly_mode,
+    output reg  [7:0]  options,              // OPT1 byte 8, cleared by H
     output reg  [7:0]  paper_trim,
     output reg  [2:0]  plane_bank,
     output reg  [7:0]  banks_with_planes
@@ -133,6 +138,7 @@ module nexttang_spec256_uart_loader (
             cfg <= 24'd0;
             rules <= 512'd0;
             zxpoly_mode <= 3'd0;
+            options <= 8'd0;
             paper_trim <= 8'd0;
             plane_bank <= 3'd0;
             banks_with_planes <= 8'd0;
@@ -161,10 +167,12 @@ module nexttang_spec256_uart_loader (
                             disarm <= 1'b1; spec256_mode <= 1'b0; backgrounds_present <= 4'd0;
                             bgx_clear <= 1'b1;
                             rules_flags <= 8'd0; cfg <= 24'd0; rules <= 512'd0;
-                            zxpoly_mode <= 3'd0; plane_bank <= 3'd0; banks_with_planes <= 8'd0;
+                            zxpoly_mode <= 3'd0; options <= 8'd0;
+                            plane_bank <= 3'd0; banks_with_planes <= 8'd0;
                         end
                         "Z": begin digits_left <= 4'd1; state <= HEX; end
                         "X": begin digits_left <= 4'd2; state <= HEX; end
+                        "O": begin digits_left <= 4'd2; state <= HEX; end
                         "Y": begin next_address <= 16'd0; state <= RULES; end
                         default: ;
                     endcase
@@ -195,6 +203,9 @@ module nexttang_spec256_uart_loader (
                                 state <= IDLE;
                             end else if (command == "X") begin
                                 paper_trim <= {value[3:0], digit};
+                                state <= IDLE;
+                            end else if (command == "O") begin
+                                options <= {value[3:0], digit};
                                 state <= IDLE;
                             end else if (command == "P") begin
                                 plane_bank <= digit[2:0];

@@ -50,11 +50,14 @@
 // does both only in cells with FLASH and shows every other cell as the
 // Spectrum does (the core's own pixel). As SPEC256_MISTER's video.
 //
-// FLASH: in a cell with FLASH, during the flash's on phase (bit 4 of a count
-// of frames, 16 frames on, 16 off, as SPEC256_MISTER's flash_count), the
-// core's own pixel shows instead of the palette colour, so a coloured line
-// the game marks with FLASH (the Ultimate games' selected menu option) blinks
-// as on the Spectrum. ZX-Poly keeps its own FLASH meaning.
+// FLASH: neither the DOS Spec256 nor EmuZWin blinks a coloured pixel, so by
+// default FLASH changes nothing here. A game built to ask for it (OPT1 byte 8
+// bit 0, flash_blink, agreed with Alberto Conde) shows the core's own pixel
+// in a cell with FLASH during the flash's on phase (bit 4 of a count of
+// frames, 16 frames on, 16 off, as SPEC256_MISTER's flash_count), so a
+// coloured line it marks with FLASH (the Ultimate games' selected menu
+// option) blinks as on the Spectrum. ZX-Poly mode 7, where FLASH marks the
+// coloured cells, is left alone.
 //
 // Outside the paper, or with enable low, the core's pixel passes through.
 // Everything leaves two 7 MHz cycles after it arrived, the capture's own
@@ -94,6 +97,7 @@ module nexttang_spec256_overlay (
 
     input  wire        render_dos,
     input  wire        attr_hide,
+    input  wire        flash_blink,
     input  wire [2:0]  zxpoly_mode,
     input  wire        bk_over_ff,
     // The .CFG: UpColorsMixed, DownColorsMixed, flags (bit 0 UseBrightInMix,
@@ -189,10 +193,10 @@ module nexttang_spec256_overlay (
                 pixel <= s1_pixel;
             else if (attr_hide && s1_attribute[2:0] == s1_attribute[5:3])
                 pixel <= s1_pixel;
+            else if (flash_blink && s1_attribute[7] && flash_count[4] && zxpoly_mode != 3'd7)
+                pixel <= s1_pixel;
             else if (zxpoly_on)
                 pixel <= zxpoly_plain ? s1_pixel : spectrum_rgb(zxpoly_colour, zxpoly_bright);
-            else if (s1_attribute[7] && flash_count[4])
-                pixel <= s1_pixel;
             else if (show_background)
                 pixel <= palette[s1_background];
             else if (!render_dos && index == 8'hff)

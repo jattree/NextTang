@@ -294,6 +294,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [15:0] spec256_overlay_address;
     wire [63:0] spec256_overlay_data;
     wire [7:0]  spec256_rules_flags;
+    wire [7:0]  spec256_options;        // OPT1 byte 8 (bit 0: FLASH shows the Spectrum pixel)
     wire        spec256_background_present;
     wire        spec256_background_write;
     wire [15:0] spec256_background_address;
@@ -1773,6 +1774,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .palette_rgb(spec256_palette_rgb),
         .render_dos(spec256_rules_flags[0]),
         .attr_hide(spec256_rules_flags[5]),
+        .flash_blink(spec256_options[0]),
         .zxpoly_mode(spec256_zxpoly_mode),
         .bk_over_ff(spec256_cfg[3]),
         .cfg(spec256_cfg),
@@ -2371,6 +2373,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .cfg(spec256_cfg),
         .rules(spec256_rules),
         .zxpoly_mode(spec256_zxpoly_mode),
+        .options(spec256_options),
         .paper_trim(spec256_paper_trim),
         .plane_bank(spec256_plane_bank),
         .banks_with_planes(spec256_banks_with_planes)
@@ -2393,6 +2396,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     assign spec256_cfg = 24'd0;
     assign spec256_rules = 512'd0;
     assign spec256_zxpoly_mode = 3'd0;
+    assign spec256_options = 8'd0;
     assign spec256_paper_trim = 8'd0;
     assign spec256_plane_bank = 3'd0;
     assign spec256_banks_with_planes = 8'd0;

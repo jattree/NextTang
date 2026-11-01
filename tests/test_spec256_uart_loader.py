@@ -6,7 +6,8 @@ commands ("R", "S", "G"), must land as data while payload is high, and the
 mode, rules flags, CFG, arm and disarm commands must act. A background's
 49152 bytes, including command letters, land in order as background writes,
 H drops the background, and Y's 64 rule bytes land in order, also dropped by
-H. X sets the paper trim, which H keeps. The background counts as present
+H. X sets the paper trim, which H keeps; O sets the options (OPT1 byte 8),
+which H clears. The background counts as present
 only once its last byte has arrived. abort in the middle of a W payload
 returns the parser to commands (the next U acts), keeping the words already
 complete. H turns everything off: mode, rules flags and CFG too.
@@ -37,6 +38,7 @@ module testbench;
     wire [23:0] cfg;
     wire [511:0] rules;
     wire [2:0] zxpoly_mode;
+    wire [7:0] options;
     wire [7:0] paper_trim;
     integer backgrounds = 0, background_errors = 0;
     integer planes = 0, palettes = 0, payload_bytes = 0, i;
@@ -52,7 +54,7 @@ module testbench;
         .arm(arm), .arm_pc(arm_pc), .disarm(disarm), .rules_flags(rules_flags),
         .background_write(background_write), .background_address(background_address),
         .background_index(background_index), .background_present(background_present), .cfg(cfg),
-        .rules(rules), .zxpoly_mode(zxpoly_mode), .paper_trim(paper_trim));
+        .rules(rules), .zxpoly_mode(zxpoly_mode), .options(options), .paper_trim(paper_trim));
 
     always #5 clock = ~clock;
 
@@ -133,11 +135,15 @@ module testbench;
         if (paper_trim !== 8'hfc) $fatal(1, "Xfc set trim %h", paper_trim);
         send_string("Z6", 2);
         if (zxpoly_mode !== 3'd6) $fatal(1, "Z6 set mode %0d", zxpoly_mode);
+        if (options !== 8'd0) $fatal(1, "options set without O");
+        send_string("O01", 3);
+        if (options !== 8'h01) $fatal(1, "O01 set options %h", options);
         send_string("Gab12", 5);
         send("H");
         if (background_present !== 0) $fatal(1, "H kept the background");
         if (rules !== 512'd0) $fatal(1, "H kept the rules");
         if (zxpoly_mode !== 3'd0) $fatal(1, "H kept the ZX-Poly mode");
+        if (options !== 8'd0) $fatal(1, "H kept the options");
         if (paper_trim !== 8'hfc) $fatal(1, "H changed the paper trim");
         if (mode !== 0 || rules_flags !== 8'h00 || cfg !== 24'd0)
             $fatal(1, "H kept mode %0d flags %h cfg %h", mode, rules_flags, cfg);

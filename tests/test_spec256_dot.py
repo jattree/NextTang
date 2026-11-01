@@ -15,7 +15,8 @@ address on the stack, here in bank 3 paged at 0xC000). The file it writes to
 /tmp/SPEC256.Z80 on the system drive must equal z80_from_256.py's for the
 same .256: a 128K game (all eight banks, 7FFD, the AY state) and a 48K one
 (banks 5, 2 and 0, the AY flag). Checked too: a .256 of
-the oldest size (no optional blocks); a tagged block after OPT1 is skipped and
+the oldest size (no optional blocks); OPT1's options byte (byte 8) sent as O
+only when non-zero; a tagged block after OPT1 is skipped and
 a truncated one refused; an OPT1 level above 1, a core without the interface
 and a missing palette are refused before anything is sent; a read failing
 mid-stream aborts the loader, sends H and releases it; the CPU speed and the
@@ -321,6 +322,22 @@ class Spec256DotCommandTest(unittest.TestCase):
         self.assertEqual(message, ".256 block cut short")
         self.assertEqual(machine.stream, b"")
         self.check_clean(machine)
+
+    def test_opt1_options_are_sent(self) -> None:
+        # OPT1 byte 8 bit 0 asks for FLASH cells to blink; O follows Z.
+        game = make_game(seed=6)
+        game[OPT1_AT + 8] = 0x01
+        machine = self.machine(game)
+        failed, message = machine.run('"game.256"')
+        self.assertFalse(failed, message)
+        expected = send_next.game_colour_stream(bytes(game), self.palette)
+        zxpoly = b"Z%d" % send_next.game_zxpoly_mode(bytes(game))
+        self.assertIn(zxpoly + b"O01W4000", expected)
+        self.assertEqual(bytes(machine.stream), expected)
+        self.check_clean(machine)
+        # Without the option the stream has no O at all.
+        game[OPT1_AT + 8] = 0x00
+        self.assertNotIn(zxpoly + b"O", send_next.game_colour_stream(bytes(game), self.palette))
 
     def test_newer_level_is_refused(self) -> None:
         game = make_game(seed=4)

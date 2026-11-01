@@ -11,14 +11,17 @@
 ; language tools/spec256/send_next.py sends over the debug UART, in the same
 ; order, byte for byte:
 ;
-;   H, S1, U flags, C cfg, [Y rules], Z mode, W planes for 0x4000-0xFFFF
+;   H, S1, U flags, C cfg, [Y rules], Z mode, [O options], W planes for 0x4000-0xFFFF
 ;   (banks 5, 2, 0), [W ROM font], Q palette, [B background], [E BGX1
 ;   rules, M1-M3 its other backgrounds that have a pixel], [128K: P bank and
 ;   W planes at 0xC000 for each of banks 1, 3, 4, 6, 7 with colour, P0],
 ;   G start
 ;
 ; E, M and P go only to a core whose NextREG 0x3F reads with bit 6 set;
-; an older core would take their raw bytes for commands.
+; an older core would take their raw bytes for commands. O (OPT1 byte 8, the
+; options agreed with Alberto Conde; bit 0: FLASH cells show the Spectrum's
+; pixel in the on phase) goes only when non-zero; an older core ignores the
+; letter and its lower-case digits.
 ;
 ; It also writes the game's own memory and CPU state from the .256 as a .z80
 ; (version 3) snapshot, /tmp/SPEC256.Z80 on the system drive, exactly as
@@ -219,6 +222,14 @@ start:
         ld      a,(rul+7)
         and     7
         call    send_nibble
+        ld      a,(options)                 ; O only when OPT1 asks for something
+        or      a
+        jr      z,.no_options
+        ld      a,'O'
+        call    send_byte
+        ld      a,(options)
+        call    send_hex
+.no_options:
 
         ld      hl,str_planes
         call    send_string
@@ -855,15 +866,18 @@ bank_bases:
 
 ; ------------------------------------------------------------ the blocks
 
-; OPT1 (256 bytes at 1383117): byte 4 is the core level the game needs.
+; OPT1 (256 bytes at 1383117): byte 4 is the core level the game needs,
+; byte 8 the options (kept in options, 0 without OPT1).
 check_opt1:
         NEED    $0015,$1bcd
         ret     c
-        READ_AT $0015,$1acd,5,buffer
+        READ_AT $0015,$1acd,9,buffer
         ld      hl,buffer
         ld      de,magic_opt1
         call    same_magic
         ret     nz
+        ld      a,(buffer+8)
+        ld      (options),a
         ld      a,(buffer+4)
         cp      CORE_LEVEL + 1
         ret     c
@@ -1339,6 +1353,7 @@ msg_palette:    db "SPEC256.RGB not foun", 'd' | $80
 
 handle:         db 0
 owned:          db 0
+options:        db 0                        ; OPT1 byte 8
 extended:       db 0                        ; NextREG 0x3F bit 6 (E, M, P)
 speed:          db 0
 interrupts:     db 0
