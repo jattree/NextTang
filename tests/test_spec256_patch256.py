@@ -6,7 +6,9 @@ wrong occurrence count, a different .256 (sha256), strings of different
 lengths, a string split across two banks, or text whose planes are not its
 code eight times (colour data) are refused; the IPS patch it writes gives
 the same file as applying it directly. A menu line's clean copy (buffer)
-is filled from the new screen, and refused unless it was a copy. The shipped patches parse and keep
+is filled from the new screen, and refused unless it was a copy. A line of
+old text drawn from the game's font at any pixel row is drawn again from the
+font with the new text, all nine bytes. The shipped patches parse and keep
 every string's length.
 """
 
@@ -140,6 +142,29 @@ class Patch256Test(unittest.TestCase):
         with self.assertRaises(patch256.PatchError) as raised:
             patch256.apply(bytes(game), patch_for(bytes(game), rules))
         self.assertIn("not a copy", str(raised.exception))
+
+    def test_font_lines_redraws_text_on_the_screen(self) -> None:
+        game = make_game()
+        game[patch256.REGISTERS_AT + 28] = 0x30           # 48K: bank 0 at 0xC000
+        glyphs = 0x9000                                    # bank 2
+
+        def glyph(code: int, row: int) -> bytes:
+            at = (2 * 16_384 + 0x1000 + code * 8 + row) * 9
+            return bytes(game[at:at + 9])
+
+        for code in b"ABCD":
+            for row in range(8):
+                game[(2 * 16_384 + 0x1000 + code * 8 + row) * 9 + 8] = code ^ row ^ 0x80
+        put_text(game, 100, b"AB")
+        for column, code in enumerate(b"AB"):
+            for row in range(8):
+                at = patch256.pixel_offset(13 + row, column)
+                game[at:at + 9] = glyph(code, row)
+        patched = patch256.apply(bytes(game), patch_for(bytes(game), '"AB" = "CD"\nfont-lines: 9000 2'))
+        for column, code in enumerate(b"CD"):
+            for row in range(8):
+                at = patch256.pixel_offset(13 + row, column)
+                self.assertEqual(patched[at:at + 9], glyph(code, row))
 
     def test_shipped_patches_keep_lengths(self) -> None:
         patches = sorted((REPO_ROOT / "tools" / "spec256" / "patches").glob("*.txt"))

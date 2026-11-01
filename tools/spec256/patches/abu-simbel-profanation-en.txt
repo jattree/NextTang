@@ -5,6 +5,9 @@
 game: Abu Simbel Profanation
 sha256: 812083e48b7430e17e54f62764283fb1c3706e6eae6436683914c1f20ebf1068
 redraw: 14
+# The intro's first lines, already scrolled up the screen, drawn again in
+# English from the game's font (32 characters a line).
+font-lines: 9ece 32
 "DINAMIC PRESENTA......" = "DINAMIC PRESENTS......"
 "CODIGO ?" = "CODE ?  "
 "ABUSIMBEL COPYRIGHT DINAMIC SOFT    PROGRAMA REALIZADO POR :              VICTOR  RUIZ.                  HAN COLABORADO :              FLORENTINO PERTREJO,             SANTIAGO  MORGA B.                 Y  SNATCHO.                 DESCUBRE EL SECRETO         DE ABU SIMBEL PARA LIBERAR     A JOHNY  JONES  DEL MALEFICIO.Y RECUERDA LAS  DOS LEYENDAS QUESOBRE EL TEMPLO DE ABUSIMBEL NOSDEJARON LOS ANTIGUOS LIBROS....  " = "ABUSIMBEL COPYRIGHT DINAMIC SOFT        PROGRAMMED BY :                   VICTOR  RUIZ.                WITH THE HELP OF :              FLORENTINO PERTREJO,             SANTIAGO  MORGA B.               AND  SNATCHO.                DISCOVER THE SECRET            OF ABU SIMBEL TO FREE       JOHNY  JONES  FROM THE CURSE.    AND REMEMBER THE TWO LEGENDS  THE ANCIENT BOOKS LEFT US ABOUT   THE TEMPLE OF ABU SIMBEL....   "

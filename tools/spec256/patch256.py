@@ -39,7 +39,12 @@ from one as the jeeps drive past); "buffer: ADDRESS ROW COLUMN WIDTH, ..."
 (hex address, the rest in characters) names a copy of screen character row
 ROW, columns COLUMN on, as eight pixel rows of WIDTH bytes, and the tool
 fills it from the redrawn screen, refusing it unless it matches the screen
-in all nine bytes before the patch.
+in all nine bytes before the patch. Text a game draws straight from its
+own font, a fixed number of characters a line at any pixel row (Abu Simbel's
+scrolling intro), is redrawn with "font-lines: GLYPHS WIDTH": GLYPHS (hex)
+is the address of character code 0's eight bytes, and every WIDTH-character
+line of a rule's old text found on the screen in all nine bytes, from column
+0, is drawn again from the font with the new text's line.
 
 A label drawn as a picture (Army Moves' PUNTOS on its panel) is replaced
 with "label: ADDRESS WIDTH HEIGHT" (hex address, width in bytes) and
@@ -298,6 +303,47 @@ def refill_buffers(game: bytes, header: dict[str, str], out: dict[int, int]) -> 
     return filled
 
 
+def pixel_offset(y: int, column: int) -> int:
+    """File offset of the record for the screen byte at pixel row y, column."""
+    address = 0x4000 | (y & 0xC0) << 5 | (y & 7) << 8 | (y & 0x38) << 2 | column
+    return (5 * BANK_BYTES + address - 0x4000) * RECORD
+
+
+def redraw_font_lines(game: bytes, header: dict[str, str],
+                      rules: list[tuple[bytes, bytes, int]]) -> dict[int, int]:
+    """File offset -> byte for lines of text on screen drawn again from the font."""
+    words = header["font-lines"].split()
+    if len(words) != 2:
+        raise PatchError("font-lines: give GLYPHS WIDTH")
+    glyphs, width = int(words[0], 16), int(words[1])
+    if not 1 <= width <= 32:
+        raise PatchError("font-lines: a line is 1 to 32 characters")
+
+    def glyph(code: int, row: int) -> bytes:
+        at = address_offset(game, glyphs + code * 8 + row)
+        return game[at:at + RECORD]
+
+    out: dict[int, int] = {}
+    for old, new, _count in rules:
+        for start in range(0, len(old), width):
+            line, english = old[start:start + width], new[start:start + width]
+            if not any(any(glyph(code, row)) for code in line for row in range(8)):
+                continue   # a blank line would match any blank part of the screen
+            found = [y for y in range(192 - 7)
+                     if all(game[pixel_offset(y + row, column):][:RECORD] == glyph(code, row)
+                            for column, code in enumerate(line) for row in range(8))]
+            if len(found) > 1:
+                raise PatchError(f"font-lines: {line.decode()!r} is on the screen {len(found)} times")
+            for y in found:
+                for column, code in enumerate(english):
+                    for row in range(8):
+                        at = pixel_offset(y + row, column)
+                        for k, byte in enumerate(glyph(code, row)):
+                            if byte != game[at + k]:
+                                out[at + k] = byte
+    return out
+
+
 def changes(game: bytes, patch_text: str, rom: bytes | None = None) -> dict[int, int]:
     """File offset -> new byte for every byte the patch changes."""
     header, rules = read_patch(patch_text)
@@ -345,6 +391,8 @@ def changes(game: bytes, patch_text: str, rom: bytes | None = None) -> dict[int,
         out.update(redraw(game, bytes(patched), occurrences, setup, runs, rom))
     if "buffer" in header:
         out.update(refill_buffers(game, header, out))
+    if "font-lines" in header:
+        out.update(redraw_font_lines(game, header, rules))
     return out
 
 
