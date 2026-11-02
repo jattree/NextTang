@@ -29,9 +29,10 @@
 > The Console 138K runs the ZX Spectrum Next core: NextZXOS boots from the SD
 > card and runs at 28, 14, 7 and 3.5 MHz, Next games play at full speed, and
 > classic 48K and 128K games load from the card at the speeds they were
-> written for, with 720p HDMI video and audio at 50 or 60 Hz. It is not yet a
-> complete Next. The 48K, 128K and Spec256 profiles below remain standalone,
-> hardware-verified platform slices.
+> written for, with 720p HDMI video and audio at 50 or 60 Hz. Spec256 games
+> now run inside the Next core too, in 256 colours, started from the NextZXOS
+> browser. It is not yet a complete Next. The 48K, 128K and Spec256 profiles
+> below remain standalone, hardware-verified platform slices.
 
 The Next core is the official ZX Spectrum Next core 3.02.03, merged file by
 file onto the MiSTer port it started from; three MiSTer pieces are kept (see
@@ -49,6 +50,21 @@ keyboard, and F3 switches the machine and its HDMI output between 50 and
 60 Hz. Not done yet: Layer 2 in banks 32 and above, and the real-time
 debugger. The bring-up is shown in [Episode 6](https://youtu.be/sYmfuHmmCgw)
 and the slower speeds in [Episode 7](https://youtu.be/IYaPcpsD9Rs).
+
+Spec256 now also runs inside the Next core. Each game is one `.256` file in
+Alberto Conde's [SPEC256_MISTER](https://github.com/albconde/SPEC256_MISTER)
+format, picked in the NextZXOS browser and loaded by a `.SPEC256` dot command.
+The game runs on the Next's own Z80 while eight more Z80s follow its control
+flow, one 28 MHz clock tick behind, each with its own bit of colour data. For
+48K games their 384 KiB of colour planes reuse the Layer 2 memory widened for
+the Next core; 128K games get extra colour banks in DDR3, and painted
+backgrounds live in DDR3 too, chosen once a frame by each game's own rules. In
+a recorded survey on the board all 38 of Alberto's files loaded unchanged, in
+colour, and reached gameplay; that is a gameplay survey, not full-game
+compatibility. An optional per-game setting agreed with Alberto (OPT1 byte 8,
+bit 0) makes FLASH cells blink, as the Ultimate games' menus need; files
+without it behave as before. This build is in the Console's flash. Its source
+is not yet published.
 
 The 48K path boots a user-supplied Sinclair ROM through the imported T80 and
 standard upstream ULA. The ULA-visible lower 16 KiB remains local while the
