@@ -56,9 +56,10 @@
 // in a cell with FLASH during the flash's on phase (bit 4 of a count of
 // frames, 16 frames on, 16 off, as SPEC256_MISTER's flash_count), so a
 // coloured line it marks with FLASH (the Ultimate games' selected menu
-// option) blinks as on the Spectrum. ZX-Poly modes are left alone, as in
-// SPEC256_MISTER (its pass_now term: FLASH_ZX and ZXPOLY = "000" and attr(7)
-// and flash_count(4)).
+// option) blinks as on the Spectrum. ZX-Poly modes 4 and 6 blink the same
+// way (Alien 8's menu); SPEC256_MISTER leaves every ZX-Poly mode alone (its
+// pass_now term: FLASH_ZX and ZXPOLY = "000"). Mode 7, where FLASH marks the
+// coloured cells, never blinks.
 //
 // Outside the paper, or with enable low, the core's pixel passes through.
 // Everything leaves two 7 MHz cycles after it arrived, the capture's own
@@ -194,7 +195,7 @@ module nexttang_spec256_overlay (
                 pixel <= s1_pixel;
             else if (attr_hide && s1_attribute[2:0] == s1_attribute[5:3])
                 pixel <= s1_pixel;
-            else if (flash_blink && s1_attribute[7] && flash_count[4] && !zxpoly_on)
+            else if (flash_blink && s1_attribute[7] && flash_count[4] && zxpoly_mode != 3'd7)
                 pixel <= s1_pixel;
             else if (zxpoly_on)
                 pixel <= zxpoly_plain ? s1_pixel : spectrum_rgb(zxpoly_colour, zxpoly_bright);
