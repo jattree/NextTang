@@ -153,7 +153,16 @@ package T80N_Pack is
       -- extended functions
       Z80N_dout_o       : out std_logic := '0';
       Z80N_data_o       : out std_logic_vector(15 downto 0);
-      Z80N_command_o    : out Z80N_seq
+      Z80N_command_o    : out Z80N_seq;
+      -- NextTang: the official debug interface (t80n-debug)
+      i_debug_reg       : in std_logic_vector(4 downto 0) := (others => '0');
+      i_debug_wr        : in std_logic := '0';
+      i_debug_dat       : in std_logic_vector(7 downto 0) := (others => '0');
+      o_debug_dat       : out std_logic_vector(7 downto 0);
+      o_debug_lastM     : out std_logic;
+      i_debug_pause     : in std_logic := '0';
+      o_debug_next_pc   : out std_logic_vector(15 downto 0);
+      i_debug_break     : in std_logic := '0'
    );
    end component;
 

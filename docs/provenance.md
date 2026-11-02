@@ -131,6 +131,32 @@ The memory-cycle delay MiSTer kept, which the official tree removed in
 `3a5ba97f` ("DMA and LDPIRX work at all speeds"), was dropped the day before on
 the MiSTer baseline and stays dropped.
 
+## Following official 3.02.05 and its Pi debug interface
+
+On 2026-11-02 the core moved to official branch `30205`
+(`15e206dd0c55a887e292e5e7ff6f556f4404d70d`, core 3.02.05) with
+`scripts/merge_official_core.py`, which three-way merges each file in
+[`upstream-official-files.tsv`](upstream-official-files.tsv) against the
+official blob recorded there and updates the record. The next official
+release moves the same way: `scripts/merge_official_core.py --upstream DIR
+--to REV --write`, then resolve any reported conflicts and rebuild.
+
+- **Taken verbatim from 30205** (GPL-3.0-or-later, notices kept):
+  `rtl/device/pi_debug_control/pi_debug_control_param.vhd` (David Saphier),
+  `rtl/device/arbiter_dma.vhd` (Alvin Albrecht) and `rtl/serial/spi_slave.vhd`.
+- **The T80 family** stays Sorgelig's. It now follows the official
+  debug-interface CPU (`cpu/t80n-debug/`): David Saphier's debug wedge merged
+  onto it without conflicts, under NextTang's own entity names.
+  `rtl/cpu/nexttang_t80na_variants.vhd` gives it the official variant names.
+  The T80 package keeps NextTang's layout, with the debug ports added by hand.
+- **NextTang changes for the debugger** are marked `NextTang` in
+  `zxnext.vhd` and `t80n.vhd`. They open the Pi debug slave without NextREG
+  0xA0, grant the slave's pause only at an instruction end, catch a
+  single-step release at full clock rate, and export the CPU's next fetch
+  address and the MMU for hardware breakpoints.
+- `spi_master.vhd` remains MiSTer's; the official 3.02.04 change to it
+  (`spi_active`) is not taken yet.
+
 ## Reference projects
 
 These are read for their answers to device-specific questions. Nothing is

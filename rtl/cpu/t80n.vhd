@@ -5,6 +5,7 @@
 
 -- Modifications for the ZX Spectrum Next Project
 -- Copyright 2020 Fabio Belavenuto, Victor Trucco, Charlie Ingley, Garry Lancaster, ACX
+-- Copyright 2026 David Saphier
 --
 -- Version 350.
 -- Copyright (c) 2018 Sorgelig
@@ -83,6 +84,7 @@
 -- Victor Trucco, Fabio Belavenuto, Garry Lancaster : additional instructions
 -- Charlie Ingley : complete fix of wait logic
 -- ACX : implement undocumented flags for SLI r,(IY+s)
+-- David Saphier : debug interface
 
 library IEEE;
 use IEEE.std_logic_1164.all;
@@ -160,7 +162,22 @@ entity T80N is
       -- extended functions
       Z80N_dout_o       : out std_logic := '0';
       Z80N_data_o       : out std_logic_vector(15 downto 0);
-      Z80N_command_o    : out Z80N_seq
+      Z80N_command_o    : out Z80N_seq;
+      -- debug interface
+      -- NextTang: defaults so cores without a debugger leave these open
+      i_debug_reg       : in std_logic_vector(4 downto 0) := (others => '0');
+      i_debug_wr        : in std_logic := '0';
+      i_debug_dat       : in std_logic_vector(7 downto 0) := (others => '0');
+      o_debug_dat       : out std_logic_vector(7 downto 0);
+      o_debug_lastM     : out std_logic;
+      -- NextTang: the Pi debug slave wants the bus; it is granted only at the
+      -- end of an instruction (see BusAck below)
+      i_debug_pause     : in std_logic := '0';
+      -- NextTang: the address the next instruction will be fetched from, for
+      -- breakpoint comparators outside the CPU, and their verdict, which
+      -- stops the CPU at this instruction's end as a pause does
+      o_debug_next_pc   : out std_logic_vector(15 downto 0);
+      i_debug_break     : in std_logic := '0'
    );
 end T80N;
 
@@ -215,6 +232,11 @@ architecture rtl of T80N is
    signal Halt_FF       : std_logic;
    signal BusReq_s         : std_logic;
    signal BusAck        : std_logic;
+   signal Instr_End     : std_logic;   -- NextTang
+   signal Debug_Held    : std_logic;   -- NextTang: BusAck was granted to i_debug_pause
+   signal Debug_Release : std_logic;   -- NextTang: the debugger let go since
+   signal Debug_Pause_r : std_logic;   -- NextTang: i_debug_pause one clock ago
+   signal Next_PC       : std_logic_vector(15 downto 0);   -- NextTang
    signal ClkEn         : std_logic;
    signal NMI_s         : std_logic;
    signal INT_s         : std_logic;
@@ -336,6 +358,8 @@ architecture rtl of T80N is
 
    signal temp1: std_logic_vector(7 downto 0) := (others=>'0');
    signal temp2: std_logic_vector(15 downto 0) := (others=>'0');
+   
+   signal out_debug_dat: std_logic_vector(7 downto 0) := (others=>'0');
    
    ------------------------------------
 -- REGS
@@ -1470,10 +1494,34 @@ begin
             end if;
          end if;
 
-      end if;
+         elsif i_debug_wr = '1' then  -- ClkEn = '0'
+
+            -- debug register modification during halt
+            
+            case i_debug_reg is
+               when '0' & X"0" => ACC <= i_debug_dat;
+               when '0' & X"1" => F <= i_debug_dat;
+               when '0' & X"8" => Ap <= i_debug_dat;
+               when '0' & X"9" => Fp <= i_debug_dat;
+               when '1' & X"4" => SP(15 downto 8) <= unsigned(i_debug_dat);
+               when '1' & X"5" => SP(7 downto 0) <= unsigned(i_debug_dat);
+               -- NextTang: the CPU is stopped at an instruction end, where A
+               -- already holds the next fetch address; a new PC must move it
+               -- too, or the next instruction is fetched from the old one.
+               when '1' & X"6" => PC(15 downto 8) <= unsigned(i_debug_dat); A(15 downto 8) <= i_debug_dat;
+               when '1' & X"7" => PC(7 downto 0) <= unsigned(i_debug_dat); A(7 downto 0) <= i_debug_dat;
+               when '1' & X"8" => I <= i_debug_dat;
+               when '1' & X"9" => R <= unsigned(i_debug_dat);
+               -- NextTang: taking the CPU out of HALT (Halt_FF is written in the
+               -- state machine) also forgets the HALT opcode in IR, which would
+               -- otherwise hold PC on the next fetch.
+               when '1' & X"B" => if i_debug_dat(2) = '0' then IR <= x"00"; end if;
+               when others => null;
+            end case;
+
+         end if;
 
       end if;
-
    end process;
 
 ---------------------------------------------------------------------------
@@ -1687,6 +1735,31 @@ begin
                   RegsL(to_integer(unsigned(reg_direct_add_L_b))) <= reg_direct_val_L_b;
                end if;
 
+         elsif i_debug_wr = '1' then  -- ClkEn = '0'
+
+            -- debug register modification during halt
+            -- main BC/DE/HL are at indices 0-2, alternates at 4-6
+            
+               case i_debug_reg is
+                  when '0' & X"2" => RegsH(to_integer(unsigned(Alternate & dBC))) <= i_debug_dat;  -- B
+                  when '0' & X"3" => RegsL(to_integer(unsigned(Alternate & dBC))) <= i_debug_dat;  -- C
+                  when '0' & X"4" => RegsH(to_integer(unsigned(Alternate & dDE))) <= i_debug_dat;  -- D
+                  when '0' & X"5" => RegsL(to_integer(unsigned(Alternate & dDE))) <= i_debug_dat;  -- E
+                  when '0' & X"6" => RegsH(to_integer(unsigned(Alternate & dHL))) <= i_debug_dat;  -- H
+                  when '0' & X"7" => RegsL(to_integer(unsigned(Alternate & dHL))) <= i_debug_dat;  -- L
+                  when '0' & X"A" => RegsH(to_integer(unsigned((not Alternate) & dBC))) <= i_debug_dat;  -- B'
+                  when '0' & X"B" => RegsL(to_integer(unsigned((not Alternate) & dBC))) <= i_debug_dat;  -- C'
+                  when '0' & X"C" => RegsH(to_integer(unsigned((not Alternate) & dDE))) <= i_debug_dat;  -- D'
+                  when '0' & X"D" => RegsL(to_integer(unsigned((not Alternate) & dDE))) <= i_debug_dat;  -- E'
+                  when '0' & X"E" => RegsH(to_integer(unsigned((not Alternate) & dHL))) <= i_debug_dat;  -- H'
+                  when '0' & X"F" => RegsL(to_integer(unsigned((not Alternate) & dHL))) <= i_debug_dat;  -- L'
+                  when '1' & X"0" => RegsH(3) <= i_debug_dat;  -- IXH
+                  when '1' & X"1" => RegsL(3) <= i_debug_dat;  -- IXL
+                  when '1' & X"2" => RegsH(7) <= i_debug_dat;  -- IYH
+                  when '1' & X"3" => RegsL(7) <= i_debug_dat;  -- IYL
+                  when others     => null;
+               end case;
+
          end if;
       
       end if;
@@ -1803,7 +1876,41 @@ begin
    TS <= std_logic_vector(TState);
    DI_Reg <= DI;
    HALT_n <= not Halt_FF;
-   BUSAK_n <= not BusAck;
+   -- NextTang: once the debugger has let go, the bus is shown released at once,
+   -- although the CPU only leaves BusAck at its next clock enable. The Pi
+   -- debug slave then sees the CPU stop again only after it has really run
+   -- the instruction.
+   BUSAK_n <= not (BusAck and not Debug_Release);
+
+   -- NextTang: the debugger's release is caught on every clock, not only on
+   -- the CPU's clock enables, because at low speeds it can let go and ask
+   -- again between two enables (a single step). A release is the Pi debug
+   -- slave's request falling, not merely being low: a breakpoint stops the
+   -- CPU before the slave has asked, and the board then sends the slave a
+   -- pause of its own, so the hold passes to it without a gap.
+   process (CLK_n)
+   begin
+      if rising_edge(CLK_n) then
+         Debug_Pause_r <= i_debug_pause;
+         if RESET_n = '0' or BusAck = '0' then
+            Debug_Release <= '0';
+         elsif Debug_Held = '1' and Debug_Pause_r = '1' and i_debug_pause = '0' then
+            Debug_Release <= '1';
+         end if;
+      end if;
+   end process;
+
+   -- NextTang: where the next M1 will fetch, as the T_Res branch of the
+   -- register process sets A when an instruction ends: a jump, JP (HL), call,
+   -- RST, NMI or IM 2 vector loads PC on that same edge, so PC alone would
+   -- miss a breakpoint at their target.
+   Next_PC <= DI_Reg & TmpAddr(7 downto 0) when Jump = '1' else
+              RegBusC when JumpXY = '1' else
+              TmpAddr when Call = '1' or RstP = '1' else
+              x"0066" when MCycle = MCycles and NMICycle = '1' else
+              I & TmpAddr(7 downto 0) when MCycle = "011" and IntCycle = '1' and IStatus = "10" else
+              std_logic_vector(PC);
+   o_debug_next_pc <= Next_PC;
    IntCycle_n <= not IntCycle;
    IntE <= IntE_FF1;
    IORQ <= IORQ_i;
@@ -1890,6 +1997,7 @@ begin
             Pre_XY_F_M <= "000";
             Halt_FF <= '0';
             BusAck <= '0';
+            Debug_Held <= '0';   -- NextTang
             NMICycle <= '0';
             IntCycle <= '0';
             IntE_FF1 <= '0';
@@ -1944,7 +2052,10 @@ begin
 --          if MCycle = "001" and TState = 3 and WAIT_n = '1' and IntCycle = '1' then           -- by Fabio Belavenuto: Fix IRQ Acnowledgment timing
 --             M1_n <= '1';
 --          end if;
-            if BusReq_s = '1' and BusAck = '1' then
+            -- NextTang: a debugger hold lasts until Debug_Release; a DMA hold
+            -- as before, while BusReq_s.
+            if BusAck = '1' and ((Debug_Held = '0' and BusReq_s = '1') or
+                                 (Debug_Held = '1' and Debug_Release = '0')) then
             else
                BusAck <= '0';
                if TState = 2 and WAIT_n = '0' then
@@ -1952,8 +2063,18 @@ begin
                   if Halt = '1' then
                      Halt_FF <= '1';
                   end if;
-                  if BusReq_s = '1' then
+                  -- NextTang: the DMA's request is granted at the end of any
+                  -- M-cycle, as before; the Pi debug slave's only at the end
+                  -- of a whole instruction, so a pause or a single step never
+                  -- stops the CPU inside one.
+                  -- A debugger just released here runs at least one more
+                  -- instruction before it may be held again.
+                  if BusReq_s = '1' and i_debug_pause = '0' then
                      BusAck <= '1';
+                     Debug_Held <= '0';
+                  elsif (i_debug_pause = '1' or i_debug_break = '1') and Instr_End = '1' and BusAck = '0' then
+                     BusAck <= '1';
+                     Debug_Held <= '1';
                   else
                      TState <= "001";
                      
@@ -1996,6 +2117,23 @@ begin
             if TState = 0 then
                M1_n <= '0';
             end if;
+
+         end if;
+
+         -- NextTang: the official wedge made this an elsif of the CEN branch
+         -- above, and the official T80na ties CEN to '1', so the write never
+         -- happened (nor here at 28 MHz, where every clock is enabled). It now
+         -- lands whenever the debugger holds the bus, after the CEN branch so
+         -- it wins on the same edge.
+         if RESET_n = '1' and i_debug_wr = '1' and i_debug_reg = "11011" and BusAck = '1' then
+
+            -- debug register modification during halt
+            -- dat(2) = Halt_FF, dat(1) = IFF2, dat(0) = IFF1
+
+            Halt_FF  <= i_debug_dat(2);
+            IntE_FF2 <= i_debug_dat(1);
+            IntE_FF1 <= i_debug_dat(0);
+
          end if;
       end if;
    end process;
@@ -2007,5 +2145,62 @@ begin
          Auto_Wait <= '1';
       end if;
    end process;
+
+   -- debug register state output
+   
+   -- RegsH/RegsL layout: index = {Alternate(1), pair(1:0)}
+   --   0=BC, 1=DE, 2=HL, 3=IX, 4=BC', 5=DE', 6=HL', 7=IY
+   
+   process (CLK_n)
+   begin
+      if rising_edge(CLK_n) then
+         case i_debug_reg is 
+            when '0' & X"0" => out_debug_dat <= ACC;       -- A
+            when '0' & X"1" => out_debug_dat <= F;         -- F
+            when '0' & X"2" => out_debug_dat <= RegsH(to_integer(unsigned(Alternate & dBC)));  -- B
+            when '0' & X"3" => out_debug_dat <= RegsL(to_integer(unsigned(Alternate & dBC)));  -- C
+            when '0' & X"4" => out_debug_dat <= RegsH(to_integer(unsigned(Alternate & dDE)));  -- D
+            when '0' & X"5" => out_debug_dat <= RegsL(to_integer(unsigned(Alternate & dDE)));  -- E
+            when '0' & X"6" => out_debug_dat <= RegsH(to_integer(unsigned(Alternate & dHL)));  -- H
+            when '0' & X"7" => out_debug_dat <= RegsL(to_integer(unsigned(Alternate & dHL)));  -- L
+            when '0' & X"8" => out_debug_dat <= Ap;        -- A'
+            when '0' & X"9" => out_debug_dat <= Fp;        -- F'
+            when '0' & X"A" => out_debug_dat <= RegsH(to_integer(unsigned((not Alternate) & dBC)));  -- B'
+            when '0' & X"B" => out_debug_dat <= RegsL(to_integer(unsigned((not Alternate) & dBC)));  -- C'
+            when '0' & X"C" => out_debug_dat <= RegsH(to_integer(unsigned((not Alternate) & dDE)));  -- D'
+            when '0' & X"D" => out_debug_dat <= RegsL(to_integer(unsigned((not Alternate) & dDE)));  -- E'
+            when '0' & X"E" => out_debug_dat <= RegsH(to_integer(unsigned((not Alternate) & dHL)));  -- H'
+            when '0' & X"F" => out_debug_dat <= RegsL(to_integer(unsigned((not Alternate) & dHL)));  -- L'
+            when '1' & X"0" => out_debug_dat <= RegsH(3);  -- IXH
+            when '1' & X"1" => out_debug_dat <= RegsL(3);  -- IXL
+            when '1' & X"2" => out_debug_dat <= RegsH(7);  -- IYH
+            when '1' & X"3" => out_debug_dat <= RegsL(7);  -- IYL
+            when '1' & X"4" => out_debug_dat <= std_logic_vector(SP(15 downto 8));  -- SPH
+            when '1' & X"5" => out_debug_dat <= std_logic_vector(SP(7 downto 0));   -- SPL
+            when '1' & X"6" => out_debug_dat <= std_logic_vector(PC(15 downto 8));  -- PCH
+            when '1' & X"7" => out_debug_dat <= std_logic_vector(PC(7 downto 0));   -- PCL
+            when '1' & X"8" => out_debug_dat <= I;                    -- I
+            when '1' & X"9" => out_debug_dat <= std_logic_vector(R);  -- R
+            when others     => out_debug_dat <= "00" & IMode & '0' & Halt_FF & IntE_FF2 & IntE_FF1;  -- 0x1A, 0x1B
+         end case;
+      end if;
+   end process;
+
+   o_debug_dat <= out_debug_dat;
+   -- NextTang: during M1's first two T-states IR still holds the previous
+   -- instruction, so MCycle = MCycles there could mean the previous one ended
+   -- and the arbiter would let the request through mid-instruction. The CPU
+   -- now enforces the boundary itself (i_debug_pause), so the arbiter may pass
+   -- the request at once.
+   o_debug_lastM <= '1';
+
+   -- NextTang: the M-cycle now ending is the last of an instruction: the same
+   -- test the state machine uses to start the next M1, less prefix bytes and
+   -- the DD/FD CB displacement fetch, which belong to the instruction they
+   -- prefix.
+   Instr_End <= '1' when NextIs_XY_Fetch = '0' and Prefix = "00" and
+                         ((MCycle = MCycles) or No_BTR = '1' or
+                          (MCycle = "010" and I_DJNZ = '1' and IncDecZ = '1') or
+                          (MCycle = "111" and MCycles = "001" and Pre_XY_F_M = "001")) else '0';
 
 end;

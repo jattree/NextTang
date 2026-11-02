@@ -222,14 +222,21 @@ def imported_upstream_paths(root: Path = REPO_ROOT) -> frozenset[str]:
     Paths marked `imported-modified` carry a deliberate local change, described
     in `docs/provenance.md`, and no longer match the recorded blob.
     """
-    manifest = root / "docs" / "upstream-files.tsv"
-    if not manifest.is_file():
-        return frozenset()
     paths = set()
-    for line in manifest.read_text(encoding="utf-8").splitlines()[1:]:
-        columns = line.split("\t")
-        if len(columns) >= 4 and columns[3].startswith("imported"):
-            paths.add(columns[0])
+    manifest = root / "docs" / "upstream-files.tsv"
+    if manifest.is_file():
+        for line in manifest.read_text(encoding="utf-8").splitlines()[1:]:
+            columns = line.split("\t")
+            if len(columns) >= 4 and columns[3].startswith("imported"):
+                paths.add(columns[0])
+    # Files that follow the official ZX Spectrum Next tree, merged by
+    # scripts/merge_official_core.py, which records each one's official blob.
+    official = root / "docs" / "upstream-official-files.tsv"
+    if official.is_file():
+        for line in official.read_text(encoding="utf-8").splitlines()[1:]:
+            columns = line.split("\t")
+            if len(columns) >= 5 and columns[4].startswith("official"):
+                paths.add(columns[0])
     return frozenset(paths)
 
 

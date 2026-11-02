@@ -37,10 +37,37 @@ entity zxnext is
       g_sub_version        : unsigned(7 downto 0);
       g_board_issue        : unsigned(3 downto 0);
       g_video_inc          : unsigned(1 downto 0);
+      g_option             : unsigned(15 downto 0);
       -- NextTang: the 16K units of memory Layer 2 can read, passed to the
       -- layer2 entity.
       g_layer2_units        : std_logic_vector(127 downto 0) := (others => '1')
    );
+
+   -- g_option : build-time module options
+   --
+   -- cpu
+   --
+   --    xxxx xxxx xxxx xx00 = t80n
+   --    xxxx xxxx xxxx xx01 = t80n complete (with memptr and xy flags)
+   --    xxxx xxxx xxxx xx10 = t80n with debug interface
+   --    xxxx xxxx xxxx xx11 = t80n complete with debug interface
+   --
+   -- pi spi slave
+   --
+   --  4 xxxx xxxx xxx1 xxxx = CMD VERSION, CMD_STATUS (required)
+   --  5 xxxx xxxx xx1x xxxx = CMD_SYSTEM
+   --  6 xxxx xxxx x1xx xxxx = CMD_NEXTREG_R
+   --  7 xxxx xxxx 1xxx xxxx = CMD_NEXTREG_W
+   --  8 xxxx xxx1 xxxx xxxx = CMD_SRAM_R, CMD_SRAM_W (requires sram port c)
+   --  9 xxxx xx1x xxxx xxxx = CMD_CPU_PAUSE, CMD_CPU_RESUME, CMD_CPU_SSTEP
+   -- 10 xxxx x1xx xxxx xxxx = CMD_BRAM_R, CMD_BRAM_W
+   -- 11 xxxx 1xxx xxxx xxxx = CMD_CPU_REG_R, CMD_CPU_REG_W (requires CMD_CPU_PAUSE, CMD_CPU_RESUME, t80n debug interface)
+   --
+   -- miscellaneous
+   --
+   -- 12 xxx1 xxxx xxxx xxxx = tzx controls (pi spi slave with CMD_STATUS required)
+   -- 13 xx1x xxxx xxxx xxxx = sram port c
+
    port
    (
       i_CLK_28             : in std_logic;      -- 28MHz for machine logic
@@ -80,6 +107,7 @@ entity zxnext is
 
       i_SPKEY_FUNCTION     : in std_logic_vector(10 downto 1);    -- F10 through F1
       i_SPKEY_BUTTONS      : in std_logic_vector(1 downto 0);     -- raw state of nmi buttons m1(0) & drive(1)
+      i_SPKEY_FUNCTION_EXT : in std_logic_vector(4 downto 0);     -- TZX NMI+QWERT
       
       -- MEMBRANE KEYBOARD
       
@@ -203,6 +231,15 @@ entity zxnext is
       o_RAM_B_ADDR         : out std_logic_vector(20 downto 0);   -- 2MB memory space
       o_RAM_B_REQ_T        : out std_logic;                       -- toggle indicates memory request
       i_RAM_B_DI           : in std_logic_vector(7 downto 0);     -- data read from memory
+
+      -- Port C is read/write and lowest priority (Pi SPI slave)
+
+      o_RAM_C_ADDR         : out std_logic_vector(20 downto 0);   -- 2MB memory space
+      o_RAM_C_REQ          : out std_logic;                       -- '1' indicates memory request
+      o_RAM_C_RD_n         : out std_logic;                       -- '0' for read, '1' for write
+      i_RAM_C_DI           : in std_logic_vector(7 downto 0);     -- data read from memory
+      o_RAM_C_DO           : out std_logic_vector(7 downto 0);    -- data written to memory
+      i_RAM_C_ACK          : in std_logic;                        -- ram operation in progress, avail next cycle
       
       -- EXPANSION BUS
       
@@ -247,6 +284,14 @@ entity zxnext is
       -- PI GPIO
       
       i_GPIO               : in std_logic_vector(27 downto 0);
+      i_PI_SPI_SLAVE_FORCE : in std_logic := '0';     -- NextTang: open the Pi debug slave without NextREG 0xA0
+      -- NextTang: hardware breakpoints. The CPU's next fetch address at each
+      -- instruction end, whether the CPU is stopped (bus acknowledged), and a
+      -- breakpoint verdict that stops it there as a Pi debug pause does.
+      o_CPU_NEXT_PC        : out std_logic_vector(15 downto 0);
+      o_CPU_STOPPED        : out std_logic;
+      i_CPU_BREAK          : in std_logic := '0';
+      o_MMU                : out std_logic_vector(63 downto 0);   -- NextTang: NextREGs 0x57 down to 0x50
       
       o_GPIO               : out std_logic_vector(27 downto 0);
       o_GPIO_EN            : out std_logic_vector(27 downto 0);   -- 0 = high Z
@@ -310,9 +355,18 @@ architecture rtl of zxnext is
    signal Z80N_dout_s            : std_logic;
    signal Z80N_data_s            : std_logic_vector(15 downto 0);
    signal Z80N_command_s         : Z80N_seq;
+   
+   signal cpu_debug_reg          : std_logic_vector(4 downto 0);
+   signal cpu_debug_wr           : std_logic;
+   signal cpu_debug_wr_dat       : std_logic_vector(7 downto 0);
+   signal cpu_debug_rd_dat       : std_logic_vector(7 downto 0);
+   signal cpu_debug_lastM        : std_logic;
+   signal cpu_debug_pause        : std_logic;   -- NextTang: the Pi debug slave wants the CPU stopped
+   signal cpu_debug_next_pc      : std_logic_vector(15 downto 0) := (others => '0');   -- NextTang
 
    signal dma_wait_n             : std_logic;
    signal dma_busrq_n            : std_logic;
+   signal dma_busak_n            : std_logic;
    signal dma_a                  : std_logic_vector(15 downto 0);
    signal dma_do                 : std_logic_vector(7 downto 0);
    signal dma_rd_n               : std_logic;
@@ -423,7 +477,8 @@ architecture rtl of zxnext is
    signal pi_uart_rxtx           : std_logic;
    signal pi_uart_en             : std_logic;
    signal pi_i2c1_en             : std_logic;
-   signal pi_spi0_en             : std_logic;
+   signal pi_spi0_slave_en       : std_logic;     
+   signal pi_spi0_master_en      : std_logic;
    
    signal pi_i2s_en              : std_logic;
    signal pi_i2s_enL             : std_logic;
@@ -439,7 +494,8 @@ architecture rtl of zxnext is
    signal gpio_08_en             : std_logic;
    signal gpio_08                : std_logic;
    signal gpio_09_en             : std_logic;
-   signal pi_spi0_miso           : std_logic;
+   signal gpio_09                : std_logic;
+   signal pi_spi0_master_miso    : std_logic;
    signal gpio_10_en             : std_logic;
    signal gpio_10                : std_logic;
    signal gpio_11_en             : std_logic;
@@ -788,6 +844,7 @@ architecture rtl of zxnext is
 
    signal cpu_bank5_rd           : std_logic;
    signal cpu_bank5_we           : std_logic;
+   signal cpu_bank7_rd           : std_logic;
    signal cpu_bank7_we           : std_logic;
    
    signal sram_addr              : std_logic_vector(21 downto 0);
@@ -798,7 +855,14 @@ architecture rtl of zxnext is
    signal sram_wait_n            : std_logic := '1';
    
    signal bootrom_do             : std_logic_vector(7 downto 0);
-   
+
+   -- SRAM PORT C
+
+   signal sram_c_addr            : std_logic_vector(20 downto 0);
+   signal sram_c_req             : std_logic;
+   signal sram_c_rd_n            : std_logic;
+   signal sram_c_do              : std_logic_vector(7 downto 0);
+
    -- SERIAL COMMS
    
    signal i2c_scl_o              : std_logic;
@@ -817,7 +881,7 @@ architecture rtl of zxnext is
    signal spi_wait_n             : std_logic;
    signal port_eb_dat            : std_logic_vector(7 downto 0);
    signal port_e7_reg            : std_logic_vector(7 downto 0) := X"FF";
-   
+
    signal uart0_tx_esp           : std_logic;
    signal uart1_tx_pi            : std_logic;
    signal esp_uart_rtr_n         : std_logic;
@@ -846,7 +910,50 @@ architecture rtl of zxnext is
 -- signal joy_iomode_hwflen      : std_logic;
 
    signal port_uart_dat          : std_logic_vector(7 downto 0);
+
+   -- PI DEBUG CONTROL
+
+   signal pi_spi0_slave_ce_n     : std_logic;
+   signal pi_spi0_ce_n           : std_logic;
+   signal pi_spi0_slave_sclk     : std_logic;
+   signal pi_spi0_slave_mosi     : std_logic;
+   signal pi_spi0_slave_miso     : std_logic;
+   signal pi_spi0_rx_byte        : std_logic_vector(7 downto 0);
+   signal pi_spi0_rx_valid       : std_logic;
+   signal pi_spi0_tx_byte        : std_logic_vector(7 downto 0);
+   signal pi_spi0_tx_ack         : std_logic;
+
+   signal pi_debug_busrq_n       : std_logic;
+   signal pi_debug_busak_n       : std_logic;
    
+   signal nr_debug_rd_ack        : std_logic;
+   signal nr_debug_wr            : std_logic;
+   signal nr_debug_wr_ack        : std_logic;
+   signal nr_debug_rd_dat        : std_logic_vector(7 downto 0);
+   signal nr_debug_reg           : std_logic_vector(7 downto 0);
+   signal nr_debug_wr_dat        : std_logic_vector(7 downto 0);
+   
+   signal bram_debug_addr        : std_logic_vector(13 downto 0);
+   signal bram_debug_req         : std_logic;
+   signal bram_debug_b5_req      : std_logic;
+   signal bram_debug_b7_req      : std_logic;
+   signal bram_debug_ack         : std_logic;
+   signal bram_debug_wr          : std_logic; 
+   signal bram_debug_rd_dat      : std_logic_vector(7 downto 0);
+   signal bram_debug_wr_dat      : std_logic_vector(7 downto 0);
+
+   signal pi_debug_a2            : std_logic_vector(4 downto 0);
+   signal pi_debug_a1            : std_logic_vector(7 downto 0);
+   signal pi_debug_a0            : std_logic_vector(7 downto 0);
+   signal pi_debug_do            : std_logic_vector(7 downto 0);
+   
+   signal pi_debug_command             : std_logic_vector(4 downto 0);
+   signal pi_debug_command_int         : std_logic;
+   signal pi_debug_command_mf_nmi      : std_logic;
+   signal pi_debug_command_divmmc_nmi  : std_logic;
+   signal pi_debug_command_hard_reset  : std_logic;
+   signal pi_debug_command_soft_reset  : std_logic;
+
    -- KEYBOARD, JOYSTICKS & MOUSE
    
    signal keyrow                 : std_logic_vector(7 downto 0);
@@ -1037,6 +1144,8 @@ architecture rtl of zxnext is
    -- TBBLUE REGISTRY
    
    signal nr_register            : std_logic_vector(7 downto 0);
+   signal nr_register_active     : std_logic_vector(7 downto 0);
+   signal nr_rd_arbiter          : std_logic_vector(2 downto 0);
    signal port_243b_dat          : std_logic_vector(7 downto 0);
    
    signal MMU0                   : std_logic_vector(7 downto 0);
@@ -1342,6 +1451,11 @@ architecture rtl of zxnext is
    
    signal hotkeys_1              : std_logic_vector(10 downto 1) := "0000000000";
    signal hotkeys_0              : std_logic_vector(10 downto 1) := "0000000000";
+   
+   signal tzx_hotkeys            : std_logic_vector(4 downto 0);
+   signal tzx_hotkeys_1          : std_logic_vector(4 downto 0) := (others => '0');
+   signal tzx_hotkeys_0          : std_logic_vector(4 downto 0) := (others => '0');
+   
    signal nr_02_soft_reset       : std_logic;
    signal nr_02_hard_reset       : std_logic;
    
@@ -1380,19 +1494,34 @@ architecture rtl of zxnext is
    signal cpu_bank5_do           : std_logic_vector(7 downto 0);
    signal vram_bank5_do0         : std_logic_vector(7 downto 0);
    signal vram_bank5_do1         : std_logic_vector(7 downto 0);
-   signal ula_bank_req          : std_logic;
-   signal ula_bank_req_dly      : std_logic;
-   signal ula_bank_sched_dly    : std_logic;
-   signal ula_bank_sched        : std_logic;
-   signal ula_bank_do           : std_logic_vector(7 downto 0);
+   signal vram_b5_we             : std_logic;
+   signal vram_b5_di             : std_logic_vector(7 downto 0);
+   signal ula_bank_req           : std_logic;
+   signal ula_bank_req_dly       : std_logic;
+   signal ula_bank_sched_dly     : std_logic;
+   signal ula_bank_sched         : std_logic;
+   signal ula_bank_do            : std_logic_vector(7 downto 0);
    signal lores_vram_req         : std_logic;
    signal lores_vram_ack_dly     : std_logic;
    signal vram_bank5_a0          : std_logic_vector(13 downto 0);
-   signal vram_bank_a1          : std_logic_vector(13 downto 0);
+   signal vram_bank_a1           : std_logic_vector(13 downto 0);
    signal lores_vram_ack         : std_logic;
+   signal bram_debug_b5_ack      : std_logic;
+   signal bram_debug_b5_ack_dly  : std_logic := '0';
    
    signal cpu_bank7_do           : std_logic_vector(7 downto 0);
+signal cpu_bank7_do_dly    : std_logic_vector(7 downto 0);  -- **** unexplainable as of now
    signal vram_bank7_do          : std_logic_vector(7 downto 0);
+   signal vram_b7_we             : std_logic;
+   signal vram_b7_di             : std_logic_vector(7 downto 0);
+   signal vram_bank7_a0          : std_logic_vector(12 downto 0);
+   signal vram_bank7_do0         : std_logic_vector(7 downto 0);
+   signal cpu_bank7_req          : std_logic;
+   signal cpu_bank7_req_dly      : std_logic := '0';
+   signal cpu_bank7_sched        : std_logic;
+   signal cpu_bank7_sched_dly    : std_logic := '0';
+   signal bram_debug_b7_ack      : std_logic;
+   signal bram_debug_b7_ack_dly  : std_logic := '0';
    
    signal video_timing_change    : std_logic;
    signal video_timing_change_d  : std_logic := '0';
@@ -1692,6 +1821,24 @@ end generate;
    o_RAM_B_ADDR <= layer2_addr_eff;
    o_RAM_B_REQ_T <= layer2_req_t;
 
+gen_sram_port_c_0: if (g_option(13) = '0') generate
+
+   o_RAM_C_ADDR <= (others => '0');
+   o_RAM_C_REQ <= '0';
+   o_RAM_C_RD_n <= '0';
+   o_RAM_C_DO <= (others => '0');
+
+end generate;
+
+gen_sram_port_c_1: if (g_option(13) = '1') generate
+
+   o_RAM_C_ADDR <= sram_c_addr;
+   o_RAM_C_REQ <= sram_c_req;
+   o_RAM_C_RD_n <= sram_c_rd_n;
+   o_RAM_C_DO <= sram_c_do;
+
+end generate;
+
    o_BUS_ADDR <= cpu_a;
    o_BUS_DO <= cpu_do;
 
@@ -1738,7 +1885,7 @@ end generate;
    o_ESP_GPIO_0 <= nr_a9_esp_gpio0;
    o_ESP_GPIO_0_EN <= nr_a8_esp_gpio0_en;
 
-   o_GPIO <= pi_gpio_o(27 downto 22) & gpio_21 & gpio_20 & gpio_19 & gpio_18 & gpio_17 & gpio_16 & gpio_15 & gpio_14 & pi_gpio_o(13 downto 12) & gpio_11 & gpio_10 & pi_gpio_o(9) & gpio_08 & gpio_07 & pi_gpio_o(6 downto 4) & gpio_03 & gpio_02 & pi_gpio_o(1 downto 0);
+   o_GPIO <= pi_gpio_o(27 downto 22) & gpio_21 & gpio_20 & gpio_19 & gpio_18 & gpio_17 & gpio_16 & gpio_15 & gpio_14 & pi_gpio_o(13 downto 12) & gpio_11 & gpio_10 & gpio_09 & gpio_08 & gpio_07 & pi_gpio_o(6 downto 4) & gpio_03 & gpio_02 & pi_gpio_o(1 downto 0);
    o_GPIO_EN <= pi_gpio_en(27 downto 22) & gpio_21_en & gpio_20_en & gpio_19_en & gpio_18_en & gpio_17_en & gpio_16_en & gpio_15_en & gpio_14_en & pi_gpio_en(13 downto 12) & gpio_11_en & gpio_10_en & gpio_09_en & gpio_08_en & gpio_07_en & pi_gpio_en(6 downto 4) & gpio_03_en & gpio_02_en & pi_gpio_en(1 downto 0);
 
    o_XDNA_LOAD <= xdna_load;
@@ -1779,6 +1926,13 @@ end generate;
    -- Z80 & DMA -----------------------------------------------
    ------------------------------------------------------------
 
+   cpu_debug_pause <= not pi_debug_busrq_n;   -- NextTang
+   o_CPU_NEXT_PC <= cpu_debug_next_pc;   -- NextTang
+   o_CPU_STOPPED <= not z80_busak_n;      -- NextTang
+   o_MMU <= MMU7 & MMU6 & MMU5 & MMU4 & MMU3 & MMU2 & MMU1 & MMU0;   -- NextTang
+
+gen_cpu_00: if (g_option(1 downto 0) = "00") generate
+
    cpu_mod: entity work.T80na
    generic map (
       Mode        => 0
@@ -1808,6 +1962,155 @@ end generate;
       Z80N_data_o       => Z80N_data_s,
       Z80N_command_o    => Z80N_command_s
    );
+
+   cpu_debug_rd_dat <= (others => '0');
+   cpu_debug_lastM <= '1';
+
+end generate;
+
+gen_cpu_01: if (g_option(1 downto 0) = "01") generate
+
+   cpu_mod: entity work.T80na_Complete
+   generic map (
+      Mode        => 0
+   )
+   port map (
+      RESET_n     => not reset,     -- in
+      CLK_n       => i_CLK_CPU,     -- in
+      CEN_R       => i_CPU_CEN_R,   -- NextTang
+      CEN_F       => i_CPU_CEN_F,   -- NextTang
+      WAIT_n      => z80_wait_n,    -- in
+      INT_n       => z80_int_n,     -- in
+      NMI_n       => z80_nmi_n,     -- in (detection is on rising edge of cpu clock)
+      BUSRQ_n     => z80_busrq_n,   -- in
+      M1_n        => z80_m1_n,      -- out
+      MREQ_n      => z80_mreq_n,    -- out
+      IORQ_n      => z80_iorq_n,    -- out
+      RD_n        => z80_rd_n,      -- out
+      WR_n        => z80_wr_n,      -- out
+      RFSH_n      => z80_rfsh_n,    -- out
+      HALT_n      => z80_halt_n,    -- out
+      BUSAK_n     => z80_busak_n,   -- out
+      A           => z80_a,         -- out
+      D_i         => cpu_di,        -- in
+      D_o         => z80_do,        -- out
+      -- extended functions
+      Z80N_dout_o       => Z80N_dout_s,
+      Z80N_data_o       => Z80N_data_s,
+      Z80N_command_o    => Z80N_command_s
+   );
+
+   cpu_debug_rd_dat <= (others => '0');
+   cpu_debug_lastM <= '1';
+
+end generate;
+
+gen_cpu_10: if (g_option(1 downto 0) = "10") generate
+
+   cpu_mod: entity work.T80na_Debug
+   generic map (
+      Mode        => 0
+   )
+   port map (
+      RESET_n     => not reset,     -- in
+      CLK_n       => i_CLK_CPU,     -- in
+      CEN_R       => i_CPU_CEN_R,   -- NextTang
+      CEN_F       => i_CPU_CEN_F,   -- NextTang
+      WAIT_n      => z80_wait_n,    -- in
+      INT_n       => z80_int_n,     -- in
+      NMI_n       => z80_nmi_n,     -- in (detection is on rising edge of cpu clock)
+      BUSRQ_n     => z80_busrq_n,   -- in
+      M1_n        => z80_m1_n,      -- out
+      MREQ_n      => z80_mreq_n,    -- out
+      IORQ_n      => z80_iorq_n,    -- out
+      RD_n        => z80_rd_n,      -- out
+      WR_n        => z80_wr_n,      -- out
+      RFSH_n      => z80_rfsh_n,    -- out
+      HALT_n      => z80_halt_n,    -- out
+      BUSAK_n     => z80_busak_n,   -- out
+      A           => z80_a,         -- out
+      D_i         => cpu_di,        -- in
+      D_o         => z80_do,        -- out
+      -- extended functions
+      Z80N_dout_o       => Z80N_dout_s,
+      Z80N_data_o       => Z80N_data_s,
+      Z80N_command_o    => Z80N_command_s,
+      -- debug interface
+      i_debug_reg       => cpu_debug_reg,
+      i_debug_wr        => cpu_debug_wr,
+      i_debug_dat       => cpu_debug_wr_dat,
+      o_debug_dat       => cpu_debug_rd_dat,
+      o_debug_lastM     => cpu_debug_lastM,
+      i_debug_pause     => cpu_debug_pause,   -- NextTang
+      o_debug_next_pc   => cpu_debug_next_pc,   -- NextTang
+      i_debug_break     => i_CPU_BREAK   -- NextTang
+   );
+
+end generate;
+
+gen_cpu_11: if (g_option(1 downto 0) = "11") generate
+
+   cpu_mod: entity work.T80na_Complete_Debug
+   generic map (
+      Mode        => 0
+   )
+   port map (
+      RESET_n     => not reset,     -- in
+      CLK_n       => i_CLK_CPU,     -- in
+      CEN_R       => i_CPU_CEN_R,   -- NextTang
+      CEN_F       => i_CPU_CEN_F,   -- NextTang
+      WAIT_n      => z80_wait_n,    -- in
+      INT_n       => z80_int_n,     -- in
+      NMI_n       => z80_nmi_n,     -- in (detection is on rising edge of cpu clock)
+      BUSRQ_n     => z80_busrq_n,   -- in
+      M1_n        => z80_m1_n,      -- out
+      MREQ_n      => z80_mreq_n,    -- out
+      IORQ_n      => z80_iorq_n,    -- out
+      RD_n        => z80_rd_n,      -- out
+      WR_n        => z80_wr_n,      -- out
+      RFSH_n      => z80_rfsh_n,    -- out
+      HALT_n      => z80_halt_n,    -- out
+      BUSAK_n     => z80_busak_n,   -- out
+      A           => z80_a,         -- out
+      D_i         => cpu_di,        -- in
+      D_o         => z80_do,        -- out
+      -- extended functions
+      Z80N_dout_o       => Z80N_dout_s,
+      Z80N_data_o       => Z80N_data_s,
+      Z80N_command_o    => Z80N_command_s,
+      -- debug interface
+      i_debug_reg       => cpu_debug_reg,
+      i_debug_wr        => cpu_debug_wr,
+      i_debug_dat       => cpu_debug_wr_dat,
+      o_debug_dat       => cpu_debug_rd_dat,
+      o_debug_lastM     => cpu_debug_lastM,
+      i_debug_pause     => cpu_debug_pause,   -- NextTang
+      o_debug_next_pc   => cpu_debug_next_pc,   -- NextTang
+      i_debug_break     => i_CPU_BREAK   -- NextTang
+   );
+
+end generate;
+
+gen_dma_ab: if (g_machine_id = X"FA") generate
+
+   dma_busrq_n <= '1';
+
+   dma_a <= (others => '0');
+   dma_do <= (others => '0');
+   dma_rd_n <= '1';
+   dma_wr_n <= '1';
+   dma_mreq_n <= '1';
+   dma_iorq_n <= '1';
+
+   port_dma_dat_0 <= (others => '0');
+   port_dma_dat <= port_dma_dat_0;
+
+   dma_mode <= '0';
+
+end generate;
+
+gen_dma: if (g_machine_id /= X"FA") generate
+
    dma_mod: entity work.z80dma
    port map (
       reset_i        => reset,
@@ -1827,7 +2130,7 @@ end generate;
       bus_busreq_n_i => '1',            -- busreq in daisy chain (i_BUS_BUSREQ_n)
       cpu_busreq_n_o => dma_busrq_n,    -- busreq out
          
-      cpu_bai_n      => z80_busak_n,    -- busak in daisy chain
+      cpu_bai_n      => dma_busak_n,    -- busak in daisy chain
       cpu_bao_n      => open,           -- busak out daisy chain
 
       dma_a_o        => dma_a,
@@ -1858,8 +2161,43 @@ end generate;
          end if;
       end if;
    end process;
-   
+
+end generate;
+
+   -- cpu bus arbiter
    -- no dma controller on the expansion bus at this time
+
+gen_arbiter_dma_0: if g_option(9) = '0' generate
+
+   z80_busrq_n <= dma_busrq_n;
+   dma_busak_n <= z80_busak_n;
+
+end generate;
+
+gen_arbiter_dma_1: if g_option(9) = '1' generate
+   
+   arbiter_dma_mod: entity work.arbiter_dma
+   port map
+   (
+      i_CLK             => i_CLK_28,
+      i_reset           => reset,
+      
+      i_busrq_pi_n      => pi_debug_busrq_n,
+      i_busrq_dma_n     => dma_busrq_n,
+      
+      i_cpu_lastM       => cpu_debug_lastM,
+      
+      o_busak_pi_n      => pi_debug_busak_n,
+      o_busak_dma_n     => dma_busak_n,
+      
+      o_cpu_busrq_n     => z80_busrq_n,
+      i_cpu_busak_n     => z80_busak_n
+   );
+
+end generate;
+
+   -- dma_holds_bus signal places dma control signals on z80 bus
+   -- (also employed as neutral state when the dma has not been granted bus)
 
 -- dma_holds_bus <= '1' when dma_busrq_n = '0' and z80_busak_n = '0' else '0';
    dma_holds_bus <= '1' when z80_busak_n = '0' else '0';
@@ -1879,7 +2217,6 @@ end generate;
    z80_wait_n <= '0' when (ula_wait_n = '0') or (ulap_wait_n = '0') or (sram_wait_n = '0') or (i_BUS_WAIT_n = '0' and expbus_eff_en = '1') or (i_CPU_WAIT = '1') else '1';   -- NextTang: i_CPU_WAIT from MiSTer
    z80_int_n <= ((pulse_int_n and im2_int_n) or not expbus_disable_int) and (i_BUS_INT_n or expbus_disable_int);
    z80_nmi_n <= nmi_generate_n;
-   z80_busrq_n <= dma_busrq_n;
    
    dma_wait_n <= z80_wait_n and spi_wait_n;
 
@@ -1893,7 +2230,7 @@ end generate;
          
       elsif cpu_mreq_n = '0' and cpu_rfsh_n = '1' then
       
-         if cpu_a(15 downto 14) = "00" and bootrom_en = '1' then
+         if cpu_a(15 downto 13) = "000" and bootrom_en = '1' then
             cpu_di <= bootrom_do;
          elsif sram_romcs_en = '1' and sram_pre_romcs_replace = '0' then
             cpu_di <= i_BUS_DI;
@@ -1985,8 +2322,8 @@ end generate;
       (uart0_rx_near_full or (uart0_rx_avail and not nr_c6_int_en_2_210(1))) & 
       line_int_pulse;
 
-   im2_int_unq <= "00" & (nr_20_we and nr_wr_dat(6)) & "0000" & 
-      ((nr_20_we & nr_20_we & nr_20_we & nr_20_we) and nr_wr_dat(3 downto 0)) & "00" & (nr_20_we and nr_wr_dat(7));
+   im2_int_unq <= "00" & (nr_20_we and nr_wr_dat(6)) & "0000" & ((nr_20_we and nr_wr_dat(3)) or pi_debug_command_int) &
+      ((nr_20_we & nr_20_we & nr_20_we) and nr_wr_dat(2 downto 0)) & "00" & (nr_20_we and nr_wr_dat(7));
    
    im2_int_en <= nr_c6_int_en_2_654(2) & nr_c6_int_en_2_210(2) & ula_int_en(0) & ctc_int_en & 
       (nr_c6_int_en_2_654(1) or nr_c6_int_en_2_654(0)) & (nr_c6_int_en_2_210(1) or nr_c6_int_en_2_210(0)) & ula_int_en(1);
@@ -2329,7 +2666,10 @@ end generate;
    pi_uart_rxtx <= nr_a0_pi_peripheral_en(5);
    pi_uart_en <= nr_a0_pi_peripheral_en(4);
    pi_i2c1_en <= nr_a0_pi_peripheral_en(3);
-   pi_spi0_en <= nr_a0_pi_peripheral_en(0);
+   -- NextTang: i_PI_SPI_SLAVE_FORCE opens the Pi debug slave to an FPGA-side
+   -- debugger without the Next's software setting NextREG 0xA0 bit 1.
+   pi_spi0_slave_en <= nr_a0_pi_peripheral_en(1) or i_PI_SPI_SLAVE_FORCE;
+   pi_spi0_master_en <= nr_a0_pi_peripheral_en(0);
    
    pi_i2s_en <= nr_a2_pi_i2s_ctl(7) or nr_a2_pi_i2s_ctl(6);
    pi_i2s_enL <= nr_a2_pi_i2s_ctl(7);
@@ -2341,21 +2681,27 @@ end generate;
    pi_i2s_ear <= nr_a2_pi_i2s_ctl(0);
 
    -- spi0 7,8,9,10,11
-   
-   gpio_08_en <= '1' when pi_spi0_en = '1' else pi_gpio_en(8);
-   gpio_08 <= spi_ss_rpi0_n when pi_spi0_en = '1' else pi_gpio_o(8);
-   
-   gpio_07_en <= '1' when pi_spi0_en = '1' else pi_gpio_en(7);
-   gpio_07 <= spi_ss_rpi1_n when pi_spi0_en = '1' else pi_gpio_o(7);
-   
-   gpio_09_en <= '0' when pi_spi0_en = '1' else pi_gpio_en(9);
-   pi_spi0_miso <= i_GPIO(9) when pi_spi0_en = '1' else '0';
-   
-   gpio_10_en <= '1' when pi_spi0_en = '1' else pi_gpio_en(10);
-   gpio_10 <= spi_mosi when pi_spi0_en = '1' else pi_gpio_o(10);
-   
-   gpio_11_en <= '1' when pi_spi0_en = '1' else pi_gpio_en(11);
-   gpio_11 <= spi_sck when pi_spi0_en = '1' else pi_gpio_o(11);
+   -- master mode (pi_spi0_master_en): FPGA drives SCLK, MOSI, CE0, CE1; reads MISO
+   -- slave mode (pi_spi0_slave_en): FPGA reads SCLK, MOSI, CE0; drives MISO
+
+   gpio_08_en <= '0' when pi_spi0_slave_en = '1' else '1' when pi_spi0_master_en = '1' else pi_gpio_en(8);
+   gpio_08 <= spi_ss_rpi0_n when pi_spi0_master_en = '1' else pi_gpio_o(8);
+   pi_spi0_slave_ce_n <= i_GPIO(8) when pi_spi0_slave_en = '1' else '1';
+
+   gpio_07_en <= '0' when pi_spi0_slave_en = '1' else '1' when pi_spi0_master_en = '1' else pi_gpio_en(7);
+   gpio_07 <= spi_ss_rpi1_n when pi_spi0_master_en = '1' else pi_gpio_o(7);
+
+   gpio_09_en <= '1' when pi_spi0_slave_en = '1' else '0' when pi_spi0_master_en = '1' else pi_gpio_en(9);
+   gpio_09 <= pi_spi0_slave_miso when pi_spi0_slave_en = '1' else pi_gpio_o(9);
+   pi_spi0_master_miso <= i_GPIO(9) when pi_spi0_slave_en = '0' and pi_spi0_master_en = '1' else '0';
+
+   gpio_10_en <= '0' when pi_spi0_slave_en = '1' else '1' when pi_spi0_master_en = '1' else pi_gpio_en(10);
+   gpio_10 <= spi_mosi when pi_spi0_master_en = '1' else pi_gpio_o(10);
+   pi_spi0_slave_mosi <= i_GPIO(10);
+
+   gpio_11_en <= '0' when pi_spi0_slave_en = '1' else '1' when pi_spi0_master_en = '1' else pi_gpio_en(11);
+   gpio_11 <= spi_sck when pi_spi0_master_en = '1' else pi_gpio_o(11);
+   pi_spi0_slave_sclk <= i_GPIO(11);
 
    -- i2c1 2,3
    
@@ -3203,6 +3549,7 @@ end generate;
    
    cpu_bank5_rd <= sram_memcycle and sram_bank5 and not cpu_rd_n;
    cpu_bank5_we <= sram_memcycle and sram_bank5 and not cpu_wr_n;
+   cpu_bank7_rd <= sram_memcycle and sram_bank7 and not cpu_rd_n;   
    cpu_bank7_we <= sram_memcycle and sram_bank7 and not cpu_wr_n;   
 
    sram_addr <= sram_A21_A13 & cpu_a(12 downto 0);
@@ -3314,9 +3661,9 @@ end generate;
    
    -- note: do not AND together miso sources
    
-   spi_miso <= i_SPI_FLASH_MISO when spi_ss_flash_n = '0' else
-               pi_spi0_miso     when spi_ss_rpi1_n = '0' or spi_ss_rpi0_n = '0' else
-               i_SPI_SD_MISO    when spi_ss_sd1_n = '0' or spi_ss_sd0_n = '0' else '1';
+   spi_miso <= i_SPI_FLASH_MISO    when spi_ss_flash_n = '0' else
+               pi_spi0_master_miso when spi_ss_rpi1_n = '0' or spi_ss_rpi0_n = '0' else
+               i_SPI_SD_MISO       when spi_ss_sd1_n = '0' or spi_ss_sd0_n = '0' else '1';
 
    -- NextTang: the MiSTer-era SPI master, with clock enables; the official
    -- core's rewritten one (for 3.02) is not adopted yet.
@@ -3373,7 +3720,204 @@ end generate;
    spi_ss_rpi0_n <= port_e7_reg(2);
    spi_ss_sd1_n <= port_e7_reg(1);
    spi_ss_sd0_n <= port_e7_reg(0);
+
+gen_pi_spi_slave_0: if (g_option(4) = '0') generate
+
+   pi_spi0_ce_n <= '1';
+   pi_spi0_slave_miso <= '0';
+   pi_spi0_rx_byte <= (others => '0');
+   pi_spi0_rx_valid <= '0';
+   pi_spi0_tx_ack <= '0';
    
+   pi_spi0_tx_byte <= (others => '0');
+   pi_debug_busrq_n <= '1';
+   cpu_debug_wr <= '0';
+   nr_debug_wr <= '0';
+   bram_debug_req <= '0';
+   bram_debug_wr <= '0';
+   sram_c_req <= '0';
+   sram_c_rd_n <= '0';
+   pi_debug_command <= (others => '0');
+   pi_debug_a2 <= (others => '0');
+   pi_debug_a1 <= (others => '0');
+   pi_debug_a0 <= (others => '0');
+   pi_debug_do <= (others => '0');
+
+end generate;
+
+gen_pi_spi_slave_1: if (g_option(4) = '1') generate
+
+   --
+   -- SPI SLAVE (pi debug controls)
+   --
+
+   spi_slave_mod: entity work.spi_slave
+   port map
+   (
+      i_CLK          => i_CLK_28,
+      i_reset        => reset,
+
+      i_spi_ce_n     => pi_spi0_slave_ce_n,   -- chip enable, active low
+      o_spi_ce_n     => pi_spi0_ce_n,
+      i_spi_sclk     => pi_spi0_slave_sclk,
+      i_spi_mosi     => pi_spi0_slave_mosi,
+      o_spi_miso     => pi_spi0_slave_miso,
+
+      o_rx_byte      => pi_spi0_rx_byte,      -- received byte available for min eight spi cycles
+      o_rx_valid     => pi_spi0_rx_valid,     -- pulse: new byte available
+      
+      i_tx_byte      => pi_spi0_tx_byte,      -- byte to transmit
+      i_tx_load      => '1',                  -- load tx byte into shift register
+      o_tx_loaded    => pi_spi0_tx_ack        -- pulse: new byte loaded, will only load once at start of byte
+   );
+
+   -- pi_debug_control for full capabilities
+   pi_debug_mod: entity work.pi_debug_control_param
+   generic map
+   (
+      g_capabilities => g_option(12 downto 5)
+   )
+   port map
+   (
+      i_CLK          => i_CLK_28,
+      i_reset        => reset,
+
+      -- spi slave connection
+      
+      i_spi_active_n => pi_spi0_ce_n,         -- acts as reset if slave indicates inactive, does not affect busrq status
+      i_spi_rx_valid => pi_spi0_rx_valid,     -- pulse: new byte available
+      i_spi_rx_di    => pi_spi0_rx_byte,      -- received byte available for min eight spi cycles
+      o_spi_tx_do    => pi_spi0_tx_byte,      -- tx byte
+      i_spi_tx_ack   => pi_spi0_tx_ack,       -- pulse: byte loaded, one load at start of transmission
+      
+      -- cpu pause
+      
+      o_cpu_busrq_n  => pi_debug_busrq_n,
+      i_cpu_busak_n  => pi_debug_busak_n,
+
+      -- cpu connection (requires cpu pause)
+      
+      o_cpu_wr       => cpu_debug_wr,
+      i_cpu_di       => cpu_debug_rd_dat,
+      
+      -- nextreg connection
+
+      i_nextreg_rd_ack => nr_debug_rd_ack,
+      o_nextreg_wr     => nr_debug_wr,
+      i_nextreg_wr_ack => nr_debug_wr_ack,
+      i_nextreg_di     => nr_debug_rd_dat,
+      
+      -- bram connection
+
+      o_bram_req     => bram_debug_req,
+      o_bram_wr      => bram_debug_wr,
+      i_bram_ack     => bram_debug_ack,
+      i_bram_di      => bram_debug_rd_dat,
+
+      -- sram port c connection
+      
+      o_sram_c_req   => sram_c_req,
+      o_sram_c_rd_n  => sram_c_rd_n,
+      i_sram_c_ack   => i_RAM_C_ACK,
+      i_sram_c_di    => i_RAM_C_DI,
+
+      -- status & command
+
+      i_hotkeys      => tzx_hotkeys,          -- pulsed bits via hotkeys (4:0 = QWERT for tzx)
+      i_dma_busak_n  => dma_busak_n,
+      i_cpu_halt_n   => z80_halt_n,
+      o_command      => pi_debug_command,     -- pulsed bits (gen ctc-3 int, gen mf nmi, gen divmmc nmi, hard reset, soft reset)
+
+      -- address and data i/o
+      
+      o_addr_2       => pi_debug_a2,          -- address bus (20 downto 16)
+      o_addr_1       => pi_debug_a1,          -- address bus (15 downto 8)
+      o_addr_0       => pi_debug_a0,          -- address bus (7 downto 0)
+      o_data         => pi_debug_do           -- data bus (7 downto 0)
+   );
+
+end generate;
+
+gen_pi_spi_slave_system_0: if g_option(5) = '0' generate
+
+   pi_debug_command_int <= '0';
+   pi_debug_command_mf_nmi <= '0';
+   pi_debug_command_divmmc_nmi <= '0';
+   pi_debug_command_hard_reset <= '0';
+   pi_debug_command_soft_reset <= '0';
+
+end generate;
+
+gen_pi_spi_slave_system_1: if g_option(5) = '1' generate
+
+   pi_debug_command_int <= pi_debug_command(4);
+   pi_debug_command_mf_nmi <= pi_debug_command(3);
+   pi_debug_command_divmmc_nmi <= pi_debug_command(2);
+   pi_debug_command_hard_reset <= pi_debug_command(1);
+   pi_debug_command_soft_reset <= pi_debug_command(0);
+
+end generate;
+
+gen_pi_spi_slave_cpu_0: if g_option(11) = '0' generate
+
+   cpu_debug_reg <= (others => '0');
+   cpu_debug_wr_dat <= (others => '0');
+
+end generate;
+
+gen_pi_spi_slave_cpu_1: if g_option(11) = '1' generate
+
+   cpu_debug_reg <= pi_debug_a0(4 downto 0);
+   cpu_debug_wr_dat <= pi_debug_do;
+
+end generate;
+
+gen_pi_slave_nr_0: if g_option(7 downto 6) = "00" generate
+
+   nr_debug_reg <= (others => '0');
+   nr_debug_wr_dat <= (others => '0');
+
+end generate;
+
+gen_pi_slave_nr_1: if g_option(7 downto 6) /= "00" generate
+
+   nr_debug_reg <= pi_debug_a0;
+   nr_debug_wr_dat <= pi_debug_do;
+
+end generate;
+
+gen_pi_slave_bram_0: if g_option(10) = '0' generate
+
+   bram_debug_addr <= (others => '0');
+   bram_debug_b5_req <= '0';
+   bram_debug_b7_req <= '0';
+   bram_debug_wr_dat <= (others => '0');
+
+end generate;
+
+gen_pi_slave_bram_1: if g_option(10) = '1' generate
+
+   bram_debug_addr <= pi_debug_a1(5 downto 0) & pi_debug_a0;
+   bram_debug_b5_req <= bram_debug_req and not pi_debug_a1(7);
+   bram_debug_b7_req <= bram_debug_req and pi_debug_a1(7);
+   bram_debug_wr_dat <= pi_debug_do;
+
+end generate;
+
+gen_pi_slave_sram_0: if g_option(8) = '0' generate
+
+   sram_c_addr <= (others => '0');
+   sram_c_do <= (others => '0');
+
+end generate;
+
+gen_pi_slave_sram_1: if g_option(8) = '1' generate
+
+   sram_c_addr <= pi_debug_a2 & pi_debug_a1 & pi_debug_a0;
+   sram_c_do <= pi_debug_do;
+
+end generate;
+
    --
    -- UART x 2 (wifi, pi)
    --
@@ -4178,7 +4722,21 @@ end generate;
          end if;
       end if;
    end process;
-   
+
+gen_divmmc_ab: if (g_machine_id = X"FA") generate
+
+   divmmc_rom_en <= '0';
+   divmmc_ram_en <= '0';
+   divmmc_rdonly <= '0';
+   divmmc_bank <= (others => '0');
+      
+   divmmc_nmi_hold <= '0';
+   divmmc_automap_held <= '0';
+
+end generate;
+
+gen_divmmc: if (g_machine_id /= X"FA") generate
+
    divmmc_mod: entity work.divmmc
    port map
    (
@@ -4214,6 +4772,8 @@ end generate;
       o_disable_nmi        => divmmc_nmi_hold,
       o_automap_held       => divmmc_automap_held
    );
+
+end generate;
    
    process (i_CLK_28)
    begin
@@ -4323,6 +4883,20 @@ end generate;
    -- MULTIFACE
    --
 
+gen_multiface_ab: if (g_machine_id = X"FA") generate
+
+   mf_nmi_hold <= '0';
+   mf_mem_en <= '0';
+   mf_port_en <= '0';
+   
+   mf_is_active <= '0';
+   
+   mf_port_dat <= port_7ffd_reg(3) & "1111111";
+
+end generate;
+
+gen_multiface: if (g_machine_id /= X"FA") generate
+
    multiface_mod: entity work.multiface
    port map
    (
@@ -4369,7 +4943,9 @@ end generate;
          end if;
       end if;
    end process;
-   
+
+end generate;
+
    --
    -- SPRITES
    --
@@ -4822,9 +5398,23 @@ end generate;
       end if;
    end process;
 
+gen_debug_nrwr_0: if (g_option(7) = '0') generate
+
    nr_wr_en <= copper_req or cpu_req;
    nr_wr_reg <= copper_nr_reg when copper_req = '1' else cpu_nr_reg;
    nr_wr_dat <= copper_nr_dat when copper_req = '1' else cpu_nr_dat;
+
+end generate;
+
+gen_debug_nrwr_1: if (g_option(7) = '1') generate
+
+   nr_wr_en <= copper_req or cpu_req or nr_debug_wr;
+   nr_wr_reg <= copper_nr_reg when copper_req = '1' else cpu_nr_reg when cpu_req = '1' else nr_debug_reg;
+   nr_wr_dat <= copper_nr_dat when copper_req = '1' else cpu_nr_dat when cpu_req = '1' else nr_debug_wr_dat;
+   
+   nr_debug_wr_ack <= '1' when copper_req = '0' and cpu_req = '0' else '0';
+
+end generate;
 
    -- (shortcut for nmi generation via nextreg 0x02 through i/o traps section)
 
@@ -5126,8 +5716,9 @@ end generate;
             nr_91_pi_gpio_o_en <= (others => '0');
             nr_92_pi_gpio_o_en <= (others => '0');
             nr_93_pi_gpio_o_en <= (others => '0');
-         
-            nr_a0_pi_peripheral_en <= (others => '0');
+
+            nr_a0_pi_peripheral_en(7 downto 2) <= (others => '0');
+            nr_a0_pi_peripheral_en(0) <= '0';
             nr_a2_pi_i2s_ctl <= (others => '0');
 --          nr_a3_pi_i2s_clkdiv <= X"0B";  -- ~44.1kHz
 
@@ -5300,6 +5891,8 @@ end generate;
                when X"0A" =>
                   if nr_03_config_mode = '1' then
                      nr_0a_mf_type <= nr_wr_dat(7 downto 6);
+                  end if;
+                  if nr_03_config_mode = '1' and nr_wr_dat(2) = '1' then
                      nr_0a_sd_swap <= nr_wr_dat(5);
                   end if;
                   nr_0a_divmmc_automap_en <= nr_wr_dat(4);
@@ -5987,6 +6580,8 @@ end generate;
    -- Read Registry
    --
 
+gen_debug_nrrd_0: if (g_option(6) = '0') generate
+
    process (i_CLK_CPU)
    begin
       if falling_edge(i_CLK_CPU) and i_CPU_CEN_F = '1' then
@@ -5994,11 +6589,34 @@ end generate;
       end if;
    end process;
 
+   nr_register_active <= nr_register;
+
+end generate;
+
+gen_debug_nrrd_1: if (g_option(6) = '1') generate
+
+   nr_rd_arbiter <= port_253b_rd_qq & port_253b_rd;   -- three-bit shift register out of available pieces
+   nr_register_active <= nr_register when nr_rd_arbiter = "001" or nr_rd_arbiter = "101" else nr_debug_reg;
+
+   process (i_CLK_28)
+   begin
+      if falling_edge(i_CLK_28) then
+         if nr_rd_arbiter = "010" or nr_rd_arbiter = "011" then
+            port_253b_dat_0 <= port_253b_dat;
+         end if;
+      end if;
+   end process;
+
+   nr_debug_rd_ack <= '1' when (nr_rd_arbiter /= "001" and nr_rd_arbiter /= "101") else '0';
+   nr_debug_rd_dat <= port_253b_dat;
+   
+end generate;
+
    process (i_CLK_28)
    begin
       if rising_edge(i_CLK_28) then
 
-         case nr_register is
+         case nr_register_active is
       
             when X"00" =>
                port_253b_dat <= std_logic_vector(g_machine_id);
@@ -6305,7 +6923,7 @@ end generate;
                port_253b_dat <= "0000" & i_GPIO(27 downto 24);
 
             when X"A0" =>
-               port_253b_dat <= "00" & nr_a0_pi_peripheral_en(5 downto 3) & "00" & nr_a0_pi_peripheral_en(0);
+               port_253b_dat <= "00" & nr_a0_pi_peripheral_en(5 downto 3) & '0' & (nr_a0_pi_peripheral_en(1) and g_option(4)) & nr_a0_pi_peripheral_en(0);
 
             when X"A2" =>
                port_253b_dat <= nr_a2_pi_i2s_ctl(7 downto 6) & '0' & nr_a2_pi_i2s_ctl(4 downto 2) & '1' & nr_a2_pi_i2s_ctl(0);
@@ -6448,7 +7066,7 @@ end generate;
    begin
       if rising_edge(i_CLK_28) then
          hotkeys_1 <= hotkeys_0;
-         hotkeys_0 <= i_SPKEY_FUNCTION(10 downto 1);
+         hotkeys_0 <= (i_SPKEY_FUNCTION(10) or pi_debug_command_divmmc_nmi) & (i_SPKEY_FUNCTION(9) or pi_debug_command_mf_nmi) & i_SPKEY_FUNCTION(8 downto 5) & (i_SPKEY_FUNCTION(4) or pi_debug_command_soft_reset) & i_SPKEY_FUNCTION(3 downto 2) & (i_SPKEY_FUNCTION(1) or pi_debug_command_hard_reset);
       end if;
    end process;
 
@@ -6465,7 +7083,7 @@ end generate;
       hotkey_scanlines <= hotkeys_0(7) and not hotkeys_1(7);                                      -- F7
       hotkey_cpu_speed <= hotkeys_0(8) and not hotkeys_1(8) and nr_06_hotkey_cpu_speed_en;        -- F8
       hotkey_m1 <= hotkeys_0(9) and not hotkeys_1(9);                                             -- F9
-      hotkey_drive <= hotkeys_0(10) and not hotkeys_1(10) and port_divmmc_io_en;                  -- F10
+      hotkey_drive <= (hotkeys_0(10) and not hotkeys_1(10)) and port_divmmc_io_en;                -- F10
 
    end generate;
    
@@ -6488,7 +7106,29 @@ end generate;
 
    nr_02_soft_reset <= (hotkey_soft_reset and not nr_03_config_mode) or (nr_02_we and nr_wr_dat(0));
    nr_02_hard_reset <= hotkey_hard_reset or (nr_02_we and nr_wr_dat(1));
-   
+
+   -- TZX Hot Keys
+
+gen_tzx_hotkey_0: if g_option(12) = '0' generate
+
+   tzx_hotkeys <= (others => '0');
+
+end generate;
+
+gen_tzx_hotkey_1: if g_option(12) = '1' generate
+
+   process (i_CLK_28)
+   begin
+      if rising_edge(i_CLK_28) then
+         tzx_hotkeys_1 <= tzx_hotkeys_0;
+         tzx_hotkeys_0 <= i_SPKEY_FUNCTION_EXT;
+      end if;
+   end process;
+
+   tzx_hotkeys <= tzx_hotkeys_0 and not tzx_hotkeys_1;
+
+end generate;
+
    ------------------------------------------------------------
    -- AUDIO ---------------------------------------------------
    ------------------------------------------------------------
@@ -6675,7 +7315,7 @@ end generate;
    --
    
    -- ULA BANK 5 (16k)
-   -- the cpu/lores share access through one port and the ula/tilemap share the other
+   -- the cpu/lores/pi share access through one port and the ula/tilemap share the other
    -- ula contention is implemented by holding the cpu clock high in clock generation in the top level module
 
    bank5_ram: entity work.dpram2
@@ -6686,9 +7326,9 @@ end generate;
    port map (
       -- CPU port
       clk_a_i  => i_CLK_28,
-      we_i     => cpu_bank5_sched and cpu_bank5_we,
+      we_i     => vram_b5_we,
       addr_a_i => vram_bank5_a0,
-      data_a_i => cpu_do,
+      data_a_i => vram_b5_di,
       data_a_o => vram_bank5_do0,
       -- ULA port
       clk_b_i  => i_CLK_28_n,
@@ -6697,9 +7337,27 @@ end generate;
    );
    
    -- Arbitrate cpu,lores on first port
-   
+
+gen_bram_debug_b5_0: if (g_option(10) = '0') generate
+
    cpu_bank5_req <= cpu_bank5_rd or cpu_bank5_we;
    
+   vram_b5_we <= cpu_bank5_sched and cpu_bank5_we;
+   vram_b5_di <= cpu_do;
+   vram_bank5_a0 <= (sram_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr;
+
+end generate;
+
+gen_bram_debug_b5_1: if (g_option(10) = '1') generate
+
+   cpu_bank5_req <= cpu_bank5_rd or cpu_bank5_we;
+   
+   vram_b5_we <= (cpu_bank5_sched and cpu_bank5_we) or (bram_debug_b5_ack and bram_debug_wr);
+   vram_b5_di <= cpu_do when cpu_bank5_sched = '1' else bram_debug_wr_dat;
+   vram_bank5_a0 <= (sram_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr when lores_vram_ack = '1' else bram_debug_addr;
+   
+end generate;
+
    process (i_CLK_28)
    begin
       if rising_edge(i_CLK_28) then
@@ -6746,9 +7404,21 @@ end generate;
       end if;
    end process;
    
-   lores_vram_ack <= '1' when cpu_bank5_sched = '0' and lores_vram_req = '1' else '0'; 
-   vram_bank5_a0 <= (sram_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr;
+   lores_vram_ack <= '1' when cpu_bank5_sched = '0' and lores_vram_req = '1' else '0';
+
+gen_bram_debug_b5_11: if (g_option(10) = '1') generate
+
+   bram_debug_b5_ack <= '1' when bram_debug_b5_req = '1' and bram_debug_b5_ack_dly = '0' and cpu_bank5_sched = '0' and lores_vram_req = '0' else '0';
    
+   process (i_CLK_28)
+   begin
+      if rising_edge(i_CLK_28) then
+         bram_debug_b5_ack_dly <= bram_debug_b5_ack;
+      end if;
+   end process;
+
+end generate;
+
    -- Arbitrate ula,tilemap on second port in both banks 5 and 7
    
    ula_bank_req <= ula_vram_rd;
@@ -6783,7 +7453,7 @@ end generate;
    tm_vram_ack <= '1' when ula_bank_sched = '0' and tm_vram_rd = '1' else '0';
    
    -- ULA BANK 7 (8k only due to limited bram resources)
-   -- cpu has access through one port and the ula/tilemap through the other.
+   -- cpu/pi share access through one port and the ula/tilemap through the other.
    -- A consequence of only having the first 8k here is that the timex video modes cannot be placed in bank 7.
    
    bank7_ram: entity work.dpram2
@@ -6794,15 +7464,81 @@ end generate;
    port map (
       -- CPU port
       clk_a_i  => i_CLK_28,
-      we_i     => cpu_bank7_we,
-      addr_a_i => cpu_a(12 downto 0),
-      data_a_i => cpu_do,
-      data_a_o => cpu_bank7_do,
+      we_i     => vram_b7_we,
+      addr_a_i => vram_bank7_a0,
+      data_a_i => vram_b7_di,
+      data_a_o => vram_bank7_do0,
       -- ULA port
       clk_b_i  => i_CLK_28_n,
       addr_b_i => vram_bank_a1(12 downto 0),
       data_b_o => vram_bank7_do
    );
+
+gen_bram_debug_b7_0: if (g_option(10) = '0') generate
+
+   vram_b7_we <= cpu_bank7_we;
+   vram_bank7_a0 <= cpu_a(12 downto 0);
+   vram_b7_di <= cpu_do;
+   cpu_bank7_do <= vram_bank7_do0;
+
+   bram_debug_rd_dat <= (others => '0');
+   bram_debug_ack <= '1';
+
+end generate;
+
+gen_bram_debug_b7_1: if (g_option(10) = '1') generate
+
+   cpu_bank7_req <= cpu_bank7_rd or cpu_bank7_we;
+   
+   vram_b7_we <= (cpu_bank7_sched and cpu_bank7_we) or (bram_debug_b7_ack and bram_debug_wr);
+   vram_bank7_a0 <= cpu_a(12 downto 0) when cpu_bank7_sched = '1' else bram_debug_addr(12 downto 0);
+   vram_b7_di <= cpu_do when cpu_bank7_sched = '1' else bram_debug_wr_dat;
+
+   process (i_CLK_28)
+   begin
+      if rising_edge(i_CLK_28) then
+         cpu_bank7_req_dly <= cpu_bank7_req;
+         cpu_bank7_sched_dly <= cpu_bank7_sched;
+      end if;
+   end process;
+   
+   cpu_bank7_sched <= '1' when cpu_bank7_req_dly = '0' and cpu_bank7_req = '1' else '0';
+   
+   process (i_CLK_28)
+   begin
+      if falling_edge(i_CLK_28) then
+         if cpu_bank7_sched_dly = '1' then
+            cpu_bank7_do_dly <= vram_bank7_do0;
+         end if;
+      end if;
+   end process;
+
+-- ***** unexplainable as of now
+cpu_bank7_do <= vram_bank7_do0 when cpu_bank7_sched_dly = '1' else cpu_bank7_do_dly;
+
+   bram_debug_b7_ack <= '1' when bram_debug_b7_req = '1' and bram_debug_b7_ack_dly = '0' and cpu_bank7_sched = '0' else '0';
+   
+   process (i_CLK_28)
+   begin
+      if rising_edge(i_CLK_28) then
+         bram_debug_b7_ack_dly <= bram_debug_b7_ack;
+      end if;
+   end process;
+
+   process (i_CLK_28)
+   begin
+      if rising_edge(i_CLK_28) then
+         if bram_debug_b5_ack_dly = '1' then
+            bram_debug_rd_dat <= vram_bank5_do0;
+         elsif bram_debug_b7_ack_dly = '1' then
+            bram_debug_rd_dat <= vram_bank7_do0;
+         end if;
+      end if;
+   end process;
+
+   bram_debug_ack <= bram_debug_b5_ack_dly or bram_debug_b7_ack_dly;
+
+end generate;
 
    --
    -- VIDEO TIMING & VBI/LINE INTERRUPT GENERATION

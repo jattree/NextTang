@@ -77,11 +77,12 @@ core_files=(
     rtl/audio/audio_mixer.vhd rtl/audio/i2s.vhd rtl/audio/i2s/i2s_receive.vhd
     rtl/audio/i2s/i2s_slave.vhd rtl/audio/i2s/i2s_transmit.vhd rtl/audio/soundrive.vhd
     rtl/audio/turbosound.vhd rtl/audio/ym2149.vhd
+    rtl/device/arbiter_dma.vhd rtl/device/pi_debug_control/pi_debug_control_param.vhd
     rtl/device/copper.vhd rtl/device/ctc.vhd rtl/device/ctc_chan.vhd rtl/device/divmmc.vhd
     rtl/device/dma.vhd rtl/device/im2_control.vhd rtl/device/im2_device.vhd
     rtl/device/im2_peripheral.vhd rtl/device/multiface.vhd rtl/device/peripherals.vhd
     rtl/misc/debounce.vhd
-    rtl/serial/fifop.vhd rtl/serial/spi_master.vhd rtl/serial/uart.vhd
+    rtl/serial/fifop.vhd rtl/serial/spi_master.vhd rtl/serial/spi_slave.vhd rtl/serial/uart.vhd
     rtl/serial/uart_rx.vhd rtl/serial/uart_tx.vhd
     rtl/video/layer2.vhd rtl/video/lores.vhd rtl/video/sprites.vhd rtl/video/tilemap.vhd
     rtl/video/zxula_timing.vhd rtl/video/zxula.vhd
@@ -111,6 +112,7 @@ source_files=(
     "$repo_root/rtl/cpu/t80n_mcode.vhd"
     "$repo_root/rtl/cpu/t80n.vhd"
     "$repo_root/rtl/cpu/t80na.vhd"
+    "$repo_root/rtl/cpu/nexttang_t80na_variants.vhd"
 )
 for core_file in "${core_files[@]}"; do
     source_files+=("$repo_root/$core_file")
@@ -143,6 +145,9 @@ source_files+=(
     "$repo_root/rtl/smoke/nexttang_memory_capture.v"
     "$repo_root/rtl/smoke/nexttang_nextreg_log.v"
     "$repo_root/rtl/input/nexttang_uart_receiver.v"
+    "$repo_root/rtl/debug/nexttang_pi_spi_master.vhd"
+    "$repo_root/rtl/debug/nexttang_pi_debug_uart_link.vhd"
+    "$repo_root/rtl/debug/nexttang_breakpoints.vhd"
 )
 if [[ "$profile" == diagnostic-ddr3 ]]; then
     source_files+=(
@@ -152,6 +157,7 @@ if [[ "$profile" == diagnostic-ddr3 ]]; then
         "$repo_root/rtl/memory/nexttang_cpu_memory_path.v"
         "$repo_root/rtl/memory/nexttang_cpu_line_cache.v"
         "$repo_root/rtl/memory/nexttang_zxnext_memory_port.v"
+        "$repo_root/rtl/memory/nexttang_zxnext_port_c_mux.v"
         "$repo_root/rtl/video/nexttang_layer2_mirror.v"
         "$repo_root/rtl/memory/nexttang_gowin_ddr3_ui_adapter.v"
         "$repo_root/rtl/memory/nexttang_ddr3_ui_arbiter.v"

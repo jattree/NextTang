@@ -199,6 +199,25 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [7:0]  ram_a_write_data;
     wire [7:0]  ram_a_read_data;
 
+    // Port C: the official Pi debug slave's main-memory port (core 3.02.04 on).
+    wire [20:0] ram_c_address;
+    wire        ram_c_request;
+    wire        ram_c_read_n;
+    wire [7:0]  ram_c_write_data;
+    wire [7:0]  ram_c_read_data;
+    wire        ram_c_ack;
+    wire        ram_c_busy;
+    // The Pi debug slave's SPI pins, driven by the FPGA's own master below.
+    wire        pi_spi_ce_n;
+    wire        pi_spi_sclk;
+    wire        pi_spi_mosi;
+    wire [27:0] core_gpio;
+    // Hardware breakpoints (rtl/debug/nexttang_breakpoints.vhd).
+    wire [15:0] cpu_next_pc;
+    wire        cpu_stopped;
+    wire        cpu_break;
+    wire [63:0] core_mmu;
+
     wire [8:0]  core_rgb;
     wire        core_vsync_n;
     wire        core_video_60;   // the core's 50/60 Hz setting: 1 for 60 Hz
@@ -235,14 +254,26 @@ module `NEXTTANG_ZXNEXT_TOP (
     localparam [127:0] LAYER2_UNITS = 128'd0;
 `endif
 
+    // The official core's build options (zxnext.vhd, g_option): the CPU with
+    // the debug interface (bits 1:0 = 10), the Pi debug slave with every
+    // command (bits 4 to 12) and, with DDR3, port C for its main-memory
+    // commands (bits 8 and 13). Without DDR3 there is no main memory to
+    // share, so the memory commands are left out.
+`ifdef NEXTTANG_ZXNEXT_DDR3
+    localparam [15:0] CORE_OPTION = 16'hFFF2;   // as official issue 4 and 5
+`else
+    localparam [15:0] CORE_OPTION = 16'hDEF2;
+`endif
+
     zxnext #(
         .g_video_def(3'b000),
         .g_version(8'h32),
-        .g_sub_version(8'h03),   // official core 3.02.03
+        .g_sub_version(8'h05),   // official core 3.02.05
         .g_video_inc(2'b10),
         .g_layer2_units(LAYER2_UNITS),
         .g_machine_id(8'h0A),
-        .g_board_issue(4'h2)
+        .g_board_issue(4'h2),
+        .g_option(CORE_OPTION)
     ) core (
 
         .i_CLK_28(clock_28),
@@ -268,6 +299,7 @@ module `NEXTTANG_ZXNEXT_TOP (
 
         .i_SPKEY_FUNCTION(function_keys),   // F10 down to F1
         .i_SPKEY_BUTTONS(2'b0),
+        .i_SPKEY_FUNCTION_EXT(5'b0),
 
         .o_KBD_CANCEL(),
         .o_KBD_ROW(keyboard_rows),
@@ -346,6 +378,13 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_RAM_B_REQ_T(),
         .i_RAM_B_DI(layer2_data),
 
+        .o_RAM_C_ADDR(ram_c_address),
+        .o_RAM_C_REQ(ram_c_request),
+        .o_RAM_C_RD_n(ram_c_read_n),
+        .i_RAM_C_DI(ram_c_read_data),
+        .o_RAM_C_DO(ram_c_write_data),
+        .i_RAM_C_ACK(ram_c_ack),
+
         .o_BUS_ADDR(core_bus_address),
         .i_BUS_DI(8'hff),
         .o_BUS_DO(core_bus_data),
@@ -375,8 +414,16 @@ module `NEXTTANG_ZXNEXT_TOP (
         .i_ESP_GPIO_20(3'b111),
         .o_ESP_GPIO_0(),
         .o_ESP_GPIO_0_EN(),
-        .i_GPIO(28'b0),
-        .o_GPIO(),
+        // GPIO 8 to 11 carry the Pi debug slave's SPI (CE0, MISO, MOSI, SCLK).
+        // The slave is opened without NextREG 0xA0 so the debugger works
+        // whatever the Next's software has set.
+        .i_GPIO({16'b0, pi_spi_sclk, pi_spi_mosi, 1'b0, pi_spi_ce_n, 8'b0}),
+        .i_PI_SPI_SLAVE_FORCE(1'b1),
+        .o_CPU_NEXT_PC(cpu_next_pc),
+        .o_CPU_STOPPED(cpu_stopped),
+        .i_CPU_BREAK(cpu_break),
+        .o_MMU(core_mmu),
+        .o_GPIO(core_gpio),
         .o_GPIO_EN(),
 
         // The official core's Xilinx device DNA and XADC ports; the Gowin part
@@ -613,6 +660,56 @@ module `NEXTTANG_ZXNEXT_TOP (
         end
     end
 
+    // Port C joins port A here, ahead of the Layer 2 mirror and the cache, so
+    // a debugger write updates every copy of the byte as a CPU write does.
+    wire        memory_request;
+    wire        memory_read_n;
+    wire [20:0] memory_address;
+    wire [7:0]  memory_write_data;
+    wire [7:0]  memory_read_data;
+    wire        memory_wait;
+
+    nexttang_zxnext_port_c_mux port_c_mux (
+        .clock(clock_28),
+        .reset(machine_reset),
+        .a_request(ram_a_cycle_request),
+        .a_read_n(ram_a_read_n),
+        .a_address(ram_a_address),
+        .a_write_data(ram_a_write_data),
+        .a_wait(cpu_wait),
+        .c_request(ram_c_request),
+        .c_read_n(ram_c_read_n),
+        .c_address(ram_c_address),
+        .c_write_data(ram_c_write_data),
+        .c_ack(ram_c_ack),
+        .c_read_data(ram_c_read_data),
+        .down_request(memory_request),
+        .down_read_n(memory_read_n),
+        .down_address(memory_address),
+        .down_write_data(memory_write_data),
+        .down_wait(memory_wait),
+        .down_read_data(memory_read_data),
+        .c_busy(ram_c_busy)
+    );
+
+    assign ram_a_read_data = memory_read_data;
+
+    // The mirror copies main-memory writes a 28 MHz cycle late: a write's
+    // request is held for several cycles and repeated on each, so the byte
+    // kept is still the one present when the request ends, and the CPU's
+    // write strobe, now through the port C mux, gets a whole clock to reach
+    // the mirror's memories (as spec256-next a3012e8 does for its lanes).
+    reg        layer2_write_request = 1'b0;
+    reg        layer2_write_n_read = 1'b1;
+    reg [20:0] layer2_write_address = 21'd0;
+    reg [7:0]  layer2_write_data = 8'd0;
+    always @(posedge clock_28) begin
+        layer2_write_request <= memory_request;
+        layer2_write_n_read <= memory_read_n;
+        layer2_write_address <= memory_address;
+        layer2_write_data <= memory_write_data;
+    end
+
     nexttang_layer2_mirror #(
         .FIRST_A(LAYER2_FIRST_A),
         .BANKS_A(LAYER2_BANKS_A),
@@ -620,10 +717,10 @@ module `NEXTTANG_ZXNEXT_TOP (
         .BANKS_B(LAYER2_BANKS_B)
     ) layer2_memory (
         .clock_28(clock_28),
-        .write_request(ram_a_cycle_request),
-        .write_n_read(ram_a_read_n),
-        .write_address(ram_a_address),
-        .write_data(ram_a_write_data),
+        .write_request(layer2_write_request),
+        .write_n_read(layer2_write_n_read),
+        .write_address(layer2_write_address),
+        .write_data(layer2_write_data),
         .read_address(layer2_address),
         .read_data(layer2_data),
         .check_data(),
@@ -647,12 +744,12 @@ module `NEXTTANG_ZXNEXT_TOP (
         .machine_clock(clock_28),
         .machine_reset(machine_reset),
         .memory_available(memory_available),
-        .core_request(ram_a_cycle_request),
-        .core_read_n(ram_a_read_n),
-        .core_address(ram_a_address),
-        .core_write_data(ram_a_write_data),
-        .core_read_data(ram_a_read_data),
-        .core_wait(cpu_wait),
+        .core_request(memory_request),
+        .core_read_n(memory_read_n),
+        .core_address(memory_address),
+        .core_write_data(memory_write_data),
+        .core_read_data(memory_read_data),
+        .core_wait(memory_wait),
         .memory_clock(controller_clock),
         .memory_reset(!controller_reset_n),
         .line_request(line_request),
@@ -834,6 +931,10 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire ram_a_write = ram_a_request && ram_a_read_n;
     assign cpu_wait = 1'b0;
     assign layer2_data = 8'h00;
+    // No port C without DDR3 (CORE_OPTION leaves its commands out).
+    assign ram_c_ack = 1'b0;
+    assign ram_c_read_data = 8'h00;
+    assign ram_c_busy = 1'b0;
 
     nexttang_block_ram #(
         .ADDRESS_BITS(16),
@@ -1389,6 +1490,92 @@ module `NEXTTANG_ZXNEXT_TOP (
         .data_valid(command_valid)
     );
 
+    // The official Pi debug protocol over this UART: X, a length and that many
+    // bytes go to the core's Pi debug slave as one SPI command, through the
+    // FPGA's own SPI master, and its reply comes back framed. While a frame is
+    // arriving its bytes are kept from the single-letter commands below; while
+    // a debug session is open the reply owns the transmit line.
+    wire       pi_frame_active;
+    wire       pi_session;
+    wire       pi_link_tx;
+    wire       pi_select;
+    wire       pi_byte_valid;
+    wire [7:0] pi_byte;
+    wire       pi_byte_ready;
+    wire       pi_reply_done;
+    wire [7:0] pi_reply;
+    wire       pi_spi_idle;
+    wire       board_command_valid = command_valid && !pi_frame_active;
+    wire       bp_strobe;
+    wire [7:0] bp_slot;
+    wire       bp_enable;
+    wire [15:0] bp_address;
+    wire       bp_paged;
+    wire [7:0] bp_page;
+    wire       bp_hit;
+
+    nexttang_pi_debug_uart_link #(
+        .CLOCK_HZ(28000000),
+        .BAUD_RATE(115200)
+    ) pi_debug_link (
+        .clock(clock_28),
+        .reset(!machine_locked),
+        .rx_valid(command_valid),
+        .rx_byte(command_byte),
+        .frame_active(pi_frame_active),
+        .session_active(pi_session),
+        .tx(pi_link_tx),
+        .spi_select(pi_select),
+        .spi_valid(pi_byte_valid),
+        .spi_byte(pi_byte),
+        .spi_ready(pi_byte_ready),
+        .spi_done(pi_reply_done),
+        .spi_reply(pi_reply),
+        .spi_idle(pi_spi_idle),
+        .bp_strobe(bp_strobe),
+        .bp_slot(bp_slot),
+        .bp_enable(bp_enable),
+        .bp_address(bp_address),
+        .bp_paged(bp_paged),
+        .bp_page(bp_page),
+        .inject_pause(bp_hit)
+    );
+
+    nexttang_breakpoints #(
+        .SLOTS(10)
+    ) breakpoints (
+        .clock(clock_28),
+        .reset(!machine_locked),
+        .write_strobe(bp_strobe),
+        .write_slot(bp_slot),
+        .write_enable(bp_enable),
+        .write_address(bp_address),
+        .write_paged(bp_paged),
+        .write_page(bp_page),
+        .mmu(core_mmu),
+        .next_pc(cpu_next_pc),
+        .cpu_stopped(cpu_stopped),
+        .break_now(cpu_break),
+        .hit(bp_hit)
+    );
+
+    nexttang_pi_spi_master pi_debug_spi (
+        .clock(clock_28),
+        .reset(!machine_locked),
+        .select_in(pi_select),
+        .byte_valid(pi_byte_valid),
+        .byte_in(pi_byte),
+        .byte_ready(pi_byte_ready),
+        .done(pi_reply_done),
+        .byte_out(pi_reply),
+        .idle(pi_spi_idle),
+        .memory_busy(ram_c_request || ram_c_busy),
+        .spi_ce_n(pi_spi_ce_n),
+        .spi_sclk(pi_spi_sclk),
+        .spi_mosi(pi_spi_mosi),
+        .spi_miso(core_gpio[9])
+    );
+
     reg [2:0]  trigger_digits_left = 3'd0;
     reg [15:0] trigger_command_address = 16'h0000;
     reg        trigger_command_done = 1'b0;
@@ -1407,7 +1594,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     reg [11:0] function_command_mask = 12'b0;
 
     always @(posedge clock_28) begin
-        if (command_valid) begin
+        if (board_command_valid) begin
             if (command_byte == "K") begin
                 key_digits_left <= 4'd10;
             end else if (key_digits_left != 4'd0 && command_is_digit) begin
@@ -1440,7 +1627,7 @@ module `NEXTTANG_ZXNEXT_TOP (
     reg video_command = 1'b0;
 
     always @(posedge clock_28) begin
-        if (command_valid) begin
+        if (board_command_valid) begin
             video_command <= command_byte == "V";
             if (video_command && (command_byte == "0" || command_byte == "1"))
                 video_memory_enable <= command_byte[0];
@@ -1450,7 +1637,7 @@ module `NEXTTANG_ZXNEXT_TOP (
 
     always @(posedge clock_28) begin
         trigger_command_done <= 1'b0;
-        if (command_valid) begin
+        if (board_command_valid) begin
             if (command_byte == "T") begin
                 trigger_digits_left <= 3'd4;
             end else if (trigger_digits_left != 3'd0 && command_is_digit) begin
@@ -1469,8 +1656,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .reset(!machine_locked),
         .m1_n(core_m1_n),
         .address(core_bus_address),
-        .freeze_request(command_valid && command_byte == "F"),
-        .rearm_request(command_valid && command_byte == "R"),
+        .freeze_request(board_command_valid && command_byte == "F"),
+        .rearm_request(board_command_valid && command_byte == "R"),
         .set_trigger(trigger_command_done),
         .new_trigger(trigger_command_address),
         .frozen(trace_frozen),
@@ -1509,12 +1696,13 @@ module `NEXTTANG_ZXNEXT_TOP (
         .read_done(ram_a_cycle_request && !ram_a_read_n && !cpu_wait),
         .read_address(ram_a_address),
         .read_data(ram_a_read_data),
-        .dump_request(command_valid && command_byte == "D"),
+        .dump_request(board_command_valid && command_byte == "D"),
         .sending(capture_sending),
         .transmit(capture_transmit)
     );
 
-    assign debug_uart_tx = capture_sending ? capture_transmit
+    assign debug_uart_tx = pi_session ? pi_link_tx
+                         : capture_sending ? capture_transmit
                          : trace_frozen ? trace_transmit
                          : log_sending ? log_transmit
                          : status_transmit;
