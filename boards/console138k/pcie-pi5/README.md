@@ -5,9 +5,10 @@ the Pi reading and writing FPGA memory. This page records how to bring the link
 up and what has been measured. It is the start of NextTang's Pi 5 platform: the
 Console 138K with a Pi 5 is the project's flagship pairing.
 
-Status: **hardware-verified link and register access** on one bench (Console
-138K, 30354 1 GB SOM, GW5AST-LV138PG484AC1/I0; Raspberry Pi 5). The NextTang
-Next core does not use PCIe yet. Bus-master DMA from the Tang is being tested.
+Status: **hardware-verified link, register access and bus-master DMA** on one
+bench (Console 138K, 30354 1 GB SOM, GW5AST-LV138PG484AC1/I0; Raspberry Pi 5).
+The Tang writes into the Pi's RAM at **475 MB/s**, 99.3% of what a Gen2 x1 link
+can carry. The NextTang Next core does not use PCIe yet.
 
 ## Why the link failed before
 
@@ -52,20 +53,58 @@ tested end to end.
 | --- | --- | --- | --- | --- |
 | 2026-11-02 | jumper-wired bench | 5 GT/s x1 | 20,000 rounds of 16 random 32-bit writes and reads | 0 mismatches, AER clear |
 | 2026-11-06 | 52Pi PCIe 3.0 x1 FPC | 5 GT/s x1, first try | 1,720,001 rounds (27.5M writes and 27.5M reads) | 0 mismatches, AER clear on root port and endpoint |
+| 2026-11-06 | 52Pi PCIe 3.0 x1 FPC | 5 GT/s x1 | DMA ladder to 16 MiB x 100 | 4.8 GiB exact, 475 MB/s, AER clear |
 
 A read from the Pi to the FPGA takes about 1.35 us round trip, so single-word
-reads move only about 3 MB/s: the CPU waits for each completion. Writes are
-posted and much faster. Bulk transfers will use bus-master DMA from the Tang
-into Pi memory instead.
+reads move only about 3 MB/s: the CPU waits for each completion. Bulk data
+therefore goes the other way, with the Tang as bus master.
 
-The FPGA side is Sipeed's TangMega-138K `pcie_dma_demo` (Apache-2.0) with a small
-NextTang BAR2 completer, because the demo's own completions were not accepted
-by the Pi (completion timeout). The completer's sources will be added here once
-the rebuilt, hardware-checked version is final; the Gowin PCIe IP and
-bitstreams stay out of this repository.
+## DMA: the Tang writes into Pi memory
 
-`pi/bar-soak.py` is the soak test: random values into the completer's 16
-words, read back, for N rounds (`sudo python3 bar-soak.py 200000`).
+2026-11-06, design `dma-v3` (meets 100 MHz). The Pi's driver allocates a buffer,
+works out its bus address and programs the Tang's write engine (BAR2
+0x40-0x7F): base, length, payload size, pattern, GO. The Tang streams posted
+memory writes and reports cycles, bytes and packets.
+
+| Test | Result |
+| --- | --- |
+| Ladder 64 B, 4 KiB, 64 KiB, 1 MiB, then 16 MiB x 100 | all PASS, 4.8 GiB checked byte for byte |
+| Guard areas (4 KiB before, 64 KiB after the buffer) | untouched |
+| AER, root port and endpoint | clear after every step |
+| Deliberately bad GO requests | refused, 0 bytes sent |
+
+| Payload per packet | Measured on the Tang | Measured on the Pi | Gen2 x1 ceiling |
+| --- | --- | --- | --- |
+| 128 B | 417.8 MB/s | 417.7 MB/s | 421 MB/s |
+| 256 B | 454.0 MB/s | 453.8 MB/s | 457 MB/s |
+| 512 B | 475.1 MB/s | 474.7 MB/s | 478 MB/s |
+
+The link is the limit: each packet carries 24 bytes of overhead, and the engine
+spends most of its time waiting for the Pi to grant buffer credit.
+
+Safety is enforced in the FPGA, not only by the driver: lengths 4 B to 16 MiB in
+multiples of 4, payloads 64 to 512 bytes, every packet clamped to the window the
+Pi gave and never across a 4 KiB boundary, parameters locked while busy, ABORT,
+and nothing in the design can issue reads to the host.
+
+## Files
+
+- `rtl/nt_bar_completer.v`: one-DW BAR2 completer (16 words) for the Gowin
+  256-bit transaction-layer interface.
+- `rtl/nt_dma_writer.v`: the bus-master write engine.
+- `rtl/nt_tl_tx_mux.v`: packet-locked transmit mux.
+- `rtl/ltssm_uart3.v`: LTSSM and SerDes status on the Console's status UART.
+- `rtl/top_pcie_dma.v`: top level of Sipeed's TangMega-138K `pcie_dma_demo`
+  (Apache-2.0) with the NextTang changes marked. It needs the rest of that demo
+  (PLL, SerDes, PCIe IP), which is not in this repository; the demo's own TLP
+  logic is cut off from the transmitter because its completions were not
+  accepted by the Pi. Gowin IP and bitstreams stay out of Git.
+- `sim/run.sh`: Icarus Verilog simulation of completer, writer and mux with a
+  root-complex model (ladder sizes, 4 KiB splits, 64-bit addresses, refusals,
+  backpressure, ABORT, 16 MiB).
+- `pi/ntdma/`: the Pi kernel module (GPL-2.0), its test program and the ladder,
+  AER and refusal scripts. Build on the Pi with its kernel headers installed.
+- `pi/bar-soak.py`: the register soak test.
 
 ## Board notes
 
