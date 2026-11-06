@@ -107,7 +107,7 @@ architecture sim of tb_zxnext_trace is
     signal rgb         : std_logic_vector(8 downto 0);
     -- SPEC256 begin
     signal s256_reset_n, s256_m1_n, s256_mreq_n, s256_iorq_n, s256_rd_n, s256_wr_n : std_logic;
-    signal s256_wait_n, s256_int_n, s256_nmi_n, s256_busrq_n : std_logic;
+    signal s256_wait_n, s256_int_n, s256_nmi_n, s256_busrq_n, s256_debug_pause : std_logic;
     signal s256_ir, s256_vector, s256_di, s256_i, s256_r, s256_f : std_logic_vector(7 downto 0);
     signal s256_a, s256_pc, s256_sp : std_logic_vector(15 downto 0);
     signal s256_regs : std_logic_vector(159 downto 0);
@@ -517,6 +517,7 @@ begin
             o_SPEC256_CPU_RD_n => s256_rd_n, o_SPEC256_CPU_WR_n => s256_wr_n,
             o_SPEC256_CPU_WAIT_n => s256_wait_n, o_SPEC256_CPU_INT_n => s256_int_n,
             o_SPEC256_CPU_NMI_n => s256_nmi_n, o_SPEC256_CPU_BUSRQ_n => s256_busrq_n,
+            o_SPEC256_CPU_DEBUG_PAUSE => s256_debug_pause,
             o_SPEC256_CPU_A => s256_a,
             o_SPEC256_IR => s256_ir, o_SPEC256_VECTOR => s256_vector, o_SPEC256_DI => s256_di,
             o_SPEC256_PC => s256_pc, o_SPEC256_SP => s256_sp,
@@ -849,6 +850,7 @@ begin
                 master_a => s256_a, master_m1_n => s256_m1_n, master_mreq_n => s256_mreq_n, master_iorq_n => s256_iorq_n,
                 master_rd_n => s256_rd_n, master_wr_n => s256_wr_n, master_wait_n => s256_wait_n,
                 master_int_n => s256_int_n, master_nmi_n => s256_nmi_n, master_busrq_n => s256_busrq_n,
+                master_debug_pause => s256_debug_pause, master_debug_break => cpu_break,
                 master_ir => s256_ir, master_vector => s256_vector, master_di => s256_di,
                 master_pc => s256_pc, master_sp => s256_sp,
                 master_i => s256_i, master_r => s256_r, master_f => s256_f, master_regs => s256_regs,

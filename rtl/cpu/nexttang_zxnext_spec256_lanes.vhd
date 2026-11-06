@@ -109,6 +109,12 @@ entity nexttang_zxnext_spec256_lanes is
         master_int_n    : in  std_logic;
         master_nmi_n    : in  std_logic;
         master_busrq_n  : in  std_logic;
+        -- The official debug interface's pause and NextTang's breakpoint
+        -- stop, as the master's CPU takes them (i_debug_pause, i_debug_break):
+        -- the master holds only at an instruction's end, so the lanes must
+        -- see the same requests to stay in lockstep while a debugger stops it.
+        master_debug_pause : in std_logic := '0';
+        master_debug_break : in std_logic := '0';
         -- The master's opcode, IM2 vector and falling-edge data registers.
         -- A lane a cycle behind takes these instead of the data bus: each holds
         -- what the bus carried when the master latched it, a cycle before the
@@ -178,6 +184,7 @@ architecture rtl of nexttang_zxnext_spec256_lanes is
     signal reset_d, cen_r_d, cen_f_d, graphics_d : std_logic := '0';
     signal m1_d, mreq_d, iorq_d, rd_d, wr_d : std_logic := '1';
     signal wait_d, wait_fall_d, int_d, nmi_d, busrq_d : std_logic := '1';
+    signal debug_pause_d, debug_break_d : std_logic := '0';
     signal a_d, pc_d, sp_d : std_logic_vector(15 downto 0) := (others => '0');
     -- The master's address is in a RAM slot without planes, registered with
     -- a_d: every lane accesses through the master's registers, and the
@@ -231,6 +238,7 @@ begin
             rd_d <= master_rd_n; wr_d <= master_wr_n;
             wait_d <= master_wait_n; int_d <= master_int_n; nmi_d <= master_nmi_n;
             busrq_d <= master_busrq_n;
+            debug_pause_d <= master_debug_pause; debug_break_d <= master_debug_break;
             pc_d <= master_pc; sp_d <= master_sp; i_d <= master_i; r_d <= master_r;
             f_d <= master_f; regs_d <= master_regs; iff1_d <= master_iff1; iff2_d <= master_iff2;
             halted_d <= master_halted; imode_d <= master_imode; xy_d <= master_xy;
@@ -478,7 +486,12 @@ begin
                 Spec256_instruction_access => lane_instruction_access(lane),
                 Z80N_dout_o => open,
                 Z80N_data_o => open,
-                Z80N_command_o => open
+                Z80N_command_o => open,
+                o_debug_dat => open,
+                o_debug_lastM => open,
+                i_debug_pause => debug_pause_d,
+                o_debug_next_pc => open,
+                i_debug_break => debug_break_d
             );
     end generate;
 end architecture;

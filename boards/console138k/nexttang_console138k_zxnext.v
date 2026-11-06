@@ -268,7 +268,7 @@ module `NEXTTANG_ZXNEXT_TOP (
 `endif
     // Spec256: the CPU as the graphical lanes follow it (observation only).
     wire        s256_cpu_reset_n, s256_m1_n, s256_mreq_n, s256_iorq_n, s256_rd_n, s256_wr_n;
-    wire        s256_wait_n, s256_int_n, s256_nmi_n, s256_busrq_n;
+    wire        s256_wait_n, s256_int_n, s256_nmi_n, s256_busrq_n, s256_debug_pause;
     wire [7:0]  s256_ir, s256_vector, s256_di, s256_i, s256_r, s256_f;
     wire [15:0] s256_a, s256_pc, s256_sp;
     wire [159:0] s256_regs;
@@ -519,6 +519,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_SPEC256_CPU_INT_n(s256_int_n),
         .o_SPEC256_CPU_NMI_n(s256_nmi_n),
         .o_SPEC256_CPU_BUSRQ_n(s256_busrq_n),
+        .o_SPEC256_CPU_DEBUG_PAUSE(s256_debug_pause),
         .o_SPEC256_IR(s256_ir),
         .o_SPEC256_VECTOR(s256_vector),
         .o_SPEC256_DI(s256_di),
@@ -914,6 +915,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .master_int_n(s256_int_n),
         .master_nmi_n(s256_nmi_n),
         .master_busrq_n(s256_busrq_n),
+        .master_debug_pause(s256_debug_pause),
+        .master_debug_break(cpu_break),
         .master_a(s256_a),
         .master_ir(s256_ir),
         .master_vector(s256_vector),
