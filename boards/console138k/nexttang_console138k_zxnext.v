@@ -2333,9 +2333,22 @@ module `NEXTTANG_ZXNEXT_TOP (
     //                 CPU owns the loader
     // A NextREG write reaches o_DEBUG_NR_* once, in the cycle the core takes
     // it, so each one is one loader byte.
+    //
+    // The loader shares the debug UART with the Pi debug link above, whose X
+    // opens a debug frame and B sets a breakpoint. While the UART owns the
+    // loader, those two letters and every byte of a debug frame are kept from
+    // it, and a debug frame's start returns its parser to waiting for a
+    // command, so no debug byte can start a loader command and no loader
+    // command can be left half-read. Its X (paper trim) and B (background,
+    // the same as M0) remain available through NextREG 0x3E. A raw payload's
+    // bytes are the loader's alone: command_valid keeps them from the link.
     wire spec256_nr_byte = core_nr_write && core_nr_register == 8'h3E;
+    wire spec256_uart_byte = uart_byte_valid &&
+        (spec256_payload || (!pi_frame_active && command_byte != "X" && command_byte != "B"));
+    reg  pi_frame_active_previous = 1'b0;
     always @(posedge clock_28) begin
-        spec256_abort <= 1'b0;
+        pi_frame_active_previous <= pi_frame_active;
+        spec256_abort <= !spec256_cpu_owned && pi_frame_active && !pi_frame_active_previous;
         if (!machine_locked) begin
             spec256_cpu_owned <= 1'b0;
         end else if (core_nr_write && core_nr_register == 8'h3F) begin
@@ -2349,7 +2362,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .clock(clock_28),
         .reset(!machine_locked),
         .byte_in(spec256_cpu_owned ? core_nr_data : command_byte),
-        .byte_valid(spec256_cpu_owned ? spec256_nr_byte : uart_byte_valid),
+        .byte_valid(spec256_cpu_owned ? spec256_nr_byte : spec256_uart_byte),
         .abort(spec256_abort),
         .payload(spec256_payload),
         .spec256_mode(spec256_mode),

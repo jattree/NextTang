@@ -217,9 +217,10 @@ def colour_stream(words: bytes, flags: int, cfg: bytes, rules: bytes | None, zxp
                   bgx: bytes | None = None,
                   extra_backgrounds: list[tuple[int, bytes]] | None = None,
                   other_banks: list[tuple[int, bytes]] | None = None,
-                  options: int = 0) -> bytes:
+                  options: int = 0, background_command: bytes = b"B") -> bytes:
     """The loader's commands for one game, in the order it takes them. O (the
-    OPT1 options) only when non-zero, so other games' streams are unchanged."""
+    OPT1 options) only when non-zero, so other games' streams are unchanged.
+    background_command is B or its equal M0 (see main)."""
     out = b"H" + b"S1" + b"U%02x" % flags + b"C" + cfg.hex().encode()
     if rules is not None:
         out += b"Y" + rules
@@ -231,7 +232,7 @@ def colour_stream(words: bytes, flags: int, cfg: bytes, rules: bytes | None, zxp
         out += b"W%04x%04x" % (ROM_FONT_START, ROM_FONT_WORDS) + font
     out += b"Q" + palette
     if background is not None:
-        out += b"B" + background
+        out += background_command + background
     if bgx is not None:
         out += b"E" + bgx
         for number, image in extra_backgrounds or []:
@@ -341,8 +342,10 @@ def main() -> int:
     attrs[4] = attrs[5] = termios.B115200
     termios.tcsetattr(fd, termios.TCSANOW, attrs)
     started = time.time()
+    # On the UART the core's Pi debug link takes B for a breakpoint, so the
+    # background goes as M0, which the loader takes the same way.
     send(fd, colour_stream(words, flags, cfg, rules, zxpoly, font, background, palette, pc,
-                           bgx, extra, other))
+                           bgx, extra, other, background_command=b"M0"))
     time.sleep(0.2)
     os.close(fd)
     print(f"sent {count} plane words, palette ({'test' if args.palette is None else args.palette.name}), "
