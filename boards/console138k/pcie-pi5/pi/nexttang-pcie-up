@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# nexttang-pcie-up: bring up the Pi 5 <-> Tang Console 138K PCIe link.
+#
+# The Pi drives REFCLK at 54 MHz while its firmware boots, and a Tang SerDes
+# configured during that phase never trains. The link comes up when the Tang
+# is configured after the Pi's first "link down" and the Pi's driver is then
+# bound again (llmwiki raw/pi5-pcie-reset-attempts-and-recipe-2026-11-02.md):
+#
+#   unbind brcm-pcie -> load the Tang's SRAM over its USB-JTAG -> bind
+#
+# Works whether the Tang is running its flash core or waiting in programming
+# mode. Exits 0 when a 22c2 device is present on the external port.
+#
+# Config: /etc/nexttang/pcie.conf (shell), all optional:
+#   BITSTREAM=/opt/nexttang/bitstreams/current.fs
+#   JTAG_FREQ=6000000   TRIES=3   JTAG_WAIT=60   LINK_WAIT=20
+#   LOAD_CMD=...        replaces the openFPGALoader call (tests only)
+set -u
+
+PORT=1000110000.pcie
+DRV=/sys/bus/platform/drivers/brcm-pcie
+VID=22c2
+BITSTREAM=/opt/nexttang/bitstreams/current.fs
+JTAG_FREQ=6000000
+TRIES=3
+JTAG_WAIT=60
+LINK_WAIT=20
+LOAD_CMD=
+[ -r /etc/nexttang/pcie.conf ] && . /etc/nexttang/pcie.conf
+
+log() { echo "nexttang-pcie: $*"; }
+
+tang_present() { lspci -n -s "0001:01:00.0" 2>/dev/null | grep -q " $VID:"; }
+bound() { [ -L "/sys/bus/platform/devices/$PORT/driver" ]; }
+jtag_present() { lsusb -d 0403:6010 >/dev/null 2>&1; }
+
+unbind() { bound && echo "$PORT" > "$DRV/unbind"; }
+bind() { bound || echo "$PORT" > "$DRV/bind" 2>/dev/null; }
+
+load_tang() {
+    if [ -n "$LOAD_CMD" ]; then
+        sh -c "$LOAD_CMD"
+    else
+        timeout 120 openFPGALoader --board tangconsole --write-sram \
+            --freq "$JTAG_FREQ" "$BITSTREAM"
+    fi
+}
+
+# The kernel logs "link up" or "link down" once training settles.
+wait_link() {
+    local i
+    for i in $(seq 1 "$LINK_WAIT"); do
+        tang_present && return 0
+        sleep 1
+    done
+    return 1
+}
+
+if tang_present; then
+    log "Tang already enumerated, nothing to do"
+    exit 0
+fi
+if [ -z "$LOAD_CMD" ] && [ ! -r "$BITSTREAM" ]; then
+    log "bitstream $BITSTREAM not readable"
+    exit 1
+fi
+
+for i in $(seq 1 "$JTAG_WAIT"); do
+    jtag_present && break
+    [ "$i" = 1 ] && log "waiting for the Tang's debug USB (0403:6010)"
+    sleep 1
+done
+if ! jtag_present && [ -z "$LOAD_CMD" ]; then
+    log "Tang debug USB not found; is its cable on the Pi?"
+    exit 1
+fi
+
+for try in $(seq 1 "$TRIES"); do
+    log "attempt $try/$TRIES: unbind, load $(basename "$BITSTREAM"), bind"
+    unbind
+    if ! load_tang; then
+        log "load failed"
+        continue
+    fi
+    bind
+    if wait_link; then
+        log "link up: $(lspci -nn -s 0001:01:00.0)"
+        lspci -vv -s 0001:01:00.0 2>/dev/null | grep -m1 LnkSta: | sed 's/^\s*/nexttang-pcie: /'
+        exit 0
+    fi
+    log "no device after bind"
+done
+log "gave up after $TRIES attempts"
+exit 1
