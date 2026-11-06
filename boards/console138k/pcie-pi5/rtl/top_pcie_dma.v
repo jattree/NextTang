@@ -8,7 +8,7 @@
 // not in this repository; see ../README.md.
 `include "top_define.v"
 
-module top(   
+module top(
     input           sys_clk_p,
     input           pcie_rstn,
     input           rst_n,
@@ -32,9 +32,9 @@ module top(
     // Clocks
     wire        sys_clk;
     /* synthesis syn_keep = 1 */
-    wire        cfg_clk;   
-    /* synthesis syn_keep = 1 */      
-    wire        div_clk;         
+    wire        cfg_clk;
+    /* synthesis syn_keep = 1 */
+    wire        div_clk;
     wire        tlp_clk;
     wire [12:0]         tl_cfg_busdev       /* synthesis syn_keep = 1 */;
     wire [7:0]          nc_rx_err;
@@ -48,13 +48,13 @@ module top(
         .clkin     ( sys_clk_p     )
     );
     assign sys_clk = pll_200m_clk;
-    
+
     CLKDIV #(
         .DIV_MODE("2")
     ) uut_div2 (
-        div_clk, 
-        'b0, 
-        sys_clk, 
+        div_clk,
+        'b0,
+        sys_clk,
         'b1
     );
 
@@ -71,47 +71,47 @@ module top(
     wire pcie_start;
     wire tlp_rst = !pcie_start;
 
-    
-    // PCIE Start Delay 
+
+    // PCIE Start Delay
     always @ (posedge cfg_clk or negedge w_rst_n)
-        if (!w_rst_n)                       
+        if (!w_rst_n)
             sys_rst_cnt <= 0;
-        else if (!sys_rst_cnt[SYS_RST_DLY]) 
+        else if (!sys_rst_cnt[SYS_RST_DLY])
             sys_rst_cnt <= sys_rst_cnt + 2'd1;
 
     wire rstn = sys_rst_cnt[SYS_RST_DLY];
-    
+
     // Removed duplicate rstn declaration; Gowin used the delayed reset above.
 
     always @ (posedge cfg_clk or negedge rstn)
-        if (!rstn)                      
+        if (!rstn)
             perst_cnt   <= 0;
-        else if (!perst_cnt[PERST_DLY]) 
+        else if (!perst_cnt[PERST_DLY])
             perst_cnt   <= perst_cnt+2'd1;
 
     //
     always @ (posedge cfg_clk or negedge rstn)
-        if (!rstn)              
+        if (!rstn)
             pcie_st_cnt <= 0;
-        else if (!pcie_start)   
+        else if (!pcie_start)
             pcie_st_cnt <= pcie_st_cnt+2'd1;
 
     assign pcie_start = pcie_st_cnt[PCIE_DLY]?1'b1:1'b0;
 
     // for Led blink
     always @ (posedge cfg_clk or negedge w_rst_n)
-        if (!w_rst_n)   
+        if (!w_rst_n)
             run_cnt <= 0;
-        else            
+        else
             run_cnt <= run_cnt+2'd1;
 
 /* Status Output */
-    // Status 
+    // Status
     wire        pcie_linkup;
     wire [4:0]  ltssm_status;
     reg         pcie_linkup_r;
     /* synthesis syn_keep = 1 */
-    reg  [4:0]  ltssm_status_r;  
+    reg  [4:0]  ltssm_status_r;
     reg  [4:0]  ltssm_status_rr;
     // reg  [7:0]  pmac_linkup_r;
 
@@ -257,9 +257,9 @@ module top(
     wire				cc_mem_eop              /* synthesis syn_keep = 1 */;
     wire	[7:0]   	cc_mem_rd_valid         /* synthesis syn_keep = 1 */;
     wire	[255:0] 	cc_mem_rd_data          /* synthesis syn_keep = 1 */;
-    
 
-    
+
+
     // Host to Card, BAR Setting Decoded data
     wire [`rq_ch_num-1:0]        req_dma_rd_en;
     wire [`rq_ch_num*32-1:0]     req_dma_rd_addr_l	    /* synthesis syn_keep = 1 */;
@@ -290,8 +290,8 @@ module top(
     wire [7:0]          rx_cpld_tag_id      ;
     wire [255:0]        rx_cpld_data_pld    ;
     wire [7:0]          rx_cpld_data_valid  ;
-    
-    
+
+
     // Card to Host, BAR Setting Decoded data
     wire [`rc_ch_num-1:0]        req_dma_wr_en;
     wire [`rc_ch_num*32-1:0]     req_dma_wr_addr_l       /* synthesis syn_keep = 1 */;
@@ -307,8 +307,8 @@ module top(
     wire [`rc_ch_num-1:0]        rc_eop                  /* synthesis syn_keep = 1 */;
     wire [`rc_ch_num*8-1:0]      rc_rd_valid             /* synthesis syn_keep = 1 */;
     wire [`rc_ch_num*256-1:0]    rc_rd_data              /* synthesis syn_keep = 1 */;
-    
-    
+
+
     // DMA In out RAM(CPLD decode data is stored in RAM)
         //Request RAM Read(Start to Read Card RAM and Write to Host RAM)
     wire [`rc_ch_num-1:0]        rc_wr_req_en        /* synthesis syn_keep = 1 */;
@@ -324,7 +324,7 @@ module top(
     wire [`rq_ch_num-1:0]        rq_pool_full        /* synthesis syn_keep = 1 */; // 23/0508
     wire [`rq_ch_num-1:0]        rq_pool_empty       /* synthesis syn_keep = 1 */; // 23/0508
 
-    
+
     //
     //************************************************************//
 
@@ -631,9 +631,9 @@ module top(
     genvar i;
     generate
     for (i = 0; i < `rq_ch_num; i = i + 1) begin: chn_loop_i
-        // Generate TLP Memory Read Request, 
+        // Generate TLP Memory Read Request,
         // and tell cpld decoder requested address, len, tag and so on
-        tlp_rq_ctrl # ( 
+        tlp_rq_ctrl # (
             .INDEX  (i          ),
             .CC_NUM (RQ_CC_NUM  ),
             .RQ_DEP (RQ_DEP     )
@@ -711,7 +711,7 @@ module top(
     generate
     for (j = 0; j < `rc_ch_num; j = j + 1) begin: chn_loop_j
     // Generate TLP Memory Write Request to write data to host
-        tlp_rc_ctrl # ( 
+        tlp_rc_ctrl # (
             .RC_DEP (RC_DEP)
         )  u_tlp_rc (
             .clk					(tlp_clk        ),
@@ -769,7 +769,7 @@ module top(
     wire [`rq_ch_num*8-1:0]     tx_np_req_valid     = {rq_rd_valid  [`rq_ch_num*8-1:0]      };
     wire [`rq_ch_num*256-1:0]   tx_np_req_data      = {rq_rd_data   [`rq_ch_num*256-1:0]    };
     assign rq_rd_en = {{8-`rq_ch_num{1'b0}}, tx_np_grant};  // TLP Send Accept
-    
+
     // TX Completion TLP, MMIO(BAR MEMORY) READ
     wire [1:0]                  tx_cpl_grant        ;
     wire [1:0]                  tx_cpl_req          = {cc_mem_req       , cc_dma_ctrl_req       };
@@ -844,12 +844,12 @@ module top(
         .PCIE_Controller_Top_pcie_tl_tx_data_i         (tl_tx_data         ),
         .PCIE_Controller_Top_pcie_tl_tx_valid_i        (tl_tx_valid        ),
         .PCIE_Controller_Top_pcie_tl_tx_wait_o         (tl_tx_wait         ),
-        //MSI												
+        //MSI
         .PCIE_Controller_Top_pcie_tl_int_status_i      (tl_int_status      ),
         .PCIE_Controller_Top_pcie_tl_int_req_i         (tl_int_req         ),
         .PCIE_Controller_Top_pcie_tl_int_msinum_i      (tl_int_msinum      ),
         .PCIE_Controller_Top_pcie_tl_int_ack_o         (tl_int_ack         ),
-        //PCIE Status										
+        //PCIE Status
         .PCIE_Controller_Top_pcie_ltssm_o              (ltssm_status       ),
         .PCIE_Controller_Top_pcie_tl_tx_creditsp_o     (tl_tx_p_credits    ),
         .PCIE_Controller_Top_pcie_tl_tx_creditsnp_o    (tl_tx_np_credits   ),
