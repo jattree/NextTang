@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 NextTang contributors
+//
+// Tang Nano 20K, board revision v3923: pins for the NextTang Next shell.
+//
+// Status: PLANNED. No NextTang image has been built or run on a Nano 20K.
+// The pin numbers are board facts as used by RetroSilicon NextNano's v3923
+// build (nextNano.cst at ba1d834, read, not copied); they have not yet been
+// checked against Sipeed's v3923 schematic or Jon's board, and the Pi0 and
+// debug UART pins are a proposal (port plan 2026-11-06, section 2.5).
+// The embedded SDR SDRAM needs no IO_LOC: GW2AR-18 binds the O_sdram_* and
+// IO_sdram_* top-level ports to the in-package die by name.
+
+// 27 MHz crystal
+IO_LOC "clock_27" 4;
+IO_PORT "clock_27" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+
+// HDMI, true LVDS pairs (P, N)
+IO_LOC "tmds_clk_p" 33,34;
+IO_PORT "tmds_clk_p" PULL_MODE=NONE DRIVE=8;
+IO_LOC "tmds_d_p[0]" 35,36;
+IO_PORT "tmds_d_p[0]" PULL_MODE=NONE DRIVE=8;
+IO_LOC "tmds_d_p[1]" 37,38;
+IO_PORT "tmds_d_p[1]" PULL_MODE=NONE DRIVE=8;
+IO_LOC "tmds_d_p[2]" 39,40;
+IO_PORT "tmds_d_p[2]" PULL_MODE=NONE DRIVE=8;
+
+// microSD in SPI mode; DAT1 and DAT2 are held high
+IO_LOC "sd_clk" 83;
+IO_PORT "sd_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC "sd_mosi" 82;
+IO_PORT "sd_mosi" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC "sd_cs" 81;
+IO_PORT "sd_cs" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC "sd_miso" 84;
+IO_PORT "sd_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "sd_dat1" 85;
+IO_PORT "sd_dat1" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC "sd_dat2" 80;
+IO_PORT "sd_dat2" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+
+// Onboard BL616 running FPGA-Companion firmware (keyboard, joystick, mouse)
+IO_LOC "companion_cs_n" 86;
+IO_PORT "companion_cs_n" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "companion_sclk" 13;
+IO_PORT "companion_sclk" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "companion_mosi" 76;
+IO_PORT "companion_mosi" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "companion_miso" 75;
+IO_PORT "companion_miso" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "companion_irq_n" 69;
+IO_PORT "companion_irq_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+// Onboard I2S amplifier
+IO_LOC "amp_enable" 51;
+IO_PORT "amp_enable" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "amp_data" 54;
+IO_PORT "amp_data" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "amp_lrck" 55;
+IO_PORT "amp_lrck" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "amp_bclk" 56;
+IO_PORT "amp_bclk" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+
+// Buttons S1, S2 and the six LEDs
+IO_LOC "button[0]" 88;
+IO_PORT "button[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC "button[1]" 87;
+IO_PORT "button[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC "led[0]" 15;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[1]" 16;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[2]" 17;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[3]" 18;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[4]" 19;
+IO_PORT "led[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[5]" 20;
+IO_PORT "led[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+// PROPOSAL, unverified: Pi0 on the official Pi debug slave's SPI (GPIO 8 CE0,
+// 9 MISO, 10 MOSI, 11 SCLK) and the debug UART, on header pins the USB build
+// leaves free. They are NextNano's LCD / matrix-keyboard pins, so a Pi0 and a
+// matrix keyboard exclude each other. Pins 48, 52, 53, 71 and 72 stay free
+// for an external RP2040/M0S companion (NextNano issue #4).
+IO_LOC "pi_ce0_n" 25;
+IO_PORT "pi_ce0_n" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "pi_miso" 26;
+IO_PORT "pi_miso" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "pi_mosi" 27;
+IO_PORT "pi_mosi" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC "pi_sclk" 28;
+IO_PORT "pi_sclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC "debug_uart_tx" 29;
+IO_PORT "debug_uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "debug_uart_rx" 30;
+IO_PORT "debug_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
