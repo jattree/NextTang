@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 NextTang contributors
 //
-// A Spec256 game's four backgrounds (B00 and BGX1's B01 to B03), each 256 x
-// 192 palette indices, kept in DDR3, and copied one at a time into the
-// overlay's background memory when the rules pick another. The overlay's
-// block RAM holds one background; four do not fit beside the rest of the
+// A Spec256 game's backgrounds, up to 32 (B00, BGX1's B01 to B03 and BGX2's),
+// each 256 x 192 palette indices, kept in DDR3, and copied one at a time into
+// the overlay's background memory when the rules pick another. The overlay's
+// block RAM holds one background; more do not fit beside the rest of the
 // core.
 //
 // Machine side (clock): the loader's bytes for image load_image, address 0
@@ -28,13 +28,13 @@ module nexttang_spec256_background_store #(
     input  wire         reset,
 
     input  wire         load_write,
-    input  wire [1:0]   load_image,
+    input  wire [4:0]   load_image,
     input  wire [15:0]  load_address,
     input  wire [7:0]   load_data,
     output reg          lost,
 
     input  wire         copy_start,
-    input  wire [1:0]   copy_image,
+    input  wire [4:0]   copy_image,
     output reg          copy_busy,
     output reg          copy_write,
     output reg  [15:0]  copy_address,
@@ -67,13 +67,13 @@ module nexttang_spec256_background_store #(
     // acknowledgement back; data stays put in between.
     reg [255:0] pack;
     reg [255:0] write_beat;          // to memory
-    reg [12:0]  write_index;         // image, beat
+    reg [15:0]  write_index;         // image, beat
     reg         write_request = 1'b0;
     reg [2:0]   write_ack_sync = 3'b000;
     wire        write_free = write_request == write_ack_sync[2];
 
     reg         copy_request = 1'b0;
-    reg [1:0]   copy_which;
+    reg [4:0]   copy_which;
     reg [2:0]   read_request_sync = 3'b000;
     reg         read_ack = 1'b0;
     reg [255:0] read_beat;           // from memory, held by the memory side
@@ -144,12 +144,12 @@ module nexttang_spec256_background_store #(
     localparam [2:0] HAND_OVER = 3'd4;
 
     reg [2:0]   state;
-    reg [12:0]  beat_index;          // image, beat
+    reg [15:0]  beat_index;          // image, beat
     reg [255:0] held;
     reg [10:0]  beats_read;
     reg         copying;
 
-    wire [25:0] beat_address = BASE_BEAT + {11'd0, beat_index[12:11], beat_index[10:0]};
+    wire [25:0] beat_address = BASE_BEAT + {10'd0, beat_index};
     wire write_pair_ready = controller_command_ready && controller_write_data_ready;
 
     assign controller_request = state == WRITE || state == READ_COMMAND;

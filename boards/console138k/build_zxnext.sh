@@ -256,6 +256,10 @@ sha256sum "${source_files[@]}" "${included_files[@]}" >"$source_hashes"
 # its reports under attempt-PLACE-ROUTE for inspection; the bitstream that
 # passes stays in impl/. Place option 3, the vendor default for this device,
 # was the only one to close the DDR3 image once Spec256's eight lanes were in.
+# NEXTTANG_ATTEMPTS="3:0 3:2" tries other pairs without editing the profile.
+if [ -n "${NEXTTANG_ATTEMPTS:-}" ]; then
+    read -r -a attempts <<< "$NEXTTANG_ATTEMPTS"
+fi
 attempt=0
 for pair in "${attempts[@]}"; do
     attempt=$((attempt + 1))

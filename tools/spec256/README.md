@@ -112,3 +112,12 @@ For IPS tools (Lunar IPS, Floating IPS), `patch256.py PATCH GAME.256 --ips
 OUT.ips` writes the same change as an IPS patch, with any redraw already
 done; IPS files are release downloads, generated from the `.256`, and are
 not kept in the repository.
+
+Add a BGX2 block (more backgrounds and rules than BGX1 holds) to a `.256`; every
+existing byte stays, and a file ending before OPT1 gets an OPT1 first:
+
+```bash
+tools/spec256/add_bgx2.py IN.256 OUT.256 \
+  --image /absolute/path/to/GAME.B03 --image /absolute/path/to/GAME.B04 \
+  --rule 4:17d1b,=1,ff,0c,19 --default keep
+```

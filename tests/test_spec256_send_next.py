@@ -22,6 +22,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "spec256"))
 import send_next  # noqa: E402
+from add_bgx2 import add_bgx2  # noqa: E402
 from gfx import GFX_SIZE, decode_gfx  # noqa: E402
 from render import render_paper_indices, spectrum_screen_offset  # noqa: E402
 
@@ -116,6 +117,97 @@ class SendNextTest(unittest.TestCase):
         self.assertEqual(len(palette), 512)
         self.assertEqual(palette[2:4], bytes((0xC0, 0x01)))  # 0b111_000_000
         self.assertEqual(palette[510:512], bytes((0x3F, 0x00)))  # 0b000_111_111
+
+
+class Bgx2Test(unittest.TestCase):
+    """The tool's file and what the sender makes of it."""
+
+    def game(self, size: int = send_next.OPT1_AT) -> bytes:
+        return bytes(size)
+
+    def image(self, value: int) -> bytes:
+        return bytes((value,)) * send_next.BACKGROUND_BYTES
+
+    def test_existing_bytes_stay_and_opt1_is_added(self) -> None:
+        game = bytes(i & 0xFF for i in range(send_next.OPT1_AT))
+        out = add_bgx2(game, [self.image(1)], ["4:17d1b,=1,ff,0c,19"])
+        self.assertEqual(out[:send_next.OPT1_AT], game)
+        self.assertEqual(out[send_next.OPT1_AT:send_next.OPT1_AT + 5], b"OPT1\x01")
+        self.assertEqual(out[send_next.TAGGED_BLOCKS_AT:send_next.TAGGED_BLOCKS_AT + 4], b"BGX2")
+
+    def test_existing_opt1_and_blocks_are_kept(self) -> None:
+        game = bytearray(send_next.TAGGED_BLOCKS_AT)
+        game[send_next.OPT1_AT:send_next.OPT1_AT + 9] = b"OPT1\x01\0\0\0\x01"
+        game += b"XYZ9" + (3).to_bytes(4, "little") + b"abc"
+        out = add_bgx2(bytes(game), [self.image(1)], [])
+        self.assertEqual(out[:len(game)], bytes(game))
+        self.assertIsNotNone(send_next.game_bgx2(out))
+
+    def test_layout(self) -> None:
+        out = add_bgx2(self.game(), [self.image(1), self.image(0), self.image(3)],
+                       ["none:17d1b,=1,ff,0c,19", "6:00100,>=2,ffff,1234,5678:00200,!=1,f0,10,20"], "keep")
+        at = send_next.TAGGED_BLOCKS_AT
+        length = 4 + 3 * send_next.BACKGROUND_BYTES + 2 * 64
+        self.assertEqual(out[at + 4:at + 8], length.to_bytes(4, "little"))
+        self.assertEqual(len(out), at + 8 + length)
+        self.assertEqual(out[at + 8:at + 12], bytes((3, 2, 0xFF, 0)))
+        rules_at = at + 12 + 3 * send_next.BACKGROUND_BYTES
+        self.assertEqual(out[rules_at:rules_at + 18],
+                         bytes((0xFE, 0, 0x1B, 0x7D, 0x01, 0x11, 0xFF, 0, 0, 0, 0x0C, 0, 0, 0, 0x19, 0, 0, 0)))
+        second = out[rules_at + 64:rules_at + 128]
+        self.assertEqual(second[0], 6)
+        self.assertEqual(second[2:18], bytes((0, 1, 0, 0x42, 0xFF, 0xFF, 0, 0, 0x34, 0x12, 0, 0, 0x78, 0x56, 0, 0)))
+        self.assertEqual(second[18:34], bytes((0, 2, 0, 0x21, 0xF0, 0, 0, 0, 0x10, 0, 0, 0, 0x20, 0, 0, 0)))
+        self.assertEqual(second[34:], bytes(30))
+        header, images = send_next.game_bgx2(out)
+        self.assertEqual(header[:4], bytes((3, 2, 0xFF, 0)))
+        self.assertEqual(len(header), 4 + 128)
+        # The empty background is not sent; numbering still counts it.
+        self.assertEqual([number for number, _ in images], [4, 6])
+
+    def test_b00_keeps_the_paper(self) -> None:
+        b00 = bytes((y * 320 + x) % 251 for y in range(200) for x in range(320))
+        out = add_bgx2(self.game(), [b00], [])
+        _, images = send_next.game_bgx2(out)
+        paper = images[0][1]
+        self.assertEqual(len(paper), send_next.BACKGROUND_BYTES)
+        self.assertEqual(paper[0], (4 * 320 + 32) % 251)
+        self.assertEqual(paper[256 * 191 + 255], (195 * 320 + 287) % 251)
+
+    def test_refuses_what_the_format_does_not_allow(self) -> None:
+        image = self.image(1)
+        for images, rules, default in (([], [], "keep"), ([image] * 29, [], "keep"),
+                                       ([image], ["4:1,=1,ff,0,0"] * 65, "keep"),
+                                       ([image], ["5:1,=1,ff,0,0"], "keep"),
+                                       ([image], ["1:1,=5,ff,0,0"], "keep"),
+                                       ([image], ["1:20000,=1,ff,0,0"], "keep"),
+                                       ([image], [], "5"), ([bytes(100)], [], "keep"),
+                                       ([image], [f"1:{n:x},=1,ff,0,0" for n in range(17)], "keep")):
+            with self.assertRaises(ValueError):
+                add_bgx2(self.game(), images, rules, default)
+        with self.assertRaises(ValueError):
+            add_bgx2(self.game(send_next.OPT1_AT - 1), [image], [])
+        with self.assertRaises(ValueError):
+            add_bgx2(add_bgx2(self.game(), [image], []), [image], [])
+
+    def test_stream_order(self) -> None:
+        game = bytearray(send_next.OPT1_AT)
+        game[send_next.BGX1_AT:send_next.BGX1_AT + 8] = b"BGX1" + bytes((4, 1, 0xFF, 0))
+        image_1 = send_next.BGX1_IMAGES_AT
+        game[image_1:image_1 + send_next.BACKGROUND_BYTES] = self.image(9)
+        out = add_bgx2(bytes(game), [self.image(1)], ["4:17d1b,=1,ff,0c,19"], "none")
+        palette = bytes(512)
+        stream = send_next.game_colour_stream(out, palette)
+        at_l = stream.index(b"L\x01\x01\xfe\x00")
+        at_m = stream.index(b"M1\x09")
+        at_a = stream.index(b"A04\x01")
+        self.assertLess(at_l, at_m)
+        self.assertLess(at_m, at_a)
+        self.assertNotIn(b"E\x04\x01\xff", stream)
+        old = send_next.game_colour_stream(out, palette, level2=False)
+        self.assertIn(b"E\x04\x01\xff", old)
+        self.assertNotIn(b"A04\x01", old)
+        self.assertEqual(old, send_next.game_colour_stream(bytes(game), palette))
 
 
 if __name__ == "__main__":

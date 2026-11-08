@@ -20,13 +20,16 @@ per-plane read rules with Y. A 128K game's banks 1, 3, 4, 6 and 7 that carry
 colour go with P (the bank) and W at 0xC000 each, then P0. With a BGX1 block, E sends its header's count,
 rule count, default and reserved byte and its eight rules, which pick the
 background shown, and M1 to M3 its other backgrounds, each that has a pixel.
+With a BGX2 block after OPT1 (a core at level 2 or above), L sends its header
+and rules in place of E, and A its extra backgrounds, each that has a pixel;
+--no-bgx2 plays the file as an older core does, with BGX1 alone.
 
 Without --palette a test palette is sent, the index's bits spread over RGB333,
 enough to see whether the planes land in the right places.
 
 Usage:
   send_next.py (--gfx GAME.GFX | --game GAME.256) --snapshot GAME.SNA
-               [--palette sp256.pal] [--port DEV]
+               [--palette sp256.pal] [--port DEV] [--no-bgx2]
 """
 
 from __future__ import annotations
@@ -60,6 +63,16 @@ BGX1_AT = BACKGROUND_AT + BACKGROUND_BYTES
 BGX1_IMAGES_AT = BGX1_AT + 8
 BGX1_RULES_AT = BGX1_IMAGES_AT + 3 * BACKGROUND_BYTES
 BGX1_END = BGX1_RULES_AT + 8 * 64
+# Tagged blocks follow OPT1: tag, little-endian length, data. BGX2, agreed with
+# Alberto Conde: extra backgrounds E (1 to 28, numbered from 4), rule count R (0
+# to 64), default, reserved, E images, R rules of 64 bytes.
+OPT1_AT = 1_383_117
+TAGGED_BLOCKS_AT = OPT1_AT + 256
+BGX2_FIRST_IMAGE = 4
+BGX2_MAX_EXTRA = 28
+BGX2_MAX_RULES = 64
+BGX_RULE_BYTES = 64
+BGX2_MAX_WATCHES = 16      # the core's watched values; more plays from BGX1
 ROM_FONT_START = 0x3D00
 ROM_FONT_WORDS = 768
 SPECTRUM_48K_BANKS = (5, 2, 0)
@@ -122,6 +135,51 @@ def game_extra_backgrounds(game: bytes) -> list[tuple[int, bytes]]:
         if any(image):
             images.append((number, image))
     return images
+
+
+def bgx2_watches(rules: bytes) -> int:
+    """The different values a BGX2 rule table watches, as the core shares them:
+    each condition with a test, by address, width (1 to 4) and starting value."""
+    seen = set()
+    for at in range(0, len(rules), BGX_RULE_BYTES):
+        for c in (at + 2, at + 18):
+            test = rules[c + 3]
+            if test >> 4:
+                seen.add((rules[c], rules[c + 1], rules[c + 2] & 1, min(test & 15, 4), rules[c + 12:c + 16]))
+    return len(seen)
+
+
+def game_bgx2(game: bytes) -> tuple[bytes, list[tuple[int, bytes]]] | None:
+    """L's bytes and BGX2's backgrounds that have a pixel, with their numbers,
+    from the first well-formed BGX2 block; None without one. A block whose
+    length disagrees with its counts, or that watches more values than the core
+    has, is skipped like an unknown tag."""
+    at = TAGGED_BLOCKS_AT
+    while at + 8 <= len(game):
+        tag = game[at:at + 4]
+        length = int.from_bytes(game[at + 4:at + 8], "little")
+        data = at + 8
+        at = data + length
+        if at > len(game):
+            return None
+        if tag != b"BGX2" or length < 4:
+            continue
+        extra, rule_count = game[data], game[data + 1]
+        if not 1 <= extra <= BGX2_MAX_EXTRA or rule_count > BGX2_MAX_RULES:
+            continue
+        rules_at = data + 4 + extra * BACKGROUND_BYTES
+        if length != 4 + extra * BACKGROUND_BYTES + rule_count * BGX_RULE_BYTES:
+            continue
+        if bgx2_watches(game[rules_at:at]) > BGX2_MAX_WATCHES:
+            continue
+        images = []
+        for index in range(extra):
+            image = game[data + 4 + index * BACKGROUND_BYTES:
+                         data + 4 + (index + 1) * BACKGROUND_BYTES]
+            if any(image):
+                images.append((BGX2_FIRST_IMAGE + index, image))
+        return game[data:data + 4] + game[rules_at:at], images
+    return None
 
 
 OTHER_128K_BANKS = (1, 3, 4, 6, 7)
@@ -217,9 +275,12 @@ def colour_stream(words: bytes, flags: int, cfg: bytes, rules: bytes | None, zxp
                   bgx: bytes | None = None,
                   extra_backgrounds: list[tuple[int, bytes]] | None = None,
                   other_banks: list[tuple[int, bytes]] | None = None,
-                  options: int = 0, background_command: bytes = b"B") -> bytes:
+                  options: int = 0,
+                  bgx2: tuple[bytes, list[tuple[int, bytes]]] | None = None,
+                  background_command: bytes = b"B") -> bytes:
     """The loader's commands for one game, in the order it takes them. O (the
     OPT1 options) only when non-zero, so other games' streams are unchanged.
+    BGX2's rules replace BGX1's; BGX1's backgrounds stay as 1 to 3.
     background_command is B or its equal M0 (see main)."""
     out = b"H" + b"S1" + b"U%02x" % flags + b"C" + cfg.hex().encode()
     if rules is not None:
@@ -233,10 +294,15 @@ def colour_stream(words: bytes, flags: int, cfg: bytes, rules: bytes | None, zxp
     out += b"Q" + palette
     if background is not None:
         out += background_command + background
-    if bgx is not None:
+    if bgx2 is not None:
+        out += b"L" + bgx2[0]
+    elif bgx is not None:
         out += b"E" + bgx
-        for number, image in extra_backgrounds or []:
-            out += b"M%d" % number + image
+    for number, image in extra_backgrounds or []:
+        out += b"M%d" % number + image
+    if bgx2 is not None:
+        for number, image in bgx2[1]:
+            out += b"A%02x" % number + image
     if other_banks is not None:
         for bank, bank_words in other_banks:
             out += b"P%d" % bank + b"Wc000%04x" % (len(bank_words) // 8) + bank_words
@@ -245,10 +311,13 @@ def colour_stream(words: bytes, flags: int, cfg: bytes, rules: bytes | None, zxp
 
 
 def game_colour_stream(game: bytes, palette: bytes, pc: int | None = None,
-                       extended: bool = True) -> bytes:
+                       extended: bool = True, level2: bool = True,
+                       background_command: bytes = b"B") -> bytes:
     """colour_stream for a .256; the start from the .256 unless given. Without
     extended (a core whose NextREG 0x3F bit 6 is clear) E, M and P are left
-    out, as .SPEC256 leaves them out for it."""
+    out, as .SPEC256 leaves them out for it. Without level2 (a core whose
+    NextREG 0x3E does not read a level of 2 or above) so are L and A: the game
+    plays from BGX1 alone."""
     return colour_stream(game_plane_words(game), game_rules_flags(game), game_cfg(game),
                          game_rules(game), game_zxpoly_mode(game), game_rom_font_words(game),
                          game_background(game), palette,
@@ -256,7 +325,9 @@ def game_colour_stream(game: bytes, palette: bytes, pc: int | None = None,
                          game_bgx(game) if extended else None,
                          game_extra_backgrounds(game) if extended else None,
                          None if game[PORT_7FFD_AT] & 0x20 or not extended else game_other_banks(game),
-                         game_options(game))
+                         game_options(game),
+                         game_bgx2(game) if extended and level2 else None,
+                         background_command)
 
 
 SNA_128K_SIZE = 131_103
@@ -304,8 +375,12 @@ def main() -> int:
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--palette", type=Path)
     parser.add_argument("--port", default=PORT)
+    parser.add_argument("--no-bgx2", action="store_true",
+                        help="leave BGX2 out, for a core older than level 2")
     args = parser.parse_args()
 
+    palette = palette_bytes(args.palette)
+    pc = snapshot_pc(args.snapshot.read_bytes())
     if args.game is not None:
         game = args.game.read_bytes()
         words = game_plane_words(game)
@@ -314,10 +389,13 @@ def main() -> int:
         background = game_background(game)
         cfg = game_cfg(game)
         rules = game_rules(game)
-        zxpoly = game_zxpoly_mode(game)
         bgx = game_bgx(game)
         extra = game_extra_backgrounds(game)
-        other = None if game[PORT_7FFD_AT] & 0x20 else game_other_banks(game)
+        bgx2 = None if args.no_bgx2 else game_bgx2(game)
+        # On the UART the core's Pi debug link takes B for a breakpoint, so the
+        # background goes as M0, which the loader takes the same way.
+        stream = game_colour_stream(game, palette, pc, level2=not args.no_bgx2,
+                                    background_command=b"M0")
     else:
         words = plane_words(read_exact_file(args.gfx, GFX_SIZE, "Spec256 GFX"))
         flags = 0
@@ -325,12 +403,11 @@ def main() -> int:
         background = None
         cfg = bytes(3)
         rules = None
-        zxpoly = 0
         bgx = None
         extra = []
-        other = None
-    palette = palette_bytes(args.palette)
-    pc = snapshot_pc(args.snapshot.read_bytes())
+        bgx2 = None
+        stream = colour_stream(words, flags, cfg, rules, 0, font, background, palette, pc,
+                               background_command=b"M0")
     count = len(words) // 8
 
     fd = os.open(args.port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
@@ -342,10 +419,7 @@ def main() -> int:
     attrs[4] = attrs[5] = termios.B115200
     termios.tcsetattr(fd, termios.TCSANOW, attrs)
     started = time.time()
-    # On the UART the core's Pi debug link takes B for a breakpoint, so the
-    # background goes as M0, which the loader takes the same way.
-    send(fd, colour_stream(words, flags, cfg, rules, zxpoly, font, background, palette, pc,
-                           bgx, extra, other, background_command=b"M0"))
+    send(fd, stream)
     time.sleep(0.2)
     os.close(fd)
     print(f"sent {count} plane words, palette ({'test' if args.palette is None else args.palette.name}), "
@@ -353,6 +427,7 @@ def main() -> int:
           f"{'background, ' if background is not None else ''}"
           f"{'rules, ' if rules is not None else ''}"
           f"{f'BGX1 rules and {len(extra)} more backgrounds, ' if bgx is not None else ''}"
+          f"{f'BGX2 rules and {len(bgx2[1])} more backgrounds, ' if bgx2 is not None else ''}"
           f"armed at PC 0x{pc:04x}, "
           f"{time.time() - started:.0f} s")
     return 0

@@ -19,7 +19,9 @@ the oldest size (no optional blocks); OPT1's options byte (byte 8) sent as O
 only when non-zero; a tagged block after OPT1 is skipped and
 a truncated one refused; an OPT1 level above 1, a core without the interface
 and a missing palette are refused before anything is sent; a read failing
-mid-stream aborts the loader, sends H and releases it; the CPU speed and the
+mid-stream aborts the loader, sends H and releases it; a BGX2 block goes as L
+and A in place of E, to a core that reads a level of 2 or above, and is left
+out for an older one and when malformed; the CPU speed and the
 file are always restored and closed; the game's CRD1 credits are printed.
 """
 
@@ -37,6 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE = REPO_ROOT / "firmware" / "spec256dot" / "spec256.asm"
 sys.path.insert(0, str(REPO_ROOT / "tools" / "spec256"))
 import send_next  # noqa: E402
+from add_bgx2 import add_bgx2  # noqa: E402
 from z80_from_256 import z80_from_256  # noqa: E402
 
 try:
@@ -111,6 +114,8 @@ class Machine:
         self.next_handle = 3
         self.selected = 0
         self.nextregs = {0x07: 0, 0x3F: 0x40}   # 0x3F bit 6: E, M and P understood
+        self.level = 2                          # read at 0x3E with 0x3F bit 6 written; None: older
+        self.read_level = False
         self.nr_writes: list[tuple[int, int]] = []
         self.owned = False
         self.stream = bytearray()
@@ -132,6 +137,7 @@ class Machine:
             self.nr_writes.append((self.selected, value))
             if self.selected == 0x3F:
                 self.owned = bool(value & 1)
+                self.read_level = bool(value & 0x40)
             elif self.selected == 0x3E and self.owned:
                 self.stream.append(value)
             else:
@@ -140,6 +146,8 @@ class Machine:
     def input(self, port: int) -> int:
         if port == 0x253B:
             if self.selected == 0x3E:
+                if self.read_level and self.level is not None:
+                    return self.level
                 return self.interface_id
             return self.nextregs.get(self.selected, 0)
         return 0xFF
@@ -288,6 +296,141 @@ class Spec256DotCommandTest(unittest.TestCase):
         self.assertEqual(bytes(machine.stream), expected)
         self.assertLess(len(expected), len(send_next.game_colour_stream(bytes(game), self.palette)))
         self.check_clean(machine)
+
+    def bgx2_game(self, rules: int = 3) -> bytearray:
+        # Backgrounds 4 and 6 with pixels, 5 empty and so not sent.
+        images = [bytes((n + 1,)) * send_next.BACKGROUND_BYTES if n != 1
+                  else bytes(send_next.BACKGROUND_BYTES) for n in range(3)]
+        return bytearray(add_bgx2(bytes(make_game()), images,
+                                  [f"{n % 7}:{0x4000 + n % 16:x},=1,ff,{n:02x},00" for n in range(rules)],
+                                  "none"))
+
+    def test_bgx2_goes_as_l_and_a(self) -> None:
+        game = self.bgx2_game()
+        machine = self.machine(game)
+        failed, message = machine.run('"game.256"')
+        self.assertFalse(failed, message)
+        expected = send_next.game_colour_stream(bytes(game), self.palette)
+        self.assertEqual(bytes(machine.stream), expected)
+        self.assertIn(b"L\x03\x03\xfe\x00", expected)
+        self.assertNotIn(b"E\x04\x03\xff", expected)
+        self.assertIn(b"A04", expected)
+        self.assertNotIn(b"A05\x00", expected)
+        self.assertIn(b"A06", expected)
+        self.assertIn(b"M1", expected)
+        self.check_clean(machine)
+
+    def test_bgx2_with_64_rules_crosses_read_chunks(self) -> None:
+        game = self.bgx2_game(rules=64)
+        machine = self.machine(game)
+        failed, message = machine.run('"game.256"')
+        self.assertFalse(failed, message)
+        self.assertEqual(bytes(machine.stream), send_next.game_colour_stream(bytes(game), self.palette))
+        self.check_clean(machine)
+
+    def watching(self, values: int) -> bytearray:
+        # A file with 'values' watched values: built by hand, as add_bgx2 refuses too many.
+        image = bytes((1,)) * send_next.BACKGROUND_BYTES
+        rules = b""
+        for n in range(values):
+            c = (0x4000 + n).to_bytes(3, "little") + bytes((0x11,)) + bytes((0xFF, 0, 0, 0, n, 0, 0, 0, 0, 0, 0, 0))
+            rules += (bytes((4, 0)) + c).ljust(64, b"\0")
+        data = bytes((1, values, 0xFF, 0)) + image + rules
+        return bytearray(bytes(make_game()) + b"BGX2" + len(data).to_bytes(4, "little") + data)
+
+    def test_bgx2_up_to_the_cores_watched_values(self) -> None:
+        game = self.watching(16)
+        self.assertIsNotNone(send_next.game_bgx2(bytes(game)))
+        machine = self.machine(game)
+        failed, message = machine.run('"game.256"')
+        self.assertFalse(failed, message)
+        self.assertEqual(bytes(machine.stream), send_next.game_colour_stream(bytes(game), self.palette))
+        self.assertIn(b"L\x01\x10\xff\x00", bytes(machine.stream))
+        self.check_clean(machine)
+
+    def test_bgx2_past_the_cores_watched_values_plays_from_bgx1(self) -> None:
+        game = self.watching(17)
+        self.assertIsNone(send_next.game_bgx2(bytes(game)))
+        machine = self.machine(game)
+        failed, message = machine.run('"game.256"')
+        self.assertFalse(failed, message)
+        self.assertEqual(bytes(machine.stream), send_next.game_colour_stream(bytes(game), self.palette))
+        self.assertIn(b"E\x04\x03\xff", bytes(machine.stream))
+        self.check_clean(machine)
+
+    def test_bgx2_shared_values_count_once(self) -> None:
+        # Width clamped at 4 and the address's low 17 bits, as the core compares them.
+        image = bytes((1,)) * send_next.BACKGROUND_BYTES
+        rules = b""
+        for n in range(64):
+            c = bytes((0x34, 0x12, 0xFE)) + bytes((0x47,)) + bytes((0xFF, 0, 0, 0, n, 0, 0, 0, 9, 0, 0, 0))
+            rules += (bytes((4, 0)) + c + c).ljust(64, b"\0")
+        data = bytes((1, 64, 0xFF, 0)) + image + rules
+        game = bytearray(bytes(make_game()) + b"BGX2" + len(data).to_bytes(4, "little") + data)
+        self.assertEqual(send_next.bgx2_watches(rules), 1)
+        machine = self.machine(game)
+        failed, message = machine.run('"game.256"')
+        self.assertFalse(failed, message)
+        self.assertIn(b"L\x01\x40\xff\x00", bytes(machine.stream))
+        self.assertEqual(bytes(machine.stream), send_next.game_colour_stream(bytes(game), self.palette))
+        self.check_clean(machine)
+
+    def test_bgx2_with_no_rules(self) -> None:
+        game = self.bgx2_game(rules=0)
+        machine = self.machine(game)
+        failed, message = machine.run('"game.256"')
+        self.assertFalse(failed, message)
+        self.assertEqual(bytes(machine.stream), send_next.game_colour_stream(bytes(game), self.palette))
+        self.check_clean(machine)
+
+    def test_older_core_plays_bgx2_file_from_bgx1(self) -> None:
+        # An older core reads its ID at 0x3E whatever 0x3F's bit 6 says.
+        game = self.bgx2_game()
+        machine = self.machine(game)
+        machine.level = None
+        failed, message = machine.run('"game.256"')
+        self.assertFalse(failed, message)
+        expected = send_next.game_colour_stream(bytes(game), self.palette, level2=False)
+        self.assertEqual(bytes(machine.stream), expected)
+        self.assertIn(b"E\x04\x03\xff", expected)
+        self.assertNotIn(b"A04", expected)
+        self.check_clean(machine)
+
+    def test_malformed_bgx2_is_skipped(self) -> None:
+        good = self.bgx2_game()
+        data = OPT1_END + 8
+        for name, at, value in (("no backgrounds", data, 0), ("too many backgrounds", data, 29),
+                                ("too many rules", data + 1, 65),
+                                ("counts disagree with the length", data + 1, 2)):
+            with self.subTest(name):
+                game = bytearray(good)
+                game[at] = value
+                self.assertIsNone(send_next.game_bgx2(bytes(game)))
+                machine = self.machine(game)
+                failed, message = machine.run('"game.256"')
+                self.assertFalse(failed, message)
+                self.assertEqual(bytes(machine.stream),
+                                 send_next.game_colour_stream(bytes(game), self.palette))
+                self.assertIn(b"E\x04\x03\xff", bytes(machine.stream))
+                self.check_clean(machine)
+
+    def test_bgx2_counts_past_the_limits_are_skipped_even_when_the_length_agrees(self) -> None:
+        # Blocks that are the right length for what they claim, so only the
+        # limits on the counts keep them out.
+        base = bytes(make_game())
+        image = bytes((1,)) * send_next.BACKGROUND_BYTES
+        for name, extra, rules in (("65 rules", 1, 65), ("29 backgrounds", 29, 0)):
+            with self.subTest(name):
+                data = bytes((extra, rules, 0xFF, 0)) + image * extra + bytes(64 * rules)
+                game = bytearray(base + b"BGX2" + len(data).to_bytes(4, "little") + data)
+                self.assertIsNone(send_next.game_bgx2(bytes(game)))
+                machine = self.machine(game)
+                failed, message = machine.run('"game.256"')
+                self.assertFalse(failed, message)
+                self.assertIn(b"E\x04\x03\xff", bytes(machine.stream))
+                self.assertEqual(bytes(machine.stream),
+                                 send_next.game_colour_stream(bytes(game), self.palette))
+                self.check_clean(machine)
 
     def test_48k_game_snapshot(self) -> None:
         game = make_game(seed=10, port_7ffd=0x30)

@@ -13,12 +13,17 @@
 ;
 ;   H, S1, U flags, C cfg, [Y rules], Z mode, [O options], W planes for 0x4000-0xFFFF
 ;   (banks 5, 2, 0), [W ROM font], Q palette, [B background], [E BGX1
-;   rules, M1-M3 its other backgrounds that have a pixel], [128K: P bank and
-;   W planes at 0xC000 for each of banks 1, 3, 4, 6, 7 with colour, P0],
-;   G start
+;   rules, M1-M3 its other backgrounds that have a pixel], [A04 up: BGX2's
+;   backgrounds that have a pixel], [128K: P bank and W planes at 0xC000 for
+;   each of banks 1, 3, 4, 6, 7 with colour, P0], G start
 ;
-; E, M and P go only to a core whose NextREG 0x3F reads with bit 6 set;
-; an older core would take their raw bytes for commands. O (OPT1 byte 8, the
+; With a BGX2 block, L sends its header and rules in place of E.
+;
+; E, M and P go only to a core whose NextREG 0x3F reads with bit 6 set; L and
+; A only to one whose NextREG 0x3E reads a level of 2 or above while 0x3F's bit
+; 6 is set (an older one reads its ID, 0xA1, either way). An older core would
+; take their raw bytes for commands, and plays such a game from BGX1 as before.
+; O (OPT1 byte 8, the
 ; options agreed with Alberto Conde; bit 0: FLASH cells show the Spectrum's
 ; pixel in the on phase) goes only when non-zero; an older core ignores the
 ; letter and its lower-case digits.
@@ -38,7 +43,8 @@
 ; Blocks follow the format's rules: a block without its magic is absent, a
 ; file may end after any block (1179680 bytes at least), OPT1's level must
 ; not exceed this core's (1), and tagged blocks after OPT1 (tag, length,
-; data) are walked to check their lengths and otherwise skipped.
+; data) are walked to check their lengths; the first well-formed BGX2 the
+; core has room for (16 different watched values) is used and the rest skipped.
 ;
 ; Interrupts stay off while bytes stream, so nothing changes the selected
 ; NextREG between OUTs; the register is selected again after every file read.
@@ -63,6 +69,11 @@ NR_DATA         equ $3e             ; loader byte; reads the interface ID
 NR_CTRL         equ $3f             ; bit 0 own the loader, bit 7 abort
 SPEC256_ID      equ $a1
 CORE_LEVEL      equ 1
+BGX2_LEVEL      equ 2               ; NextREG 0x3E's level that takes L and A
+BGX2_MAX_EXTRA  equ 28
+BGX2_MAX_RULES  equ 64
+BGX2_MAX_WATCH  equ 16
+WATCH_BYTES     equ 8
 
 RECORDS         equ 256             ; .256 records (9 bytes) per chunk
 CHUNK           equ RECORDS * 9
@@ -106,6 +117,7 @@ start:
         call    nr_read
         and     $40
         ld      (extended),a
+        call    read_core_level
 
         ld      a,NR_SPEED                  ; 28 MHz while loading
         call    nr_read
@@ -278,14 +290,20 @@ start:
 
         ld      a,(extended)                ; an older core: no BGX1, no banks
         or      a
-        jr      z,.no_bgx
+        jp      z,.no_bgx
+        ld      a,(bgx2_on)                 ; BGX2's rules replace BGX1's
+        or      a
+        call    nz,send_bgx2_rules
         NEED    $0015,$0228                 ; BGX1 complete
-        jr      c,.no_bgx
+        jr      c,.no_bgx1
         READ_AT $0012,$c020,8,bgx_head
         ld      hl,bgx_head
         ld      de,magic_bgx1
         call    same_magic
-        jr      nz,.no_bgx
+        jr      nz,.no_bgx1
+        ld      a,(bgx2_on)
+        or      a
+        jr      nz,.bgx1_images
         ld      a,'E'                       ; count, rules, default, reserved
         call    send_byte
         ld      hl,bgx_head+4
@@ -295,6 +313,7 @@ start:
         ld      hl,buffer
         ld      de,512
         call    send_block
+.bgx1_images:
         ld      a,1
 .extra: ld      (image_number),a
         call    image_offset
@@ -312,6 +331,10 @@ start:
         inc     a
         cp      4
         jr      c,.extra
+.no_bgx1:
+        ld      a,(bgx2_on)
+        or      a
+        call    nz,send_bgx2_images
 .no_bgx:
 
         ld      a,(regs+28)                 ; 128K: the other five banks
@@ -884,8 +907,34 @@ check_opt1:
         ld      hl,msg_level
         jp      fail
 
+; NextREG 0x3F bit 6 makes NextREG 0x3E read the core's level; an older core
+; goes on reading its ID. wide_core is set for a level that takes L and A.
+read_core_level:
+        ld      a,(extended)
+        or      a
+        ret     z
+        ld      a,NR_CTRL
+        ld      e,$40
+        call    nr_write
+        ld      a,NR_DATA
+        call    nr_read
+        ld      d,a
+        push    de
+        ld      a,NR_CTRL
+        ld      e,0
+        call    nr_write
+        pop     de
+        ld      a,d
+        cp      SPEC256_ID
+        ret     nc
+        cp      BGX2_LEVEL
+        ret     c
+        ld      a,1
+        ld      (wide_core),a
+        ret
+
 ; Blocks after OPT1: four-byte tag, four-byte little-endian length, data.
-; None is used yet; each must fit in the file.
+; Each must fit in the file; note_bgx2 looks at each one.
 walk_tagged_blocks:
         ld      hl,opt1_end
         ld      de,position
@@ -921,14 +970,294 @@ walk_tagged_blocks:
         call    sub32
         ld      hl,msg_truncated
         jp      c,fail
+        call    note_bgx2
         ld      hl,position
         ld      de,buffer+4
         call    add32
         jr      .block
 
+; The tag and length in the buffer, position at the data: remember the first
+; BGX2 whose length agrees with its counts, for a core that takes it. Anything
+; else about it is left for the walk, as an unknown tag would be.
+note_bgx2:
+        ld      a,(wide_core)
+        or      a
+        ret     z
+        ld      a,(bgx2_on)
+        or      a
+        ret     nz
+        ld      hl,buffer
+        ld      de,magic_bgx2
+        call    same_magic
+        ret     nz
+        ld      hl,buffer+4                 ; length - 4 must be the images and rules
+        ld      de,work
+        ld      bc,4
+        ldir
+        ld      hl,work
+        ld      de,four
+        call    sub32
+        ret     c
+        ld      hl,position
+        call    load32
+        call    seek
+        ld      hl,bgx2_head
+        ld      bc,4
+        call    read_exact
+        ld      a,(bgx2_head)               ; E: 1 to 28
+        dec     a
+        cp      BGX2_MAX_EXTRA
+        ret     nc
+        ld      a,(bgx2_head+1)             ; R: 0 to 64
+        cp      BGX2_MAX_RULES + 1
+        ret     nc
+        ld      a,(bgx2_head)
+.image: ld      (count),a
+        ld      hl,work
+        ld      de,image_bytes
+        call    sub32
+        ret     c
+        ld      a,(count)
+        dec     a
+        jr      nz,.image
+        call    bgx2_rule_bytes
+        ld      hl,work
+        ld      de,rule_bytes
+        call    sub32
+        ret     c
+        ld      hl,work
+        call    is_zero32
+        ret     nz
+        ld      hl,position                 ; the images start after the header
+        ld      de,bgx2_images
+        ld      bc,4
+        ldir
+        ld      hl,bgx2_images
+        ld      de,four
+        call    add32
+        call    bgx2_seek_rules
+        call    bgx2_count_watches
+        ret     c                           ; too many: BGX1 plays it
+        ld      a,1
+        ld      (bgx2_on),a
+        ret
+
+; Seek to the rules, which follow the E images.
+bgx2_seek_rules:
+        ld      hl,bgx2_images
+        ld      de,work
+        ld      bc,4
+        ldir
+        ld      a,(bgx2_head)
+.image: ld      (count),a
+        ld      hl,work
+        ld      de,image_bytes
+        call    add32
+        ld      a,(count)
+        dec     a
+        jr      nz,.image
+        ld      hl,work
+        call    load32
+        jp      seek
+
+; From the rules at the file's position: carry if they watch more different
+; values than the core has, by address, width (1 to 4) and starting value, as
+; the core shares them. Each condition with a test takes one unless already seen.
+bgx2_count_watches:
+        xor     a
+        ld      (watch_count),a
+        call    bgx2_rule_bytes
+.chunk: ld      hl,(rule_bytes)             ; up to 4096 bytes, 2048 at a time
+        ld      a,h
+        or      l
+        ret     z                           ; carry clear from OR
+        ld      de,2048
+        or      a
+        sbc     hl,de
+        jr      nc,.whole
+        ld      de,(rule_bytes)
+        ld      hl,0
+.whole: ld      (rule_bytes),hl
+        ld      (part),de
+        ld      b,d
+        ld      c,e
+        ld      hl,buffer
+        call    read_exact
+        ld      hl,buffer
+        ld      (rule_at),hl
+        ld      hl,(part)
+.rule:  ld      a,h
+        or      l
+        jr      z,.chunk
+        ld      (part),hl
+        ld      hl,(rule_at)
+        ld      de,2
+        add     hl,de
+        call    .condition
+        ret     c
+        ld      hl,(rule_at)
+        ld      de,18
+        add     hl,de
+        call    .condition
+        ret     c
+        ld      hl,(rule_at)
+        ld      de,64
+        add     hl,de
+        ld      (rule_at),hl
+        ld      hl,(part)
+        ld      de,-64
+        add     hl,de
+        jr      .rule
+; HL: a condition. Carry when there is no room for it.
+.condition:
+        ld      de,3
+        add     hl,de
+        ld      a,(hl)                      ; the test
+        sbc     hl,de                       ; carry clear from the ADD
+        ld      c,a
+        and     $f0
+        ret     z                           ; no test, no watching
+        ld      a,c
+        and     $0f
+        cp      5
+        jr      c,.width
+        ld      a,4
+.width: ld      c,a
+        ld      de,watch_new                ; address, width, starting value
+        ldi
+        ldi
+        ld      a,(hl)
+        and     1
+        ld      (de),a
+        inc     de
+        ld      a,c
+        ld      (de),a
+        inc     de
+        ld      bc,10                       ; past bytes 2 to 11 to 12
+        add     hl,bc
+        ld      bc,4
+        ldir
+        ld      hl,watch_table
+        ld      a,(watch_count)
+        or      a
+        jr      z,.add
+        ld      b,a
+.seen:  push    bc
+        push    hl
+        ld      de,watch_new
+        ld      b,WATCH_BYTES
+.same:  ld      a,(de)
+        cp      (hl)
+        jr      nz,.next
+        inc     hl
+        inc     de
+        djnz    .same
+        pop     hl                          ; seen: nothing to add
+        pop     bc
+        or      a
+        ret
+.next:  pop     hl
+        ld      de,WATCH_BYTES
+        add     hl,de
+        pop     bc
+        djnz    .seen
+.add:   ld      a,(watch_count)
+        cp      BGX2_MAX_WATCH
+        ccf
+        ret     c                           ; full
+        inc     a
+        ld      (watch_count),a
+        ex      de,hl
+        ld      hl,watch_new
+        ld      bc,WATCH_BYTES
+        ldir
+        or      a
+        ret
+
+; rule_bytes (32 bits) = R x 64.
+bgx2_rule_bytes:
+        ld      a,(bgx2_head+1)
+        ld      l,a
+        ld      h,0
+        add     hl,hl
+        add     hl,hl
+        add     hl,hl
+        add     hl,hl
+        add     hl,hl
+        add     hl,hl
+        ld      (rule_bytes),hl
+        ld      hl,0
+        ld      (rule_bytes+2),hl
+        ret
+
+; L: BGX2's header and rules.
+send_bgx2_rules:
+        ld      a,'L'
+        call    send_byte
+        ld      hl,bgx2_head
+        ld      de,4
+        call    send_block
+        call    bgx2_seek_rules
+        call    bgx2_rule_bytes
+.chunk: ld      hl,(rule_bytes)             ; up to 4096 bytes, 2048 at a time
+        ld      a,h
+        or      l
+        ret     z
+        ld      de,2048
+        or      a
+        sbc     hl,de
+        jr      nc,.whole
+        ld      de,(rule_bytes)             ; the last part
+        ld      hl,0
+.whole: ld      (rule_bytes),hl
+        ld      (part),de
+        ld      b,d
+        ld      c,e
+        ld      hl,buffer
+        call    read_exact
+        ld      hl,buffer
+        ld      de,(part)
+        call    send_block
+        jr      .chunk
+
+; A: BGX2's backgrounds that have a pixel, numbered from 4.
+send_bgx2_images:
+        ld      hl,bgx2_images
+        ld      de,work
+        ld      bc,4
+        ldir
+        ld      a,4
+        ld      (image_number),a
+        ld      a,(bgx2_head)
+.image: ld      (banks_left),a
+        ld      hl,work
+        call    load32
+        call    image_used
+        jr      z,.next
+        ld      a,'A'
+        call    send_byte
+        ld      a,(image_number)
+        call    send_hex
+        ld      hl,work
+        call    load32
+        call    seek
+        call    send_image
+.next:  ld      hl,work
+        ld      de,image_bytes
+        call    add32
+        ld      hl,image_number
+        inc     (hl)
+        ld      a,(banks_left)
+        dec     a
+        jr      nz,.image
+        ret
+
 opt1_end:
         dd      1383373
 eight:  dd      8
+four:   dd      4
+image_bytes:
+        dd      49152
 
 ; CRD1 (68 bytes at 1383049): two lines of 32 characters, the game and its
 ; colouring.
@@ -1331,6 +1660,7 @@ magic_crd1:     db "CRD1"
 magic_opt1:     db "OPT1"
 magic_ays1:     db "AYS1"
 magic_bgx1:     db "BGX1"
+magic_bgx2:     db "BGX2"
 image_offsets:  dd 1228840, 1277992, 1327144   ; BGX1's B01, B02, B03
 snapshot_name:  db "/tmp/SPEC256.Z80",0
 
@@ -1355,6 +1685,16 @@ handle:         db 0
 owned:          db 0
 options:        db 0                        ; OPT1 byte 8
 extended:       db 0                        ; NextREG 0x3F bit 6 (E, M, P)
+wide_core:      db 0                        ; NextREG 0x3E's level: L and A
+bgx2_on:        db 0                        ; a BGX2 block to use
+bgx2_head:      ds 4
+bgx2_images:    ds 4                        ; its first image's file offset
+rule_bytes:     ds 4
+part:           dw 0
+rule_at:        dw 0
+watch_count:    db 0
+watch_new:      ds WATCH_BYTES
+watch_table:    ds BGX2_MAX_WATCH * WATCH_BYTES
 speed:          db 0
 interrupts:     db 0
 count:          db 0

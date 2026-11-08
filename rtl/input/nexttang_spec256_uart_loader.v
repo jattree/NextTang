@@ -23,6 +23,13 @@
 //   E               then 516 raw bytes: BGX1's bytes 4 to 7 (count, rule
 //                   count, default, reserved) and its eight 64-byte rules,
 //                   which pick the background shown
+//   L               then BGX2's bytes 0 to 3 (extra backgrounds, rule count,
+//                   default, reserved) and its 64-byte rules, as many as the
+//                   rule count says (up to 64), which pick the background
+//                   shown instead of E's. A .SPEC256 sends it only to a core
+//                   whose NextREG 0x3E reads as level 2 or above
+//   Ann             then 49152 raw bytes: background nn (00 to 1f; BGX2's are
+//                   04 up) likewise; only with L
 //   Pn              W's words for 0xC000 to 0xFFFF are bank n's (0 to 7;
 //                   0 after H): the board keeps banks other than 5, 2 and
 //                   0 in DDR3; banks_with_planes marks each n given (H
@@ -41,7 +48,7 @@
 //                   to the left edge the board measures (kept by H)
 //   H               everything off: colour mode, the planes (S0), rules
 //                   flags, CFG, rules, ZX-Poly mode, options, backgrounds and
-//                   BGX1 rules
+//                   BGX1 or BGX2 rules
 //
 // abort returns the parser to waiting for a command from any state, the
 // middle of a raw payload included, without changing what was loaded.
@@ -75,14 +82,16 @@ module nexttang_spec256_uart_loader (
     output reg  [7:0]  rules_flags,
 
     output reg         background_write,
-    output reg  [1:0]  background_image,
+    output reg  [4:0]  background_image,
     output reg  [15:0] background_address,
     output reg  [7:0]  background_index,
     output wire        background_present,   // set by B, cleared by H
-    output reg  [3:0]  backgrounds_present,  // image n complete, cleared by H
+    output reg  [31:0] backgrounds_present,  // image n complete, cleared by H
     output reg         bgx_clear,            // one cycle: H
     output reg         bgx_write,
-    output reg  [9:0]  bgx_index,
+    output reg         bgx_wide,             // L's rules, not E's
+    output reg         bgx_last,             // with the last bgx_write
+    output reg  [12:0] bgx_index,
     output reg  [7:0]  bgx_data,
     output reg  [23:0] cfg,                  // up, down, flags
     output reg  [511:0] rules,               // rule i in 64i+63..64i, byte j at 8j
@@ -110,6 +119,10 @@ module nexttang_spec256_uart_loader (
     reg [2:0]  byte_of_word;
     reg [9:0]  palette_bytes;
     reg [7:0]  low_byte;
+    reg [6:0]  bgx_rule_count;
+
+    // L's rule count arrives as its second byte, before any rule could end.
+    wire [12:0] bgx_end = bgx_wide ? {bgx_rule_count, 6'd0} + 13'd3 : 13'd515;
 
     wire is_digit = (byte_in >= "0" && byte_in <= "9") ||
                     (byte_in >= "a" && byte_in <= "f") ||
@@ -128,13 +141,15 @@ module nexttang_spec256_uart_loader (
         background_write <= 1'b0;
         bgx_clear <= 1'b0;
         bgx_write <= 1'b0;
+        bgx_last <= 1'b0;
         if (reset) begin
             state <= IDLE;
             spec256_mode <= 1'b0;
             arm_pc <= 16'd0;
             rules_flags <= 8'd0;
-            backgrounds_present <= 4'd0;
+            backgrounds_present <= 32'd0;
             bgx_clear <= 1'b1;
+            bgx_wide <= 1'b0;
             cfg <= 24'd0;
             rules <= 512'd0;
             zxpoly_mode <= 3'd0;
@@ -156,15 +171,22 @@ module nexttang_spec256_uart_loader (
                         "U": begin digits_left <= 4'd2; state <= HEX; end
                         "C": begin digits_left <= 4'd6; state <= HEX; end
                         "B": begin
-                            next_address <= 16'd0; background_image <= 2'd0;
+                            next_address <= 16'd0; background_image <= 5'd0;
                             backgrounds_present[0] <= 1'b0; state <= BACKGROUND;
                         end
                         "M": begin digits_left <= 4'd1; state <= HEX; end
                         "P": begin digits_left <= 4'd1; state <= HEX; end
-                        "E": begin next_address <= 16'd0; state <= BGX; end
+                        "E": begin
+                            next_address <= 16'd0; bgx_wide <= 1'b0; state <= BGX;
+                        end
+                        "L": begin
+                            next_address <= 16'd0; bgx_wide <= 1'b1;
+                            bgx_rule_count <= 7'd64; state <= BGX;
+                        end
+                        "A": begin digits_left <= 4'd2; state <= HEX; end
                         "Q": begin palette_bytes <= 10'd0; state <= PALETTE; end
                         "H": begin
-                            disarm <= 1'b1; spec256_mode <= 1'b0; backgrounds_present <= 4'd0;
+                            disarm <= 1'b1; spec256_mode <= 1'b0; backgrounds_present <= 32'd0;
                             bgx_clear <= 1'b1;
                             rules_flags <= 8'd0; cfg <= 24'd0; rules <= 512'd0;
                             zxpoly_mode <= 3'd0; options <= 8'd0;
@@ -213,8 +235,13 @@ module nexttang_spec256_uart_loader (
                                 state <= IDLE;
                             end else if (command == "M") begin
                                 next_address <= 16'd0;
-                                background_image <= digit[1:0];
-                                backgrounds_present[digit[1:0]] <= 1'b0;
+                                background_image <= {3'd0, digit[1:0]};
+                                backgrounds_present[{3'd0, digit[1:0]}] <= 1'b0;
+                                state <= BACKGROUND;
+                            end else if (command == "A") begin
+                                next_address <= 16'd0;
+                                background_image <= {value[0], digit};
+                                backgrounds_present[{value[0], digit}] <= 1'b0;
                                 state <= BACKGROUND;
                             end else if (command == "C") begin
                                 cfg <= {value[19:0], digit};
@@ -275,11 +302,15 @@ module nexttang_spec256_uart_loader (
 
                 BGX: begin
                     bgx_write <= 1'b1;
-                    bgx_index <= next_address[9:0];
+                    bgx_index <= next_address[12:0];
                     bgx_data <= byte_in;
                     next_address <= next_address + 16'd1;
-                    if (next_address == 16'd515)
+                    if (bgx_wide && next_address == 16'd1)
+                        bgx_rule_count <= byte_in > 8'd64 ? 7'd64 : byte_in[6:0];
+                    if (next_address[12:0] == bgx_end) begin
+                        bgx_last <= 1'b1;
                         state <= IDLE;
+                    end
                 end
 
                 default: state <= IDLE;

@@ -283,6 +283,8 @@ module `NEXTTANG_ZXNEXT_TOP (
     // claims it, aborts it and reads its status (see the loader below).
     wire [7:0]  spec256_nr_status;
     localparam [7:0] SPEC256_NR_ID = 8'hA1;
+    localparam [7:0] SPEC256_NR_LEVEL = 8'h02;
+    reg spec256_nr_read_level = 1'b0;
     reg         spec256_cpu_owned = 1'b0;
     reg         spec256_abort = 1'b0;
     wire        spec256_payload;
@@ -299,11 +301,13 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire        spec256_background_write;
     wire [15:0] spec256_background_address;
     wire [7:0]  spec256_background_index;
-    wire [1:0]  spec256_background_image;
-    wire [3:0]  spec256_backgrounds_present;
+    wire [4:0]  spec256_background_image;
+    wire [31:0] spec256_backgrounds_present;
     wire        spec256_bgx_clear;
     wire        spec256_bgx_write;
-    wire [9:0]  spec256_bgx_index;
+    wire        spec256_bgx_wide;
+    wire        spec256_bgx_last;
+    wire [12:0] spec256_bgx_index;
     wire [7:0]  spec256_bgx_data;
     wire [2:0]  spec256_plane_bank;
     wire [7:0]  spec256_banks_with_planes;
@@ -547,7 +551,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .o_SPEC256_MMU(s256_mmu),
         .o_SPEC256_ULA_SHADOW(s256_ula_shadow),
         .o_SPEC256_RETN(s256_retn),
-        .i_SPEC256_NR_3E(SPEC256_NR_ID),
+        .i_SPEC256_NR_3E(spec256_nr_read_level ? SPEC256_NR_LEVEL : SPEC256_NR_ID),
         .i_SPEC256_NR_3F(spec256_nr_status)
     );
 
@@ -1281,7 +1285,7 @@ module `NEXTTANG_ZXNEXT_TOP (
 
     // Spec256 backgrounds: the loader's images go to DDR3 (image 0 also
     // straight into the overlay's memory, which shows it first), and the
-    // BGX1 rules pick which one the overlay's memory holds. A new pick is
+    // BGX1 or BGX2 rules pick which one the overlay's memory holds. A new pick is
     // copied in from DDR3 during the border after the picture (ULA line
     // 192), about 2 ms, before the next picture starts.
     reg [1:0] background_frame_sync = 2'b00;
@@ -1314,13 +1318,15 @@ module `NEXTTANG_ZXNEXT_TOP (
     end
     wire background_rule_write = s256_writing && !s256_write_now && s256_write_page < 8'd16;
 
-    wire [2:0] background_selected;
+    wire [5:0] background_selected;      // bit 5: none
     wire       background_rules_valid;
     nexttang_spec256_background_rules background_rules (
         .clock(clock_28),
         .reset(!machine_locked),
         .clear(spec256_bgx_clear),
         .load_write(spec256_bgx_write),
+        .load_wide(spec256_bgx_wide),
+        .load_last(spec256_bgx_last),
         .load_index(spec256_bgx_index),
         .load_data(spec256_bgx_data),
         .running(spec256_graphics),
@@ -1329,7 +1335,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .write_address({s256_write_page[3:0], s256_write_a[12:0]}),
         .write_data(s256_write_value),
         .valid(background_rules_valid),
-        .selected(background_selected)
+        .selected(background_selected),
+        .overflow()
     );
 
     wire        background_copy_busy;
@@ -1337,16 +1344,16 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [15:0] background_copy_address;
     wire [7:0]  background_copy_data;
     wire        background_lost;
-    reg  [2:0]  background_displayed = 3'd0;   // the image in the overlay's memory
-    wire        background_wanted = background_selected < 3'd4 &&
-                                    spec256_backgrounds_present[background_selected[1:0]];
+    reg  [5:0]  background_displayed = 6'd0;   // the image in the overlay's memory
+    wire        background_wanted = !background_selected[5] &&
+                                    spec256_backgrounds_present[background_selected[4:0]];
     wire        background_copy_start = spec256_graphics && background_wanted &&
                                         background_selected != background_displayed &&
                                         !background_copy_busy;
-    wire        loader_background_0 = spec256_background_write && spec256_background_image == 2'd0;
+    wire        loader_background_0 = spec256_background_write && spec256_background_image == 5'd0;
     always @(posedge clock_28)
         if (loader_background_0)
-            background_displayed <= 3'd0;
+            background_displayed <= 6'd0;
         else if (background_copy_start)
             background_displayed <= background_selected;
 
@@ -1369,7 +1376,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .load_data(spec256_background_index),
         .lost(background_lost),
         .copy_start(background_copy_start),
-        .copy_image(background_selected[1:0]),
+        .copy_image(background_selected[4:0]),
         .copy_busy(background_copy_busy),
         .copy_write(background_copy_write),
         .copy_address(background_copy_address),
@@ -2323,10 +2330,13 @@ module `NEXTTANG_ZXNEXT_TOP (
     // once the CPU claims it, from NextREG writes, so a NextZXOS dot command
     // can load a game's colour without a host:
     //   NextREG 0x3E  write: one loader byte; read: SPEC256_NR_ID (0xA1:
-    //                 marker A, interface version 1)
+    //                 marker A, interface version 1), or with 0x3F bit 6 set
+    //                 SPEC256_NR_LEVEL (2: L and A understood). An older core
+    //                 reads 0xA1 either way.
     //   NextREG 0x3F  write: bit 0 the CPU owns the loader (UART loader bytes
-    //                 are then ignored; other UART commands still act), bit 7
-    //                 abort (the parser waits for a command again);
+    //                 are then ignored; other UART commands still act), bit 6
+    //                 0x3E reads the level, bit 7 abort (the parser waits for
+    //                 a command again);
     //                 read: bit 0 planes mode (S1), 1 inside a raw payload,
     //                 2 armed, 3 colour running, 4 desync, 5 background
     //                 present, 6 E/M/P understood (always 1 here), 7 the
@@ -2351,8 +2361,10 @@ module `NEXTTANG_ZXNEXT_TOP (
         spec256_abort <= !spec256_cpu_owned && pi_frame_active && !pi_frame_active_previous;
         if (!machine_locked) begin
             spec256_cpu_owned <= 1'b0;
+            spec256_nr_read_level <= 1'b0;
         end else if (core_nr_write && core_nr_register == 8'h3F) begin
             spec256_cpu_owned <= core_nr_data[0];
+            spec256_nr_read_level <= core_nr_data[6];
             spec256_abort <= core_nr_data[7];
         end
     end
@@ -2384,6 +2396,8 @@ module `NEXTTANG_ZXNEXT_TOP (
         .backgrounds_present(spec256_backgrounds_present),
         .bgx_clear(spec256_bgx_clear),
         .bgx_write(spec256_bgx_write),
+        .bgx_wide(spec256_bgx_wide),
+        .bgx_last(spec256_bgx_last),
         .bgx_index(spec256_bgx_index),
         .bgx_data(spec256_bgx_data),
         .cfg(spec256_cfg),
@@ -2403,11 +2417,13 @@ module `NEXTTANG_ZXNEXT_TOP (
     assign spec256_background_write = 1'b0;
     assign spec256_background_address = 16'd0;
     assign spec256_background_index = 8'd0;
-    assign spec256_background_image = 2'd0;
-    assign spec256_backgrounds_present = 4'd0;
+    assign spec256_background_image = 5'd0;
+    assign spec256_backgrounds_present = 32'd0;
     assign spec256_bgx_clear = 1'b0;
     assign spec256_bgx_write = 1'b0;
-    assign spec256_bgx_index = 10'd0;
+    assign spec256_bgx_wide = 1'b0;
+    assign spec256_bgx_last = 1'b0;
+    assign spec256_bgx_index = 13'd0;
     assign spec256_bgx_data = 8'd0;
     assign spec256_cfg = 24'd0;
     assign spec256_rules = 512'd0;
