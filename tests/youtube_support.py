@@ -134,8 +134,8 @@ class FakeTransport:
 
 def channel_resource(
     channel_id: str = CHANNEL_ID,
-    title: str = "NextTang",
-    handle: str = "@nexttangfpga",
+    title: str = "JonOverDoesIt",
+    handle: str = "@jonoverdoesit",
     uploads: str = "UUzUSXeiPI3JMhlE5rmES4zA",
 ) -> dict[str, Any]:
     return {
