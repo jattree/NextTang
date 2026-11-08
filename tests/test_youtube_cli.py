@@ -12,8 +12,11 @@ import json
 import os
 import struct
 import tempfile
+import threading
 import time
 import unittest
+import urllib.error
+import urllib.request
 import zlib
 from pathlib import Path
 from unittest import mock
@@ -28,15 +31,22 @@ from youtube_support import (
     error_payload,
 )
 
-from nexttang_youtube import oauth, redaction, storage
+from nexttang_youtube import oauth, operations, redaction, storage
+from nexttang_youtube.api import YouTubeApi
 from nexttang_youtube.cli import main
 from nexttang_youtube.errors import (
+    EXIT_API,
     EXIT_AUTH_REQUIRED,
     EXIT_CHANNEL_MISMATCH,
+    EXIT_ERROR,
+    EXIT_INTERRUPTED,
     EXIT_NO_CREDENTIALS,
     EXIT_OK,
     EXIT_QUOTA,
+    EXIT_USAGE,
 )
+
+UPLOAD_SESSION = "https://www.googleapis.com/upload/session/abc"
 
 
 @contextlib.contextmanager
@@ -877,7 +887,7 @@ class ApplyTests(DryRunTests):
         self.assertEqual(body["id"], CHANNEL_ID)
         self.assertIn("part=brandingSettings", writes[0].url)
         channel_block = body["brandingSettings"]["channel"]
-        self.assertEqual(channel_block["description"], "A new channel description for NextTang.\n")
+        self.assertEqual(channel_block["description"], "A new channel description for NextTang.")
         self.assertEqual(channel_block["keywords"], "fpga tang zxspectrumnext")
         self.assertEqual(channel_block["country"], "GB")
         self.assertEqual(channel_block["unsubscribedTrailer"], "abcdefghijk")
@@ -979,6 +989,247 @@ class ApplyTests(DryRunTests):
         session_request = transport.calls_to("/upload/youtube/v3/videos")[0]
         self.assertEqual(session_request.json_body()["status"]["privacyStatus"], "private")
         self.assertIn("uploadType=resumable", session_request.url)
+
+
+    # ------------------------------------------------- operator text files
+
+    def test_a_trailing_newline_is_not_a_description_change(self) -> None:
+        self.description.write_text("Original description\n", encoding="utf-8")
+        transport = self._read_routes()
+        code, _, err = self.run_cli(
+            ["channel", "set-description", "--file", str(self.description)], transport
+        )
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("identical", err)
+
+    def test_the_applied_description_carries_no_trailing_newline(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_MANAGE],
+            capabilities=["channel-write"],
+        )
+        transport = self._read_routes()
+        transport.route("PUT", "/channels", payload={"id": CHANNEL_ID})
+        code, _, _ = self.run_cli(
+            ["channel", "set-description", "--file", str(self.description), "--apply"], transport
+        )
+        self.assertEqual(code, EXIT_OK)
+        body = transport.mutating_requests[0].json_body()
+        self.assertEqual(
+            body["brandingSettings"]["channel"]["description"], "A new channel description for NextTang."
+        )
+
+    def test_a_reply_is_posted_without_the_trailing_newline(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["comment-reply"],
+        )
+        transport = self._reply_routes()
+        transport.route("POST", "/comments", payload={"id": "Ugx123.reply"})
+        self.run_cli(
+            ["comments", "reply", "Ugx123", "--text-file", str(self.reply), "--apply"], transport
+        )
+        text = transport.mutating_requests[0].json_body()["snippet"]["textOriginal"]
+        self.assertEqual(text, "Thanks. The 138K board is still in transit.")
+
+    # ------------------------------------------------------ thumbnail 403
+
+    def test_a_forbidden_thumbnail_points_at_verification_not_login(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_FORCE_SSL],
+            capabilities=["thumbnail-write"],
+        )
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "GET", "/videos", payload={"items": [{"id": "vid123", "snippet": {"channelId": CHANNEL_ID}}]}
+        )
+        transport.route(
+            "POST",
+            "/upload/youtube/v3/thumbnails/set",
+            status=403,
+            payload=error_payload(
+                403,
+                "forbidden",
+                "The authenticated user doesn't have permissions to upload and set custom video thumbnails.",
+            ),
+        )
+        code, _, err = self.run_cli(
+            ["videos", "set-thumbnail", "vid123", "--file", str(self.thumbnail), "--apply"],
+            transport,
+        )
+        self.assertEqual(code, EXIT_API)
+        self.assertIn("youtube.com/verify", err)
+        self.assertNotIn("auth login --enable", err)
+
+    # ----------------------------------------------------- interruptions
+
+    def test_an_interrupted_apply_does_not_claim_nothing_changed(self) -> None:
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_MANAGE],
+            capabilities=["channel-write"],
+        )
+        transport = self._read_routes()
+        with mock.patch.object(YouTubeApi, "update_channel_branding", side_effect=KeyboardInterrupt):
+            code, _, err = self.run_cli(
+                ["channel", "set-description", "--file", str(self.description), "--apply"], transport
+            )
+        self.assertEqual(code, EXIT_INTERRUPTED)
+        self.assertNotIn("no change was applied", err)
+        self.assertIn("may already have reached YouTube", err)
+
+
+class UploadSessionTests(CliTestCase):
+    """An interrupted upload is resumed, never silently started again."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write_credentials(
+            scopes=[*oauth.READ_ONLY_SCOPES, oauth.SCOPE_YOUTUBE_UPLOAD],
+            capabilities=["upload"],
+        )
+        self.video = Path(self.temporary.name) / "devlog-001.mp4"
+        self.video.write_bytes(bytes(index % 251 for index in range(4096)))
+
+    def _upload(self, transport: FakeTransport, *flags: str) -> tuple[int, str, str]:
+        return self.run_cli(
+            ["videos", "upload", str(self.video), "--privacy", "private", "--apply", *flags],
+            transport,
+        )
+
+    def _new_session_routes(self) -> FakeTransport:
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route(
+            "POST", "/upload/youtube/v3/videos", payload={}, headers={"Location": UPLOAD_SESSION}
+        )
+        return transport
+
+    def _save_session(self, **overrides: object) -> None:
+        record = {
+            "session_url": UPLOAD_SESSION,
+            "path": str(self.video),
+            "size": 4096,
+            "sha256": operations.sha256_of(self.video),
+            "channel_id": CHANNEL_ID,
+            "title": "devlog-001",
+            "started_at": "2026-10-20T10:00:00Z",
+        }
+        record.update(overrides)
+        storage.write_secret_json(storage.upload_session_path(), record)
+
+    def test_a_completed_upload_leaves_no_saved_session(self) -> None:
+        transport = self._new_session_routes()
+        transport.route("PUT", UPLOAD_SESSION, payload={"id": "newvid"})
+        code, _, _ = self._upload(transport)
+        self.assertEqual(code, EXIT_OK)
+        self.assertFalse(storage.upload_session_path().exists())
+
+    def test_a_failed_upload_keeps_the_session_and_says_how_to_resume(self) -> None:
+        transport = self._new_session_routes()
+        transport.route("PUT", UPLOAD_SESSION, status=400, payload=error_payload(400, "badRequest"))
+        code, _, err = self._upload(transport)
+        self.assertEqual(code, EXIT_API)
+        self.assertIn("--resume", err)
+        saved = storage.read_json(storage.upload_session_path())
+        self.assertEqual(saved["session_url"], UPLOAD_SESSION)
+        self.assertEqual(storage.permissions(storage.upload_session_path()), 0o600)
+        self.assertNotIn(UPLOAD_SESSION, err, "the session URL is a credential and stays on disk")
+
+    def test_an_interrupted_upload_keeps_the_session(self) -> None:
+        transport = self._new_session_routes()
+        with mock.patch.object(YouTubeApi, "upload_file", side_effect=KeyboardInterrupt):
+            code, _, err = self._upload(transport)
+        self.assertEqual(code, EXIT_INTERRUPTED)
+        self.assertIn("--resume", err)
+        self.assertTrue(storage.upload_session_path().exists())
+
+    def test_an_unfinished_session_blocks_a_new_upload(self) -> None:
+        self._save_session()
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        code, _, err = self.run_cli(
+            ["videos", "upload", str(self.video), "--privacy", "private"], transport
+        )
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("unfinished upload session", err)
+        self.assertIn("--resume", err)
+        self.assertIn("--restart", err)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_resume_continues_the_saved_session(self) -> None:
+        self._save_session()
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route("PUT", UPLOAD_SESSION, status=308, headers={"Range": "bytes=0-1023"}, times=1)
+        transport.route("PUT", UPLOAD_SESSION, payload={"id": "resumed"}, times=1)
+
+        code, out, _ = self._upload(transport, "--resume")
+
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("video id:", out)
+        self.assertIn("resumed", out)
+        self.assertEqual(transport.calls_to("/upload/youtube/v3/videos"), [], "no new session")
+        ranges = [request.headers["Content-Range"] for request in transport.calls_to(UPLOAD_SESSION)]
+        self.assertEqual(ranges, ["bytes */4096", "bytes 1024-4095/4096"])
+        self.assertFalse(storage.upload_session_path().exists())
+
+    def test_resume_refuses_a_different_file(self) -> None:
+        self._save_session(sha256="0" * 64)
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        code, _, err = self._upload(transport, "--resume")
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("is not the file", err)
+        self.assertEqual(transport.mutating_requests, [])
+
+    def test_resume_without_a_saved_session_is_refused(self) -> None:
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        code, _, err = self._upload(transport, "--resume")
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("no unfinished upload session", err)
+
+    def test_an_expired_session_is_discarded(self) -> None:
+        self._save_session()
+        transport = FakeTransport().route("GET", "mine=true", payload=channel_resource())
+        transport.route("PUT", UPLOAD_SESSION, status=404, payload=error_payload(404, "notFound"))
+        code, _, err = self._upload(transport, "--resume")
+        self.assertEqual(code, EXIT_API)
+        self.assertIn("expired", err)
+        self.assertIn("videos list", err)
+        self.assertFalse(storage.upload_session_path().exists())
+
+    def test_restart_abandons_the_saved_session(self) -> None:
+        self._save_session(path="/elsewhere/old.mp4", sha256="0" * 64)
+        transport = self._new_session_routes()
+        transport.route("PUT", UPLOAD_SESSION, payload={"id": "fresh"})
+        code, _, _ = self._upload(transport, "--restart")
+        self.assertEqual(code, EXIT_OK)
+        self.assertEqual(len(transport.calls_to("/upload/youtube/v3/videos")), 1)
+        self.assertFalse(storage.upload_session_path().exists())
+
+    def test_resume_and_restart_cannot_be_combined(self) -> None:
+        code, _, _ = self._upload(FakeTransport(), "--resume", "--restart")
+        self.assertEqual(code, EXIT_USAGE)
+
+
+class StoredFileTests(CliTestCase):
+    """A damaged credential file is reported, not raised as a traceback."""
+
+    def test_a_truncated_token_is_reported_with_a_fix(self) -> None:
+        storage.token_path().write_text('{"refresh_token": "abc', encoding="utf-8")
+        code, _, err = self.run_cli(["status", "--offline"], FakeTransport())
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertIn("cannot read", err)
+        self.assertIn("auth login", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_a_token_that_is_not_an_object_is_reported(self) -> None:
+        storage.token_path().write_text("[]", encoding="utf-8")
+        code, _, err = self.run_cli(["auth", "status"], FakeTransport())
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertIn("not a JSON object", err)
+
+    def test_a_damaged_client_secret_is_reported_with_a_fix(self) -> None:
+        storage.client_secret_path().write_text("not json", encoding="utf-8")
+        code, _, err = self.run_cli(["auth", "login", "--no-browser"], FakeTransport())
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertIn("client_secret.json", err)
+        self.assertIn("Re-download", err)
 
 
 class ReplyTargetTests(CliTestCase):
@@ -1199,7 +1450,14 @@ class CapabilityGuardTests(CliTestCase):
 class LoginPersistenceTests(CliTestCase):
     """A login for the wrong channel must leave nothing usable behind."""
 
-    def _run_login(self, transport: FakeTransport, channel_payload: dict) -> tuple[int, str, str]:
+    def _run_login(
+        self,
+        transport: FakeTransport,
+        channel_payload: dict,
+        *,
+        revoke_status: int = 200,
+        revoke_error: str | None = None,
+    ) -> tuple[int, str, str]:
         request = oauth.LoginRequest(
             authorisation_url="https://accounts.google.com/o/oauth2/v2/auth?client_id=x",
             redirect_uri="http://127.0.0.1:9999",
@@ -1219,7 +1477,13 @@ class LoginPersistenceTests(CliTestCase):
             },
         )
         transport.route("GET", "mine=true", payload=channel_payload)
-        transport.route("POST", "oauth2.googleapis.com/revoke", payload={})
+        transport.route(
+            "POST",
+            "oauth2.googleapis.com/revoke",
+            payload={} if revoke_status == 200 else {"error": "invalid_token"},
+            status=revoke_status,
+            error=revoke_error,
+        )
 
         with mock.patch.object(oauth, "start_login", return_value=request), mock.patch.object(
             oauth, "await_authorisation_code", return_value="auth-code"
@@ -1246,6 +1510,27 @@ class LoginPersistenceTests(CliTestCase):
         self.assertEqual(len(revocations), 1, "the unwanted authorisation must be withdrawn")
         self.assertIn(b"token=", revocations[0].body or b"")
 
+    def test_a_refused_revocation_is_reported_honestly(self) -> None:
+        storage.remove(storage.token_path())
+        code, _, err = self._run_login(
+            FakeTransport(), channel_resource(channel_id=OTHER_CHANNEL_ID), revoke_status=400
+        )
+        self.assertEqual(code, EXIT_CHANNEL_MISMATCH)
+        self.assertNotIn("was revoked", err)
+        self.assertIn("myaccount.google.com/permissions", err)
+        self.assertFalse(storage.token_path().exists())
+
+    def test_a_failed_revocation_does_not_hide_the_channel_mismatch(self) -> None:
+        storage.remove(storage.token_path())
+        code, _, err = self._run_login(
+            FakeTransport(),
+            channel_resource(channel_id=OTHER_CHANNEL_ID),
+            revoke_error="connection reset",
+        )
+        self.assertEqual(code, EXIT_CHANNEL_MISMATCH)
+        self.assertIn(OTHER_CHANNEL_ID, err)
+        self.assertFalse(storage.token_path().exists())
+
     def test_a_correct_login_stores_the_token_at_0600(self) -> None:
         storage.remove(storage.token_path())
         transport = FakeTransport()
@@ -1256,6 +1541,37 @@ class LoginPersistenceTests(CliTestCase):
         self.assertEqual(storage.permissions(storage.token_path()), 0o600)
         self.assertIn(CHANNEL_ID, out)
         self.assertEqual(transport.calls_to("revoke"), [], "a good login revokes nothing")
+
+
+class LoopbackCallbackTests(unittest.TestCase):
+    """The loopback listener waits for Google's answer and nothing else."""
+
+    def setUp(self) -> None:
+        redaction.forget_secrets()
+        self.addCleanup(redaction.forget_secrets)
+
+    def test_a_stray_request_does_not_end_the_login(self) -> None:
+        request = oauth.start_login(oauth.ClientCredentials(client_id="x"), oauth.READ_ONLY_SCOPES)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        statuses: list[int] = []
+
+        def browser() -> None:
+            for path in ("/favicon.ico", f"/?state={request.state}&code=the-code"):
+                try:
+                    with opener.open(request.redirect_uri + path, timeout=5) as response:
+                        statuses.append(response.status)
+                except urllib.error.HTTPError as error:
+                    statuses.append(error.code)
+                    error.close()
+
+        thread = threading.Thread(target=browser)
+        thread.start()
+        try:
+            code = oauth.await_authorisation_code(request, timeout=10)
+        finally:
+            thread.join()
+        self.assertEqual(code, "the-code")
+        self.assertEqual(statuses, [404, 200])
 
 
 class AuthCommandTests(CliTestCase):

@@ -20,14 +20,17 @@ from .api import DEFAULT_LIMIT, MAX_LIMIT, YouTubeApi, validate_limit
 from .channel import CHANNEL_HANDLE, CHANNEL_ID, CHANNEL_TITLE, CHANNEL_URL, ChannelIdentity
 from .errors import (
     EXIT_AUTH_REQUIRED,
+    EXIT_INTERRUPTED,
     EXIT_NO_CREDENTIALS,
     EXIT_OK,
     CliError,
     ForeignContentError,
+    InterruptedWriteError,
     UsageError,
 )
 from .oauth import AuthSession, ClientCredentials
 from .output import Printer, truncate
+from .redaction import register_secret
 from .transport import Transport, UrllibTransport
 
 PROGRAM = "nexttang-youtube"
@@ -353,6 +356,8 @@ def _render_videos(printer: Printer, payload: dict[str, Any]) -> None:
 
 
 def command_videos_upload(context: Context) -> int:
+    if context.args.resume and context.args.restart:
+        raise UsageError("--resume and --restart cannot be combined")
     path = Path(context.args.path)
     plan = operations.plan_video_upload(
         path,
@@ -362,6 +367,9 @@ def command_videos_upload(context: Context) -> int:
     )
     identity = context.guarded_channel()
     plan.target = f"{path} -> channel {identity.channel_id}"
+    session_path = storage.upload_session_path()
+    pending = _pending_upload(plan, identity.channel_id, context.args)
+    resuming = pending is not None and context.args.resume
 
     if not context.args.apply:
         _emit_plan(context, plan, applied=False)
@@ -369,10 +377,51 @@ def command_videos_upload(context: Context) -> int:
 
     context.session.require_scope(oauth.SCOPE_YOUTUBE_UPLOAD, capability="upload")
     verified = context.guarded_channel(force=True)
-    session_url = context.api.start_resumable_upload(
-        plan.payload["metadata"], plan.payload["size"], UPLOAD_MIME_TYPE
+    if resuming:
+        session_url = str(pending["session_url"])
+        register_secret(session_url)
+    else:
+        session_url = context.api.start_resumable_upload(
+            plan.payload["metadata"], plan.payload["size"], UPLOAD_MIME_TYPE
+        )
+        register_secret(session_url)
+        # Saved before the first byte is sent, so an interruption at any point
+        # leaves a session that --resume can continue instead of a duplicate.
+        storage.write_secret_json(
+            session_path,
+            {
+                "session_url": session_url,
+                "path": str(path.resolve()),
+                "size": plan.payload["size"],
+                "sha256": plan.payload["sha256"],
+                "channel_id": verified.channel_id,
+                "title": plan.payload["metadata"]["snippet"]["title"],
+                "started_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        )
+
+    resume_hint = (
+        "The upload session is saved. Re-run the same command with --resume to continue "
+        "from what Google holds; nothing already sent is uploaded again."
     )
-    result = context.api.upload_file(session_url, path, UPLOAD_MIME_TYPE)
+    try:
+        if resuming:
+            result = context.api.resume_upload(session_url, path, UPLOAD_MIME_TYPE)
+        else:
+            result = context.api.upload_file(session_url, path, UPLOAD_MIME_TYPE)
+    except KeyboardInterrupt as interrupt:
+        raise InterruptedWriteError("interrupted during the upload", hint=resume_hint) from interrupt
+    except CliError as error:
+        if getattr(error, "status", None) in {404, 410}:
+            storage.remove(session_path)
+            error.hint = (
+                "The upload session has expired or was cancelled, so it has been discarded. "
+                "Check 'videos list' for a partial video, then upload again."
+            )
+        else:
+            error.hint = f"{error.hint} {resume_hint}" if error.hint else resume_hint
+        raise
+    storage.remove(session_path)
     _emit_plan(
         context,
         plan,
@@ -384,6 +433,70 @@ def command_videos_upload(context: Context) -> int:
         },
     )
     return EXIT_OK
+
+
+def _pending_upload(
+    plan: operations.Plan, channel_id: str, args: argparse.Namespace
+) -> dict[str, Any] | None:
+    """Reconcile a saved upload session with --resume and --restart.
+
+    Only one session is kept. Starting a second upload while one is unfinished
+    is refused without an explicit choice, because the earlier attempt may
+    already have produced a video and a silent restart invites a duplicate.
+    """
+    pending = storage.read_json(storage.upload_session_path())
+    if pending is None:
+        if args.resume:
+            raise UsageError(
+                "there is no unfinished upload session to resume",
+                hint="Run the command without --resume to start a new upload.",
+            )
+        return None
+
+    described = (
+        f"{pending.get('path')} ({pending.get('size')} bytes, title "
+        f"{pending.get('title')!r}, started {pending.get('started_at')})"
+    )
+    if args.restart:
+        plan.notes.insert(
+            0,
+            f"abandons the unfinished upload session for {described} and starts a new one; "
+            "the earlier attempt may already have produced a video, so check 'videos list'",
+        )
+        return pending
+    if not args.resume:
+        raise UsageError(
+            f"an unfinished upload session exists for {described}",
+            hint=(
+                "Re-run with --resume to continue it, or --restart to abandon it and start "
+                "again. Check 'videos list' first: an interrupted upload may already have "
+                "produced a video."
+            ),
+        )
+
+    if pending.get("channel_id") != channel_id:
+        raise UsageError(
+            f"the saved upload session belongs to channel {pending.get('channel_id')}, "
+            f"not {channel_id}",
+            hint="Use --restart to abandon it.",
+        )
+    if pending.get("size") != plan.payload["size"] or pending.get("sha256") != plan.payload["sha256"]:
+        raise UsageError(
+            f"{plan.payload['path']} is not the file the saved session was uploading: {described}",
+            hint="Pass the original file to --resume, or use --restart to abandon the session.",
+        )
+    plan.operation = "videos.upload (resume)"
+    plan.notes.insert(
+        0,
+        f"resumes the unfinished upload session for {described}; Google is asked how many "
+        "bytes it holds and only the rest is sent",
+    )
+    plan.notes.insert(
+        1,
+        "the title, description and privacy were fixed when the session started; "
+        "--title and --description-file do not change them",
+    )
+    return pending
 
 
 def command_videos_set_thumbnail(context: Context) -> int:
@@ -434,9 +547,7 @@ def command_videos_set_thumbnail(context: Context) -> int:
 
 def command_videos_update_metadata(context: Context) -> int:
     title = _read_text_file(Path(context.args.title_file), "title").strip()
-    description = _read_text_file(
-        Path(context.args.description_file), "description"
-    ).rstrip("\r\n")
+    description = _read_text_file(Path(context.args.description_file), "description")
     identity = context.guarded_channel()
     snippet = context.api.video_snippet(context.args.video_id)
     owner = snippet.get("channelId")
@@ -751,8 +862,19 @@ def command_auth_login(context: Context) -> int:
         identity = probe.my_channel()
         warnings = channel_module.verify(identity)
     except CliError:
-        oauth.post_revocation(context.transport, state.refresh_token)
-        printer.warn("the new authorisation was revoked and no token was stored")
+        # Report the revocation as it happened, and never let a failed
+        # revocation replace the error that explains why the login was refused.
+        try:
+            revoked = oauth.post_revocation(context.transport, state.refresh_token).ok
+        except CliError:
+            revoked = False
+        if revoked:
+            printer.warn("the new authorisation was revoked and no token was stored")
+        else:
+            printer.warn(
+                "no token was stored, but Google did not confirm revoking the new authorisation; "
+                "remove it at https://myaccount.google.com/permissions"
+            )
         raise
     for warning in warnings:
         printer.warn(warning)
@@ -861,6 +983,15 @@ def _emit_plan(
         printer.section("Notes")
         for note in plan.notes:
             printer.line(f"- {note}")
+    # The IDs Google assigned (video, reply, banner URL) are what the operator
+    # needs next, so they are shown here and not only in --json output.
+    results = {
+        key: value for key, value in (extra or {}).items() if not isinstance(value, (dict, list))
+    }
+    if results:
+        printer.section("Result")
+        for key, value in results.items():
+            printer.field(key.replace("_", " "), value)
     printer.line()
     if not applied:
         printer.line("No request was sent. Re-run with --apply to perform this change.")
@@ -884,10 +1015,15 @@ def _describe_file(mode: str) -> str:
 
 
 def _read_text_file(path: Path, label: str) -> str:
+    """Read operator-supplied text without the newline an editor adds at the end.
+
+    Left in place, that newline would be written to YouTube, count against the
+    length limit, and defeat the "identical to the current text" checks.
+    """
     if not path.exists():
         raise UsageError(f"{label} file not found: {path}")
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8").rstrip("\r\n")
     except UnicodeDecodeError as exc:
         raise UsageError(f"{label} file is not UTF-8 text: {path}") from exc
 
@@ -976,6 +1112,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     videos_upload.add_argument("--title", help="video title (defaults to the file stem)")
     videos_upload.add_argument("--description-file", help="UTF-8 file holding the video description")
+    videos_upload.add_argument(
+        "--resume", action="store_true", help="continue the saved unfinished upload of this file"
+    )
+    videos_upload.add_argument(
+        "--restart",
+        action="store_true",
+        help="abandon a saved unfinished upload and start a new one",
+    )
     videos_upload.set_defaults(handler=command_videos_upload)
 
     videos_thumbnail = video_commands.add_parser(
@@ -1090,8 +1234,12 @@ def main(argv: Sequence[str] | None = None, *, transport: Transport | None = Non
             printer.hint(error.hint)
         return error.exit_code
     except KeyboardInterrupt:
-        printer.error("interrupted; no change was applied")
-        return 130
+        if getattr(args, "apply", False):
+            printer.error("interrupted")
+            printer.hint("A write may already have reached YouTube. Check before retrying.")
+        else:
+            printer.error("interrupted; no change was applied")
+        return EXIT_INTERRUPTED
 
 
 if __name__ == "__main__":
