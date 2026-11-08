@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 NextTang contributors
 //
-// ZX Spectrum Next images for the Tang Console 138K.
+// ZX Spectrum Next images for the Tang Console 138K: the board shell.
 //
-// The pinned MiSTer ZXNext core runs on the machine clock tree with the
-// project's diagnostic boot ROM in place of the excluded upstream one. The
-// core's own HDMI window is captured at 7 MHz
-// and scaled into the established 720p output, and the status UART reports how
-// far the machine got without HDMI.
+// The shared machine (rtl/platform/nexttang_next_machine.v: the core, the
+// debug UART and the status taps) runs on this board's machine clock tree
+// with the project's diagnostic boot ROM in place of the excluded upstream
+// one. This shell supplies the clocks, main memory, video, audio, USB and SD.
+// The core's own HDMI window is captured at 7 MHz and scaled into the
+// established 720p output, and the status UART reports how far the machine
+// got without HDMI.
 //
 // Main memory depends on the profile. By default it is a 64 KiB block RAM
 // standing in for the 2 MB SRAM space; addresses alias above it, which is
@@ -82,16 +84,10 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire clock_28_n;
     wire clock_14;
     wire clock_7;
-    wire cpu_rising_enable;
     wire cpu_wait;              // main memory not ready: the Z80 waits
-    wire cpu_falling_enable;
-    wire cpu_enables_locked;
     wire psg_enable;
     wire machine_reset;
     wire machine_locked;
-    wire [1:0] cpu_speed;
-    wire cpu_contend;
-    wire cpu_clock_lsb;
 
 `ifdef NEXTTANG_ZXNEXT_DDR3
     // ------------------------------------------------------------ DDR3 clocks
@@ -147,41 +143,11 @@ module `NEXTTANG_ZXNEXT_TOP (
         .machine_reset(machine_reset),
         .clock_locked(machine_locked)
     );
-
-    // The CPU runs on clock_28. These enables mark where its rising and
-    // falling edges would have been, at the speed the core asks for and with
-    // 3.5 MHz contention, by MiSTer's rules.
-    nexttang_zxnext_cpu_enables cpu_enables (
-        .i_CLK_28(clock_28),
-        .i_CLK_7(clock_7),
-        .i_CPU_SPEED(cpu_speed),
-        .i_CPU_CONTEND(cpu_contend),
-        .i_CPU_CLK_LSB(cpu_clock_lsb),
-        .o_CEN_R(cpu_rising_enable),
-        .o_CEN_F(cpu_falling_enable),
-        .o_LOCKED(cpu_enables_locked)
-    );
-
-    // ------------------------------------------------------------------- core
-    // The core asks for its own resets through NextREG 0x02 and restarts when
-    // its video timing changes. The firmware soft-resets after loading the
-    // machine ROMs, so without this it would never start them.
-    wire       core_soft_reset_request;
-    wire       core_hard_reset_request;
-    wire [2:0] core_video_mode;
-    wire       core_reset;
-    wire       core_boot;
-
-    nexttang_zxnext_core_reset core_resets (
-        .clock_28(clock_28),
-        .machine_reset(machine_reset),
-        .soft_request(core_soft_reset_request),
-        .hard_request(core_hard_reset_request),
-        .video_mode(core_video_mode),
-        .core_reset(core_reset),
-        .core_boot(core_boot)
-    );
-
+    // ---------------------------------------------------------------- machine
+    // The board-independent machine (rtl/platform/nexttang_next_machine.v):
+    // the core, its CPU enables and resets, the debug UART with the Pi debug
+    // link and breakpoints, and the status taps. Its header states the
+    // memory, video, input and debug contracts this shell keeps.
     wire [20:0] ram_a_address;
     wire [20:0] layer2_address;
     wire [7:0]  layer2_data;
@@ -207,33 +173,32 @@ module `NEXTTANG_ZXNEXT_TOP (
     wire [7:0]  ram_c_read_data;
     wire        ram_c_ack;
     wire        ram_c_busy;
-    // The Pi debug slave's SPI pins, driven by the FPGA's own master below.
-    wire        pi_spi_ce_n;
-    wire        pi_spi_sclk;
-    wire        pi_spi_mosi;
-    wire [27:0] core_gpio;
-    // Hardware breakpoints (rtl/debug/nexttang_breakpoints.vhd).
-    wire [15:0] cpu_next_pc;
-    wire        cpu_stopped;
-    wire        cpu_break;
-    wire [63:0] core_mmu;
 
     wire [8:0]  core_rgb;
-    wire        core_vsync_n;
     wire        core_video_60;   // the core's 50/60 Hz setting: 1 for 60 Hz
     wire        core_hdmi_pixel;
     wire        core_hdmi_lock;
-    wire        core_m1_n;
-    wire        core_wr_n;
-    wire        core_rd_n;
-    wire [7:0]  core_bus_data;
-    wire        core_nr_write;
-    wire [7:0]  core_nr_register;
-    wire [7:0]  core_nr_data;
-    wire        core_iorq_n;
-    wire [15:0] core_bus_address;
     wire [12:0] core_audio_left;
     wire [12:0] core_audio_right;
+
+    // Keys and function keys held from the host over the debug UART (K and J
+    // commands), in the same order as the USB keyboards' and ORed with them.
+    wire [39:0] host_keys;
+    wire [10:1] host_functions;
+    // Debug UART bytes the machine leaves to the board (V below).
+    wire        board_command_valid;
+    wire [7:0]  command_byte;
+
+    // Status taps fed back from this shell's video, input and memory.
+    wire capture_frame_start;
+    wire capture_pixel_valid;
+    wire [8:0] capture_x;
+    wire [8:0] capture_y;
+    wire [8:0] capture_pixel;
+    wire capture_protocol_error;
+    wire frame_store_fault;
+    wire keyboard_connected;
+    wire input_active;
 
 `ifdef NEXTTANG_ZXNEXT_DDR3
     // Layer 2 reads come from a block RAM mirror of 16 KiB banks 8 to 31:
@@ -261,193 +226,93 @@ module `NEXTTANG_ZXNEXT_TOP (
     // share, so the memory commands are left out.
 `ifdef NEXTTANG_ZXNEXT_DDR3
     localparam [15:0] CORE_OPTION = 16'hFFF2;   // as official issue 4 and 5
+    wire [2:0] memory_faults = {fault_timeout, fault_overrun, fault_calibration_lost};
 `else
     localparam [15:0] CORE_OPTION = 16'hDEF2;
+    wire [2:0] memory_faults = 3'b0;
+`endif
+`ifdef NEXTTANG_ZXNEXT_IO
+    localparam integer SD_MONITOR = 1;
+`else
+    localparam integer SD_MONITOR = 0;
 `endif
 
-    zxnext #(
-        .g_video_def(3'b000),
-        .g_version(8'h32),
-        .g_sub_version(8'h05),   // official core 3.02.05
-        .g_video_inc(2'b10),
-        .g_layer2_units(LAYER2_UNITS),
-        .g_machine_id(8'h0A),
-        .g_board_issue(4'h2),
-        .g_option(CORE_OPTION)
-    ) core (
+    nexttang_next_machine #(
+        .LAYER2_UNITS(LAYER2_UNITS),
+        .CORE_OPTION(CORE_OPTION),
+        .SD_MONITOR(SD_MONITOR)
+    ) machine (
+        .clock_28(clock_28),
+        .clock_28_n(clock_28_n),
+        .clock_14(clock_14),
+        .clock_7(clock_7),
+        .psg_enable(psg_enable),
+        .machine_reset(machine_reset),
+        .machine_locked(machine_locked),
 
-        .i_CLK_28(clock_28),
-        .i_CLK_28_n(clock_28_n),
-        .i_CLK_14(clock_14),
-        .i_CLK_7(clock_7),
-        .i_CLK_CPU(clock_28),
-        .i_CPU_CEN_R(cpu_rising_enable),
-        .i_CPU_CEN_F(cpu_falling_enable),
-        .i_CLK_PSG_EN(psg_enable),
-        .o_CPU_SPEED(cpu_speed),
-        .o_CPU_CONTEND(cpu_contend),
-        .o_CPU_CLK_LSB(cpu_clock_lsb),
+        .ram_a_address(ram_a_address),
+        .ram_a_address_21(),
+        .ram_a_request(ram_a_request),
+        .ram_a_cycle_request(ram_a_cycle_request),
+        .ram_a_read_n(ram_a_read_n),
+        .ram_a_write_data(ram_a_write_data),
+        .ram_a_read_data(ram_a_read_data),
+        .cpu_wait(cpu_wait),
 
-        // Power-on reset doubles as the boot flag, as MiSTer's HW_RESET does.
-        .i_RESET(core_reset),
-        .i_BOOT(core_boot),
-        .o_RESET_SOFT(core_soft_reset_request),
-        .o_RESET_HARD(core_hard_reset_request),
-        .o_RESET_PERIPHERAL(),
-        .o_FLASH_BOOT(),
-        .o_CORE_ID(),
+        // The Layer 2 mirror answers the address directly, so the request
+        // toggle is not needed.
+        .layer2_address(layer2_address),
+        .layer2_request_toggle(),
+        .layer2_data(layer2_data),
 
-        .i_SPKEY_FUNCTION(function_keys),   // F10 down to F1
-        .i_SPKEY_BUTTONS(2'b0),
-        .i_SPKEY_FUNCTION_EXT(5'b0),
+        .ram_c_address(ram_c_address),
+        .ram_c_request(ram_c_request),
+        .ram_c_read_n(ram_c_read_n),
+        .ram_c_write_data(ram_c_write_data),
+        .ram_c_read_data(ram_c_read_data),
+        .ram_c_ack(ram_c_ack),
+        .ram_c_busy(ram_c_busy),
+        .memory_faults(memory_faults),
 
-        .o_KBD_CANCEL(),
-        .o_KBD_ROW(keyboard_rows),
-        .i_KBD_COL(keyboard_columns),
-        .i_KBD_EXTENDED_KEYS(16'hffff),
-        .o_KEYMAP_ADDR(),
-        .o_KEYMAP_DATA(),
-        .o_KEYMAP_WE(),
-        .o_JOYMAP_WE(),
-        .i_JOY_LEFT(left_joystick),
-        .i_JOY_RIGHT(12'b0),
-        .o_JOY_IO_MODE_EN(),
-        .o_JOY_IO_MODE_PIN_7(),
-        .o_JOY_LEFT_TYPE(),
-        .o_JOY_RIGHT_TYPE(),
-        .i_MOUSE_X(8'b0),
-        .i_MOUSE_Y(8'b0),
-        .i_MOUSE_BUTTON(3'b0),
-        .i_MOUSE_WHEEL(4'b0),
-        .o_PS2_MODE(),
-        .o_MOUSE_CONTROL(),
+        .core_rgb(core_rgb),
+        .core_hsync_n(),
+        .core_vsync_n(),
+        .core_blank_n(),
+        .core_video_60(core_video_60),
+        .core_hdmi_pixel(core_hdmi_pixel),
+        .core_hdmi_lock(core_hdmi_lock),
+        .core_hdmi_reset(),
+        .video_clock_locked(video_pll_locked),
+        .capture_frame_start(capture_frame_start),
+        .capture_pixel_valid(capture_pixel_valid),
+        .capture_x(capture_x),
+        .capture_y(capture_y),
+        .capture_pixel(capture_pixel),
+        .capture_protocol_error(capture_protocol_error),
+        .frame_store_fault(frame_store_fault),
 
-        .i_I2C_SCL_n(1'b1),
-        .i_I2C_SDA_n(1'b1),
-        .o_I2C_SCL_n(),
-        .o_I2C_SDA_n(),
+        .core_audio_left(core_audio_left),
+        .core_audio_right(core_audio_right),
 
-        .o_SPI_SS_FLASH_n(),
-        .o_SPI_SS_SD1_n(),
-        .o_SPI_SS_SD0_n(spi_sd0_select_n),
-        .o_SPI_SCK(spi_clock),
-        .o_SPI_MOSI(spi_mosi),
-        .i_SPI_SD_MISO(spi_sd_miso),
-        .i_SPI_FLASH_MISO(1'b1),
+        .keyboard_rows(keyboard_rows),
+        .keyboard_columns(keyboard_columns),
+        .function_keys(function_keys),
+        .left_joystick(left_joystick),
+        .right_joystick(12'b0),
+        .keyboard_connected(keyboard_connected),
+        .input_active(input_active),
+        .host_keys(host_keys),
+        .host_functions(host_functions),
 
-        .i_UART0_RX(1'b1),
-        .o_UART0_TX(),
-        .i_UART0_CTS_n(1'b0),
-        .o_UART0_RTR_n(),
+        .spi_clock(spi_clock),
+        .spi_mosi(spi_mosi),
+        .spi_sd0_select_n(spi_sd0_select_n),
+        .spi_sd_miso(spi_sd_miso),
 
-        .o_RGB(core_rgb),
-        .o_RGB_VS_n(core_vsync_n),
-        .o_RGB_BK_n(),
-        .o_RGB_HS_n(),
-        .o_VIDEO_50_60(core_video_60),
-        .o_VIDEO_SCANLINES(),
-        .o_VIDEO_SCANDOUBLE(),
-        .o_VIDEO_MODE(core_video_mode),
-        .o_MACHINE_TIMING(),
-        .o_HDMI_RESET(),
-        .o_HDMI_PIXEL(core_hdmi_pixel),
-        .o_HDMI_LOCK(core_hdmi_lock),
-
-        .o_AUDIO_HDMI_AUDIO_EN(),
-        .o_AUDIO_SPEAKER_EN(),
-        .o_AUDIO_SPEAKER_EXCL(),
-        .i_AUDIO_EAR(1'b0),
-        .o_AUDIO_MIC(),
-        .o_AUDIO_EAR(),
-        .o_AUDIO_L(core_audio_left),
-        .o_AUDIO_R(core_audio_right),
-        .o_AUDIO_PI_FE_EAR(),
-        .o_AUDIO_ISSUE2_FE_MIC(),
-
-        .o_RAM_A_ADDR(ram_a_address),
-        .o_RAM_A_ADDR_21(),
-        .o_RAM_A_REQ(ram_a_request),
-        .o_RAM_A_REQ2(ram_a_cycle_request),
-        .o_RAM_A_RD_n(ram_a_read_n),
-        .i_RAM_A_DI(ram_a_read_data),
-        .o_RAM_A_DO(ram_a_write_data),
-        // Active high. The port defaults to '1', which would hold the CPU.
-        .i_CPU_WAIT(cpu_wait),
-
-        .o_RAM_B_ADDR(layer2_address),
-        .o_RAM_B_REQ_T(),
-        .i_RAM_B_DI(layer2_data),
-
-        .o_RAM_C_ADDR(ram_c_address),
-        .o_RAM_C_REQ(ram_c_request),
-        .o_RAM_C_RD_n(ram_c_read_n),
-        .i_RAM_C_DI(ram_c_read_data),
-        .o_RAM_C_DO(ram_c_write_data),
-        .i_RAM_C_ACK(ram_c_ack),
-
-        .o_BUS_ADDR(core_bus_address),
-        .i_BUS_DI(8'hff),
-        .o_BUS_DO(core_bus_data),
-        .o_BUS_MREQ_n(),
-        .o_BUS_IORQ_n(),
-        .o_BUS_RD_n(core_rd_n),
-        .o_BUS_WR_n(core_wr_n),
-        .o_BUS_M1_n(core_m1_n),
-        .i_BUS_WAIT_n(1'b1),
-        .i_BUS_NMI_n(1'b1),
-        .i_BUS_INT_n(1'b1),
-        .o_BUS_INT_n(),
-        .i_BUS_BUSREQ_n(1'b1),
-        .o_BUS_BUSAK_n(),
-        .o_BUS_HALT_n(),
-        .o_BUS_RFSH_n(),
-        .o_BUS_IEO(),
-        .i_BUS_ROMCS_n(1'b1),
-        .i_BUS_IORQULA_n(1'b1),
-        .o_BUS_EN(),
-        .o_BUS_CLKEN(),
-        .o_BUS_NMI_DEBOUNCE_DISABLE(),
-        .o_BUS_P3_MTR_n(),
-        .o_BUS_P3_DRD_n(),
-        .o_BUS_P3_DWR_n(),
-
-        .i_ESP_GPIO_20(3'b111),
-        .o_ESP_GPIO_0(),
-        .o_ESP_GPIO_0_EN(),
-        // GPIO 8 to 11 carry the Pi debug slave's SPI (CE0, MISO, MOSI, SCLK).
-        // The slave is opened without NextREG 0xA0 so the debugger works
-        // whatever the Next's software has set.
-        .i_GPIO({16'b0, pi_spi_sclk, pi_spi_mosi, 1'b0, pi_spi_ce_n, 8'b0}),
-        .i_PI_SPI_SLAVE_FORCE(1'b1),
-        .o_CPU_NEXT_PC(cpu_next_pc),
-        .o_CPU_STOPPED(cpu_stopped),
-        .i_CPU_BREAK(cpu_break),
-        .o_MMU(core_mmu),
-        .o_GPIO(core_gpio),
-        .o_GPIO_EN(),
-
-        // The official core's Xilinx device DNA and XADC ports; the Gowin part
-        // has neither.
-        .o_XDNA_LOAD(),
-        .o_XDNA_SHIFT(),
-        .i_XDNA_DO(1'b0),
-        .o_XADC_RESET(),
-        .o_XADC_DEN(),
-        .o_XADC_DADDR(),
-        .o_XADC_DWE(),
-        .i_XADC_DRDY(1'b0),
-        .o_XADC_DI(),
-        .i_XADC_DO(16'h0000),
-        .i_XADC_BUSY(1'b0),
-        .i_XADC_EOC(1'b0),
-        .i_XADC_EOS(1'b0),
-        .o_XADC_CONVST(),
-        .o_XADC_CONTROL(),
-
-        .o_DEBUG_NR_WE(core_nr_write),
-        .o_DEBUG_NR_REG(core_nr_register),
-        .o_DEBUG_NR_DAT(core_nr_data),
-        .o_DEBUG_IORQ_n(core_iorq_n)
+        .debug_uart_rx(debug_uart_rx),
+        .debug_uart_tx(debug_uart_tx),
+        .board_command_valid(board_command_valid),
+        .board_command_byte(command_byte)
     );
 
     // ------------------------------------------------------------ keyboard, SD
@@ -601,15 +466,11 @@ module `NEXTTANG_ZXNEXT_TOP (
     // at most one cycle late, never as a phantom key.
     reg [39:0] keys_meta = 40'b0;
     reg [39:0] keys_sync = 40'b0;
-    // Keys held from the host over the debug UART (K command below), in the
-    // same order as the USB keyboards' and ORed with them.
-    reg [39:0] host_keys = 40'b0;
     reg [4:0] kempston_meta = 5'b0;
     reg [4:0] kempston_sync = 5'b0;
     // F1-F10 for the core's hot keys (F1 hard reset, F3 50/60 Hz, F4 soft
     // reset, F8 CPU speed, F9 Multiface NMI, F10 divMMC NMI); the core acts on
     // a press, so a held key does not repeat.
-    reg [10:1] host_functions = 10'b0;
     reg [10:1] functions_meta = 10'b0;
     reg [10:1] functions_sync = 10'b0;
 
@@ -632,15 +493,15 @@ module `NEXTTANG_ZXNEXT_TOP (
     // joystick word puts B, U, D, L and R.
     assign left_joystick = {7'b0, kempston_sync};
     assign function_keys = functions_sync;
-    wire keyboard_connected = usb1_type == 2'd1 || usb2_type == 2'd1;
-    wire input_active = |keys_sync || |kempston_sync;
+    assign keyboard_connected = usb1_type == 2'd1 || usb2_type == 2'd1;
+    assign input_active = |keys_sync || |kempston_sync;
 `else
     assign keyboard_columns = 5'b11111;
     assign function_keys = 10'b0;
     assign left_joystick = 12'b0;
     assign spi_sd_miso = 1'b1;
-    wire keyboard_connected = 1'b0;
-    wire input_active = 1'b0;
+    assign keyboard_connected = 1'b0;
+    assign input_active = 1'b0;
 `endif
 
     // ---------------------------------------------------------- main memory
@@ -976,13 +837,6 @@ module `NEXTTANG_ZXNEXT_TOP (
         sampled_pixel <= midpoint_pixel;
     end
 
-    wire capture_frame_start;
-    wire capture_pixel_valid;
-    wire [8:0] capture_x;
-    wire [8:0] capture_y;
-    wire [8:0] capture_pixel;
-    wire capture_protocol_error;
-
     nexttang_ula_capture #(
         .PIXEL_BITS(9)
     ) capture (
@@ -1123,7 +977,7 @@ module `NEXTTANG_ZXNEXT_TOP (
 
     // A late line from DDR3 is reported with the frame store's overrun.
     reg [1:0] frame_store_late_sync = 2'b00;
-    wire frame_store_fault = scaled_overrun || frame_store_late_sync[1];
+    assign frame_store_fault = scaled_overrun || frame_store_late_sync[1];
 
     always @(posedge clock_7)
         frame_store_late_sync <= {frame_store_late_sync[0], frame_store_late};
@@ -1156,7 +1010,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .output_frame_valid(scaled_frame_valid)
     );
 
-    wire frame_store_fault = scaled_overrun;
+    assign frame_store_fault = scaled_overrun;
 `endif
 
     // The frame store's read multiplexer and the HDMI transmitter do not fit
@@ -1242,388 +1096,10 @@ module `NEXTTANG_ZXNEXT_TOP (
 
     assign tmds_psv = 1'b1;
 
-    // --------------------------------------------------------------- reporting
-    // Opcode fetches and main-memory writes are counted in the 28 MHz domain.
-    // The diagnostic's test window at 0x8000 lands in SRAM page 0x24, which
-    // the stand-in memory sees at 0x8000.
-    reg m1_previous = 1'b1;
-    reg opcode_seen = 1'b0;
-    reg [15:0] opcode_count = 16'b0;
-    reg [15:0] opcode_address = 16'b0;
-    reg test_window_write_seen = 1'b0;
-
-    always @(posedge clock_28) begin
-        if (machine_reset) begin
-            m1_previous <= 1'b1;
-            opcode_seen <= 1'b0;
-            opcode_count <= 16'b0;
-            opcode_address <= 16'b0;
-            test_window_write_seen <= 1'b0;
-        end else begin
-            m1_previous <= core_m1_n;
-            if (m1_previous && !core_m1_n) begin
-                opcode_seen <= 1'b1;
-                opcode_count <= opcode_count + 1'b1;
-                opcode_address <= core_bus_address;
-            end
-            if (ram_a_request && ram_a_read_n && ram_a_address[15:14] == 2'b10)
-                test_window_write_seen <= 1'b1;
-        end
-    end
-
-    // The core's HDMI window begins with 16 pixels of blanking, so the border
-    // colour is sampled further in, at (24, 8), which is border in every mode.
-    reg [8:0] border_rgb = 9'b0;
-    reg frame_seen = 1'b0;
-    reg lit_pixel_seen = 1'b0;
-
-    always @(posedge clock_7) begin
-        if (!machine_locked) begin
-            border_rgb <= 9'b0;
-            frame_seen <= 1'b0;
-            lit_pixel_seen <= 1'b0;
-        end else begin
-            if (capture_frame_start)
-                frame_seen <= 1'b1;
-            if (capture_pixel_valid && capture_x == 9'd24 && capture_y == 9'd8)
-                border_rgb <= capture_pixel;
-            if (capture_pixel_valid && capture_pixel != 9'b0)
-                lit_pixel_seen <= 1'b1;
-        end
-    end
-
-    // V video PLL, M machine out of reset, R a non-black pixel captured,
-    // C opcode fetched, P test window written, Y frame captured.
-    wire [5:0] status_flags = {
-        frame_seen, test_window_write_seen, opcode_seen,
-        lit_pixel_seen, !machine_reset, video_pll_locked
-    };
-    // Last opcode address, border colour, USB keyboard connected, any key or
-    // joystick input held, capture and frame store faults (a dropped frame, or
-    // a line late from DDR3), then the memory service's timeout, overrun and
-    // calibration loss.
+    // ------------------------------------------------------- board commands
 `ifdef NEXTTANG_ZXNEXT_DDR3
-    wire [2:0] memory_faults = {fault_timeout, fault_overrun, fault_calibration_lost};
-`else
-    wire [2:0] memory_faults = 3'b0;
-`endif
-    wire [31:0] status_value = {
-        opcode_address, border_rgb, keyboard_connected, input_active,
-        capture_protocol_error, frame_store_fault, memory_faults
-    };
-
-    wire status_transmit;
-    wire trace_frozen;
-    wire trace_transmit;
-
-    // How much main memory holds the CPU, measured over windows of 2^24
-    // 28 MHz cycles (0.6 s): the cycles held, the holds begun and the longest
-    // hold, each reported for the last complete window.
-    reg [23:0] wait_window = 24'd0;
-    reg [23:0] wait_window_cycles = 24'd0;
-    reg [15:0] wait_window_holds = 16'd0;
-    reg [15:0] wait_window_longest = 16'd0;
-    reg [15:0] wait_hold_cycles = 16'd0;
-    reg        cpu_wait_previous = 1'b0;
-    reg [23:0] wait_cycles_reported = 24'd0;
-    reg [15:0] wait_holds_reported = 16'd0;
-    reg [15:0] wait_longest_reported = 16'd0;
-
-    always @(posedge clock_28) begin
-        cpu_wait_previous <= cpu_wait;
-        wait_window <= wait_window + 24'd1;
-        if (cpu_wait) begin
-            if (wait_hold_cycles != 16'hffff)
-                wait_hold_cycles <= wait_hold_cycles + 16'd1;
-        end else begin
-            wait_hold_cycles <= 16'd0;
-        end
-
-        if (wait_window == 24'hffffff) begin
-            wait_cycles_reported <= wait_window_cycles;
-            wait_holds_reported <= wait_window_holds;
-            wait_longest_reported <= wait_window_longest;
-            wait_window_cycles <= 24'd0;
-            wait_window_holds <= 16'd0;
-            wait_window_longest <= 16'd0;
-        end else begin
-            if (cpu_wait)
-                wait_window_cycles <= wait_window_cycles + 24'd1;
-            if (cpu_wait && !cpu_wait_previous && wait_window_holds != 16'hffff)
-                wait_window_holds <= wait_window_holds + 16'd1;
-            if (cpu_wait && wait_hold_cycles >= wait_window_longest)
-                wait_window_longest <= wait_hold_cycles + 16'd1;
-        end
-    end
-
-    // Whether the CPU is moving: a running count of its rising clock enables
-    // (it stops if contention or main memory holds the CPU for good), and how
-    // often the joystick input changes, which a boot-time check may be
-    // waiting to see settle.
-    reg [15:0] cpu_enable_count = 16'd0;
-    reg [11:0] joystick_changes = 12'd0;
-`ifdef NEXTTANG_ZXNEXT_IO
-    reg [4:0]  joystick_previous = 5'b0;
-`endif
-
-    always @(posedge clock_28) begin
-        if (cpu_rising_enable)
-            cpu_enable_count <= cpu_enable_count + 16'd1;
-`ifdef NEXTTANG_ZXNEXT_IO
-        joystick_previous <= kempston_sync;
-        if (kempston_sync != joystick_previous && joystick_changes != 12'hfff)
-            joystick_changes <= joystick_changes + 12'd1;
-`endif
-    end
-
-    // Interrupt acknowledges (IORQ with M1) less than 7 ms after the previous
-    // one: at 50 or 60 Hz that means one interrupt was taken twice.
-    reg [11:0] double_interrupts = 12'd0;
-    reg [17:0] since_acknowledge = 18'h3ffff;
-    reg        acknowledge_previous = 1'b0;
-
-    always @(posedge clock_28) begin
-        acknowledge_previous <= !core_iorq_n && !core_m1_n;
-        if (!core_iorq_n && !core_m1_n && !acknowledge_previous) begin
-            if (since_acknowledge < 18'd196000 && double_interrupts != 12'hfff)
-                double_interrupts <= double_interrupts + 12'd1;
-            since_acknowledge <= 18'd0;
-        end else if (since_acknowledge != 18'h3ffff) begin
-            since_acknowledge <= since_acknowledge + 18'd1;
-        end
-    end
-
-    // Every byte the SD card sends: MISO shifted in on each rising SCK while
-    // the card is selected, counted and summed, so boots that read the same
-    // files can be compared.
-    reg [23:0] sd_byte_count = 24'd0;
-    reg [31:0] sd_checksum = 32'd0;
-`ifdef NEXTTANG_ZXNEXT_IO
-    reg        sd_clock_previous = 1'b0;
-    reg        sd_miso_previous = 1'b1;
-    reg [2:0]  sd_bit_count = 3'd0;
-    reg [7:0]  sd_shift = 8'd0;
-
-    always @(posedge clock_28) begin
-        sd_clock_previous <= spi_clock;
-        sd_miso_previous <= sd_miso;
-        if (spi_sd0_select_n) begin
-            sd_bit_count <= 3'd0;
-        end else if (spi_clock && !sd_clock_previous) begin
-            sd_shift <= {sd_shift[6:0], sd_miso_previous};
-            sd_bit_count <= sd_bit_count + 3'd1;
-            // 0xff is what the card sends while it has nothing to say, and how
-            // many of those come varies, so they are left out.
-            if (sd_bit_count == 3'd7 && {sd_shift[6:0], sd_miso_previous} != 8'hff) begin
-                sd_byte_count <= sd_byte_count + 24'd1;
-                sd_checksum <= sd_checksum + {24'd0, sd_shift[6:0], sd_miso_previous};
-            end
-        end
-    end
-`endif
-
-    // The last I/O port the CPU read and the last it wrote, with the value
-    // written, to show what a polling loop is waiting on. Interrupt
-    // acknowledge cycles (IORQ with M1) are not counted.
-    reg [15:0] last_io_read_port = 16'h0000;
-    reg [15:0] last_io_write_port = 16'h0000;
-    reg [7:0]  last_io_write_data = 8'h00;
-
-    always @(posedge clock_28) begin
-        if (!core_iorq_n && core_m1_n && !core_rd_n)
-            last_io_read_port <= core_bus_address;
-        if (!core_iorq_n && core_m1_n && !core_wr_n) begin
-            last_io_write_port <= core_bus_address;
-            last_io_write_data <= core_bus_data;
-        end
-    end
-
-
-    // Which phase 7 MHz rises at against 14 MHz, seen on the falling edge of
-    // 28 MHz, when both are steady: bit 3 when 14 MHz was high as 7 MHz rose
-    // (the phase the core assumes), bit 2 when it was low. Sticky.
-    reg [3:0] divider_phase = 4'b0000;
-    reg       clock_7_seen = 1'b0;
-
-    always @(negedge clock_28) begin
-        clock_7_seen <= clock_7;
-        if (clock_7 && !clock_7_seen)
-            divider_phase <= divider_phase | (clock_14 ? 4'b1000 : 4'b0100);
-    end
-
-    nexttang_debug_status_uart #(
-        .CLOCK_HZ(7000000),
-        .GAP_CLOCKS(1750000),
-        .EXTRA_VALUE(5)
-    ) status_uart (
-        .clock(clock_7),
-        .reset(!machine_locked),
-        .flags(status_flags),
-        .value(status_value),
-        .extra({
-            wait_holds_reported, wait_longest_reported,
-            8'h00, wait_cycles_reported,
-            last_io_write_data, sd_byte_count,
-            sd_checksum,
-            cpu_wait, cpu_contend, 2'b00, double_interrupts, cpu_enable_count
-        }),
-        .transmit(status_transmit)
-    );
-
-    // Instruction-fetch history. It freezes after the CPU's first NMI, which is
-    // how NextZXOS reports access to missing hardware, and then takes over the
-    // UART to send what led up to it.
-    // Commands from the host on the debug UART's other wire: F freezes the
-    // fetch trace now, R re-arms it, and T followed by four hex digits sets the
-    // address whose fetch freezes it, and re-arms.
-    wire [7:0] command_byte;
-    wire command_valid;
-
-    nexttang_uart_receiver #(
-        .CLOCK_HZ(28000000),
-        .BAUD_RATE(115200)
-    ) command_receiver (
-        .clock(clock_28),
-        .reset(!machine_locked),
-        .receive(debug_uart_rx),
-        .data(command_byte),
-        .data_valid(command_valid)
-    );
-
-    // The official Pi debug protocol over this UART: X, a length and that many
-    // bytes go to the core's Pi debug slave as one SPI command, through the
-    // FPGA's own SPI master, and its reply comes back framed. While a frame is
-    // arriving its bytes are kept from the single-letter commands below; while
-    // a debug session is open the reply owns the transmit line.
-    wire       pi_frame_active;
-    wire       pi_session;
-    wire       pi_link_tx;
-    wire       pi_select;
-    wire       pi_byte_valid;
-    wire [7:0] pi_byte;
-    wire       pi_byte_ready;
-    wire       pi_reply_done;
-    wire [7:0] pi_reply;
-    wire       pi_spi_idle;
-    wire       board_command_valid = command_valid && !pi_frame_active;
-    wire       bp_strobe;
-    wire [7:0] bp_slot;
-    wire       bp_enable;
-    wire [15:0] bp_address;
-    wire       bp_paged;
-    wire [7:0] bp_page;
-    wire       bp_hit;
-
-    nexttang_pi_debug_uart_link #(
-        .CLOCK_HZ(28000000),
-        .BAUD_RATE(115200)
-    ) pi_debug_link (
-        .clock(clock_28),
-        .reset(!machine_locked),
-        .rx_valid(command_valid),
-        .rx_byte(command_byte),
-        .frame_active(pi_frame_active),
-        .session_active(pi_session),
-        .tx(pi_link_tx),
-        .spi_select(pi_select),
-        .spi_valid(pi_byte_valid),
-        .spi_byte(pi_byte),
-        .spi_ready(pi_byte_ready),
-        .spi_done(pi_reply_done),
-        .spi_reply(pi_reply),
-        .spi_idle(pi_spi_idle),
-        .bp_strobe(bp_strobe),
-        .bp_slot(bp_slot),
-        .bp_enable(bp_enable),
-        .bp_address(bp_address),
-        .bp_paged(bp_paged),
-        .bp_page(bp_page),
-        .inject_pause(bp_hit)
-    );
-
-    nexttang_breakpoints #(
-        .SLOTS(10)
-    ) breakpoints (
-        .clock(clock_28),
-        .reset(!machine_locked),
-        .write_strobe(bp_strobe),
-        .write_slot(bp_slot),
-        .write_enable(bp_enable),
-        .write_address(bp_address),
-        .write_paged(bp_paged),
-        .write_page(bp_page),
-        .mmu(core_mmu),
-        .next_pc(cpu_next_pc),
-        .cpu_stopped(cpu_stopped),
-        .break_now(cpu_break),
-        .hit(bp_hit)
-    );
-
-    nexttang_pi_spi_master pi_debug_spi (
-        .clock(clock_28),
-        .reset(!machine_locked),
-        .select_in(pi_select),
-        .byte_valid(pi_byte_valid),
-        .byte_in(pi_byte),
-        .byte_ready(pi_byte_ready),
-        .done(pi_reply_done),
-        .byte_out(pi_reply),
-        .idle(pi_spi_idle),
-        .memory_busy(ram_c_request || ram_c_busy),
-        .spi_ce_n(pi_spi_ce_n),
-        .spi_sclk(pi_spi_sclk),
-        .spi_mosi(pi_spi_mosi),
-        .spi_miso(core_gpio[9])
-    );
-
-    reg [2:0]  trigger_digits_left = 3'd0;
-    reg [15:0] trigger_command_address = 16'h0000;
-    reg        trigger_command_done = 1'b0;
-    wire       command_is_digit = (command_byte >= "0" && command_byte <= "9") ||
-                                  (command_byte >= "a" && command_byte <= "f");
-    wire [3:0] command_digit = command_byte <= "9" ? command_byte[3:0]
-                                                   : command_byte[3:0] + 4'd9;
-
-    // K followed by ten hex digits holds the given keys, a 40-bit mask in the
-    // keyboard matrix's order (row * 5 + column), until the next K.
-    reg [3:0]  key_digits_left = 4'd0;
-    reg [39:0] key_command_mask = 40'b0;
-    // J followed by three hex digits holds function keys, bit 0 for F1, until
-    // the next J.
-    reg [1:0]  function_digits_left = 2'd0;
-    reg [11:0] function_command_mask = 12'b0;
-
-    always @(posedge clock_28) begin
-        if (board_command_valid) begin
-            if (command_byte == "K") begin
-                key_digits_left <= 4'd10;
-            end else if (key_digits_left != 4'd0 && command_is_digit) begin
-                key_command_mask <= {key_command_mask[35:0], command_digit};
-                key_digits_left <= key_digits_left - 4'd1;
-`ifdef NEXTTANG_ZXNEXT_IO
-                if (key_digits_left == 4'd1)
-                    host_keys <= {key_command_mask[35:0], command_digit};
-`endif
-            end else begin
-                key_digits_left <= 4'd0;
-            end
-
-            if (command_byte == "J") begin
-                function_digits_left <= 2'd3;
-            end else if (function_digits_left != 2'd0 && command_is_digit) begin
-                function_command_mask <= {function_command_mask[7:0], command_digit};
-                function_digits_left <= function_digits_left - 2'd1;
-`ifdef NEXTTANG_ZXNEXT_IO
-                if (function_digits_left == 2'd1)
-                    host_functions <= {function_command_mask[5:0], command_digit};
-`endif
-            end else begin
-                function_digits_left <= 2'd0;
-            end
-        end
-    end
-
-`ifdef NEXTTANG_ZXNEXT_DDR3
+    // V0 / V1 on the debug UART stop and restart the frame store's DDR3
+    // traffic (video_memory_enable above).
     reg video_command = 1'b0;
 
     always @(posedge clock_28) begin
@@ -1634,78 +1110,6 @@ module `NEXTTANG_ZXNEXT_TOP (
         end
     end
 `endif
-
-    always @(posedge clock_28) begin
-        trigger_command_done <= 1'b0;
-        if (board_command_valid) begin
-            if (command_byte == "T") begin
-                trigger_digits_left <= 3'd4;
-            end else if (trigger_digits_left != 3'd0 && command_is_digit) begin
-                trigger_command_address <= {trigger_command_address[11:0], command_digit};
-                trigger_digits_left <= trigger_digits_left - 3'd1;
-                if (trigger_digits_left == 3'd1)
-                    trigger_command_done <= 1'b1;
-            end else begin
-                trigger_digits_left <= 3'd0;
-            end
-        end
-    end
-
-    nexttang_m1_trace fetch_trace (
-        .clock(clock_28),
-        .reset(!machine_locked),
-        .m1_n(core_m1_n),
-        .address(core_bus_address),
-        .freeze_request(board_command_valid && command_byte == "F"),
-        .rearm_request(board_command_valid && command_byte == "R"),
-        .set_trigger(trigger_command_done),
-        .new_trigger(trigger_command_address),
-        .frozen(trace_frozen),
-        .transmit(trace_transmit)
-    );
-
-    // Every couple of seconds, between status lines, the NextREGs and the
-    // video and paging ports as software last wrote them.
-    wire log_sending;
-    wire log_transmit;
-
-    nexttang_nextreg_log nextreg_log (
-        .clock(clock_28),
-        .reset(!machine_locked),
-        .nr_write(core_nr_write),
-        .nr_register(core_nr_register),
-        .nr_data(core_nr_data),
-        .iorq_n(core_iorq_n),
-        .wr_n(core_wr_n),
-        .m1_n(core_m1_n),
-        .address(core_bus_address),
-        .data(core_bus_data),
-        .other_transmit(status_transmit),
-        .sending(log_sending),
-        .transmit(log_transmit)
-    );
-
-    // The bytes last read from divMMC RAM bank 1 (SRAM page 0x11), which holds
-    // code NextZXOS calls during boot; D on the command wire dumps them.
-    wire capture_sending;
-    wire capture_transmit;
-
-    nexttang_memory_capture divmmc_capture (
-        .clock(clock_28),
-        .reset(!machine_locked),
-        .read_done(ram_a_cycle_request && !ram_a_read_n && !cpu_wait),
-        .read_address(ram_a_address),
-        .read_data(ram_a_read_data),
-        .dump_request(board_command_valid && command_byte == "D"),
-        .sending(capture_sending),
-        .transmit(capture_transmit)
-    );
-
-    assign debug_uart_tx = pi_session ? pi_link_tx
-                         : capture_sending ? capture_transmit
-                         : trace_frozen ? trace_transmit
-                         : log_sending ? log_transmit
-                         : status_transmit;
 endmodule
 
 `default_nettype wire

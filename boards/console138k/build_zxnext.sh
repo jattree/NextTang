@@ -148,6 +148,7 @@ source_files+=(
     "$repo_root/rtl/debug/nexttang_pi_spi_master.vhd"
     "$repo_root/rtl/debug/nexttang_pi_debug_uart_link.vhd"
     "$repo_root/rtl/debug/nexttang_breakpoints.vhd"
+    "$repo_root/rtl/platform/nexttang_next_machine.v"
 )
 if [[ "$profile" == diagnostic-ddr3 ]]; then
     source_files+=(

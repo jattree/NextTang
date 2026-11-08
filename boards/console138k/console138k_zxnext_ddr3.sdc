@@ -60,7 +60,7 @@ set_false_path -to [get_regs {scaler/published_bank_meta*}]
 # two output lines and read only after the toggle has crossed.
 set_false_path -to [get_regs {scaler/line_done_meta*}]
 set_false_path -to [get_regs {scaler/fetch_meta*}]
-set_false_path -to [get_regs {status_uart/flags_meta*}]
+set_false_path -to [get_regs {machine/status_uart/flags_meta*}]
 
 # The ULA samples the NextREG 0x26/0x27 scroll registers on falling 7 MHz edges
 # that coincide with the 28 MHz edges that update them. clock_7 comes from a
@@ -75,7 +75,7 @@ set_false_path -to [get_regs {status_uart/flags_meta*}]
 # one 8-pixel cell for one frame. Setup on these paths has more than 35 ns of
 # slack, so this removes only the hold check. Every other path in the core
 # stays timed.
-set_false_path -from [get_regs {core/nr_26_ula_scrollx* core/nr_27_ula_scrolly*}] -to [get_regs {core/ula_mod/px* core/ula_mod/py*}] -hold
+set_false_path -from [get_regs {machine/core/nr_26_ula_scrollx* machine/core/nr_27_ula_scrolly*}] -to [get_regs {machine/core/ula_mod/px* machine/core/ula_mod/py*}] -hold
 
 # Reset release happens once while nothing is running.
 set_false_path -from [get_regs {pixel_reset_shift*}]
