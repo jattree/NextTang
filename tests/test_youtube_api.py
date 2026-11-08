@@ -26,11 +26,11 @@ def build_api(transport: FakeTransport) -> YouTubeApi:
 
 class ChannelGuardTests(unittest.TestCase):
     def test_pinned_channel_is_accepted(self) -> None:
-        identity = ChannelIdentity(channel_id=CHANNEL_ID, title="NextTang", handle="@nexttangfpga")
+        identity = ChannelIdentity(channel_id=CHANNEL_ID, title="JonOverDoesIt", handle="@jonoverdoesit")
         self.assertEqual(channel_module.verify(identity), [])
 
     def test_handle_case_difference_is_not_a_mismatch(self) -> None:
-        identity = ChannelIdentity(channel_id=CHANNEL_ID, title="NextTang", handle="@NextTangFPGA")
+        identity = ChannelIdentity(channel_id=CHANNEL_ID, title="JonOverDoesIt", handle="@JonOverDoesIt")
         self.assertEqual(channel_module.verify(identity), [])
 
     def test_a_different_channel_is_refused(self) -> None:

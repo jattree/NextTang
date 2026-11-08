@@ -250,7 +250,7 @@ on a channel video once one exists.
 
 `videos set-thumbnail` resolves the target video before the dry run and again
 immediately before the write. It refuses a missing video or one owned by any
-channel other than the pinned NextTang channel. The 2 MiB limit is the Data API
+channel other than the pinned channel. The 2 MiB limit is the Data API
 upload limit, which is lower than the browser upload limit in YouTube Studio.
 
 `videos update-metadata` follows the same two ownership checks. YouTube's
