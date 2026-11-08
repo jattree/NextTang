@@ -326,14 +326,18 @@ class Spectrum48BuildDriverTests(unittest.TestCase):
         self.assertIn("replicated netlist remained CPU-active", source)
         self.assertIn("nexttang_spec256_bootstrap_overlay.v", source)
 
-    def test_combined_spec256_profile_splits_dual_usb_roles(self) -> None:
+    def test_combined_spec256_profile_uses_port_two_and_ddr_readback(self) -> None:
+        # Like the proven Spec256 loader profiles, the combined DDR3 profile
+        # takes USB from port two only, and holds the CPUs in reset until the
+        # loaded upper main RAM reads back from DDR3 with the loader's CRC.
         wrapper = (
             REPO_ROOT / "boards" / "console138k" /
             "nexttang_console138k_spec256_loader_ddr3.v"
         ).read_text(encoding="utf-8")
-        self.assertIn("NEXTTANG_USB_SPLIT_HID_PORTS", wrapper)
-        self.assertIn("NEXTTANG_USB_DUPLICATE_MICROCODE", wrapper)
-        self.assertNotIn("NEXTTANG_USB_PORT_TWO_ONLY", wrapper)
+        self.assertIn("NEXTTANG_USB_PORT_TWO_ONLY", wrapper)
+        self.assertNotIn("NEXTTANG_USB_SPLIT_HID_PORTS", wrapper)
+        self.assertNotIn("NEXTTANG_USB_DUPLICATE_MICROCODE", wrapper)
+        self.assertIn("NEXTTANG_SPEC256_DDR_READBACK", wrapper)
 
     def test_128k_profile_combines_paging_ddr_and_direct_usb(self) -> None:
         source = BUILD_DRIVER.read_text(encoding="utf-8")
