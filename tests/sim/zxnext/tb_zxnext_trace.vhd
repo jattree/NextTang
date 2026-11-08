@@ -62,7 +62,10 @@ entity tb_zxnext_trace is
         LOG_NEXTREG : boolean := false;
         -- Check that every CPU write to RAM bank 5, as main memory receives it,
         -- also lands in the core's own screen RAM, with the same offset and
-        -- data and in the same order.
+        -- data and in the same order. The check watches the screen RAM's own
+        -- write port (strobe, address and data as the block RAM takes them),
+        -- so it holds whether that write is combinational from the CPU's
+        -- strobe (official) or registered a clock later (NextNano issue #14).
         CHECK_VRAM : boolean := false;
         -- The core's build options (g_option). With PI_DEBUG, an FPGA-side SPI
         -- master drives the official Pi debug slave through a script of
@@ -333,10 +336,9 @@ begin
     cpu_wait <= '1' when WAIT_CYCLES > 0 and ram_a_req2 = '1' and memory_done = '0' else '0';
 
     vram_check : process (clock_28)
-        alias bank5_sched is << signal .tb_zxnext_trace.core.cpu_bank5_sched : std_logic >>;
-        alias bank5_we is << signal .tb_zxnext_trace.core.cpu_bank5_we : std_logic >>;
+        alias bank5_we is << signal .tb_zxnext_trace.core.vram_b5_we : std_logic >>;
         alias bank5_a0 is << signal .tb_zxnext_trace.core.vram_bank5_a0 : std_logic_vector(13 downto 0) >>;
-        alias core_do is << signal .tb_zxnext_trace.core.cpu_do : std_logic_vector(7 downto 0) >>;
+        alias core_do is << signal .tb_zxnext_trace.core.vram_b5_di : std_logic_vector(7 downto 0) >>;
         type queue_t is array (0 to 4095) of std_logic_vector(21 downto 0);
         variable queue : queue_t;
         variable head, tail : natural := 0;
@@ -352,7 +354,7 @@ begin
                 expected_writes := expected_writes + 1;
             end if;
             req_previous := ram_a_req2;
-            if bank5_sched = '1' and bank5_we = '1' then
+            if bank5_we = '1' then
                 write(l, string'("SCREEN_WRITE ") & to_hstring(bank5_a0) & string'(" ") & to_hstring(core_do));
                 writeline(output, l);
                 screen_writes := screen_writes + 1;
@@ -710,6 +712,15 @@ begin
         command((x"A9", x"9F", x"00", x"00", x"02", x"00", x"00", x"00"));
         expect("bram 7:1f00", reply(6), x"DE");
         expect("bram 7:1f01", reply(7), x"AD");
+
+        -- Bank 5 shares its CPU port with lores and with this access, and
+        -- its CPU write is registered (NextNano issue #14): the debugger's
+        -- access must still land and read back. Offset 2F00 ($6F00) is not
+        -- used by the clock test.
+        command((x"AA", x"2F", x"00", x"00", x"02", x"5A", x"C3"));
+        command((x"A9", x"2F", x"00", x"00", x"02", x"00", x"00", x"00"));
+        expect("bram 5:2f00", reply(6), x"5A");
+        expect("bram 5:2f01", reply(7), x"C3");
 
         -- The clock test ends in DI and HALT, where a step stays put. Point
         -- the CPU at the reset vector instead, out of HALT: DI is one byte and

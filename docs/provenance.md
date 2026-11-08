@@ -156,6 +156,13 @@ release moves the same way: `scripts/merge_official_core.py --upstream DIR
   address and the MMU for hardware breakpoints.
 - `spi_master.vhd` remains MiSTer's; the official 3.02.04 change to it
   (`spi_active`) is not taken yet.
+- **Bank 5's CPU-port write is registered** (RetroSilicon/NextNano issue
+  #14, marked `NextTang` in `zxnext.vhd`): with the CPU on `clock_28` and
+  enables, the official write strobe and address reach the 16 KiB block RAM
+  combinationally from half-cycle logic. The write now happens a clock
+  later from registers; lores and the debugger's block-RAM access wait that
+  clock. Not seen failing on NextTang hardware; taken before the Nano 20K
+  bring-up, where the issue was reported.
 
 ## Reference projects
 

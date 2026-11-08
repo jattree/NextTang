@@ -1491,6 +1491,16 @@ architecture rtl of zxnext is
    signal cpu_bank5_req_dly      : std_logic;
    signal cpu_bank5_sched_dly    : std_logic;
    signal cpu_bank5_sched        : std_logic;
+   -- NextTang: bank 5's CPU-port write, registered (RetroSilicon/NextNano
+   -- issue #14). With the CPU on clock_28 and enables, the write strobe and
+   -- address come from falling-edge registers through the memory decode
+   -- within half a clock, and the address switches to lores right after the
+   -- write edge; Gowin builds the 16K x 8 RAM as eight 16K x 1 blocks, and in
+   -- some layouts single bits miss the write. The write now happens a clock
+   -- later from registers, with lores waiting that clock.
+   signal b5w_pend               : std_logic := '0';
+   signal b5w_addr               : std_logic_vector(13 downto 0) := (others => '0');
+   signal b5w_data               : std_logic_vector(7 downto 0) := (others => '0');
    signal cpu_bank5_do           : std_logic_vector(7 downto 0);
    signal vram_bank5_do0         : std_logic_vector(7 downto 0);
    signal vram_bank5_do1         : std_logic_vector(7 downto 0);
@@ -7342,9 +7352,10 @@ gen_bram_debug_b5_0: if (g_option(10) = '0') generate
 
    cpu_bank5_req <= cpu_bank5_rd or cpu_bank5_we;
    
-   vram_b5_we <= cpu_bank5_sched and cpu_bank5_we;
-   vram_b5_di <= cpu_do;
-   vram_bank5_a0 <= (sram_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr;
+   vram_b5_we <= b5w_pend;   -- NextTang: registered (issue #14)
+   vram_b5_di <= b5w_data;
+   vram_bank5_a0 <= b5w_addr when b5w_pend = '1' else
+                    (sram_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr;
 
 end generate;
 
@@ -7352,9 +7363,10 @@ gen_bram_debug_b5_1: if (g_option(10) = '1') generate
 
    cpu_bank5_req <= cpu_bank5_rd or cpu_bank5_we;
    
-   vram_b5_we <= (cpu_bank5_sched and cpu_bank5_we) or (bram_debug_b5_ack and bram_debug_wr);
-   vram_b5_di <= cpu_do when cpu_bank5_sched = '1' else bram_debug_wr_dat;
-   vram_bank5_a0 <= (sram_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr when lores_vram_ack = '1' else bram_debug_addr;
+   vram_b5_we <= b5w_pend or (bram_debug_b5_ack and bram_debug_wr);   -- NextTang: registered (issue #14)
+   vram_b5_di <= b5w_data when b5w_pend = '1' else bram_debug_wr_dat;
+   vram_bank5_a0 <= b5w_addr when b5w_pend = '1' else
+                    (sram_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr when lores_vram_ack = '1' else bram_debug_addr;
    
 end generate;
 
@@ -7404,11 +7416,25 @@ end generate;
       end if;
    end process;
    
-   lores_vram_ack <= '1' when cpu_bank5_sched = '0' and lores_vram_req = '1' else '0';
+   -- NextTang: bank 5's CPU-port write, registered (RetroSilicon/NextNano
+   -- issue #14): it happens a clock after the CPU's, from registers, and
+   -- lores and the debugger's BRAM access wait that clock.
+   process (i_CLK_28)
+   begin
+      if rising_edge(i_CLK_28) then
+         b5w_pend <= cpu_bank5_sched and cpu_bank5_we;
+         if cpu_bank5_sched = '1' then
+            b5w_addr <= sram_A21_A13(0) & cpu_a(12 downto 0);
+            b5w_data <= cpu_do;
+         end if;
+      end if;
+   end process;
+
+   lores_vram_ack <= '1' when cpu_bank5_sched = '0' and b5w_pend = '0' and lores_vram_req = '1' else '0';   -- NextTang: b5w_pend
 
 gen_bram_debug_b5_11: if (g_option(10) = '1') generate
 
-   bram_debug_b5_ack <= '1' when bram_debug_b5_req = '1' and bram_debug_b5_ack_dly = '0' and cpu_bank5_sched = '0' and lores_vram_req = '0' else '0';
+   bram_debug_b5_ack <= '1' when bram_debug_b5_req = '1' and bram_debug_b5_ack_dly = '0' and cpu_bank5_sched = '0' and b5w_pend = '0' and lores_vram_req = '0' else '0';   -- NextTang: b5w_pend
    
    process (i_CLK_28)
    begin
