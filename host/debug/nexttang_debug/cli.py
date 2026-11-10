@@ -21,6 +21,7 @@ import argparse
 import sys
 
 from .protocol import (SYSTEM_HARD_RESET, SYSTEM_SOFT_RESET, DebugError, PiDebug, Z80Memory)
+from .spi import SpiLink
 from .uart import UartLink
 
 DEFAULT_PORT = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A5069RR4-if00-port0"
@@ -64,6 +65,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nexttang-debug", description=__doc__.split("\n\n")[0])
     parser.add_argument("--port", default=DEFAULT_PORT, help="serial device of the debug UART")
     parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--spi", metavar="DEVICE",
+                        help="run on a Raspberry Pi wired to the Pi debug slave: its spidev device, "
+                             "such as /dev/spidev0.0, instead of the debug UART")
+    parser.add_argument("--spi-speed", type=int, default=500_000, help="SPI clock in Hz (default 500000)")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
     commands.add_parser("version")
@@ -91,7 +96,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        with UartLink(args.port, args.baud) as link:
+        link_context = SpiLink(args.spi, args.spi_speed) if args.spi else UartLink(args.port, args.baud)
+        with link_context as link:
             debug = PiDebug(link)
             if args.command == "status":
                 print(show_status(debug))

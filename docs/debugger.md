@@ -32,6 +32,22 @@ Numbers are hexadecimal; `--port` names another serial device. Banks 5 and 7
 live only in the core's block RAM, and the official interface reaches them
 only while the CPU is paused, so pause before reading or writing the screen.
 
+## From a Raspberry Pi wired to the slave (Nano 20K with a Pi Zero)
+
+Boards that put the official Pi debug slave on a Pi's GPIO 8 to 11 (the Nano
+20K: header pins 25 CE0, 26 MISO, 27 MOSI, 28 SCLK; machine parameter
+`PI_SPI_PINS`) need no UART: run the same tool on the Pi with its spidev
+device. SPI must be enabled on the Pi (`dtparam=spi=on`).
+
+```bash
+host/debug/bin/nexttang-debug --spi /dev/spidev0.0 status
+host/debug/bin/nexttang-debug --spi /dev/spidev0.0 pause
+```
+
+Mode 0, one transfer per command, 500 kHz by default (`--spi-speed`); the
+slave samples SCLK through synchronisers on the 28 MHz machine clock.
+Not yet tried on hardware.
+
 ## DeZog in VS Code
 
 Start the bridge, which serves DZRP on port 11000 as CSpect and JNext do:

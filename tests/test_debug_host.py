@@ -147,3 +147,28 @@ class DebugHostTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpiLinkTest(unittest.TestCase):
+    """host/debug/nexttang_debug/spi.py without a Pi: the ioctl numbers and the
+    transfer layout the Linux spidev driver expects."""
+
+    def test_ioctl_numbers_match_linux(self) -> None:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "host" / "debug"))
+        from nexttang_debug import spi
+        # values from linux/spi/spidev.h on 64-bit and 32-bit ARM alike
+        self.assertEqual(spi.SPI_IOC_WR_MODE, 0x40016B01)
+        self.assertEqual(spi.SPI_IOC_WR_BITS_PER_WORD, 0x40016B03)
+        self.assertEqual(spi.SPI_IOC_WR_MAX_SPEED_HZ, 0x40046B04)
+        self.assertEqual(spi.spi_ioc_message(1), 0x40206B00)
+
+    def test_transfer_layout(self) -> None:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "host" / "debug"))
+        from nexttang_debug import spi
+        packed = spi.pack_transfer(0x1122334455667788, 0x99AABBCCDDEEFF00, 7, 500_000)
+        self.assertEqual(len(packed), spi.TRANSFER_SIZE)
+        self.assertEqual(packed[16:20], (7).to_bytes(4, "little"))
+        self.assertEqual(packed[20:24], (500_000).to_bytes(4, "little"))
+        self.assertEqual(packed[26], 8)   # bits_per_word
