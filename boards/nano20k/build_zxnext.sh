@@ -12,7 +12,7 @@ repo_root=$(cd -- "$script_dir/../.." && pwd -P)
 
 profile=
 output_dir=
-place_option=0
+place_option=1   # closes 28.125 MHz (worst slack +0.008 ns, 2026-11-11); 0 misses by 0.75 ns
 route_option=0
 print_sources=0
 while (($#)); do
