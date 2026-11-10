@@ -13,9 +13,9 @@ from typing import Any, Mapping
 from .errors import ChannelMismatchError
 
 CHANNEL_ID = "UCzUSXeiPI3JMhlE5rmES4zA"
-CHANNEL_HANDLE = "@NextTangFPGA"
-CHANNEL_TITLE = "NextTang"
-CHANNEL_URL = "https://www.youtube.com/@NextTangFPGA"
+CHANNEL_HANDLE = "@JonOverDoesIt"
+CHANNEL_TITLE = "JonOverDoesIt"
+CHANNEL_URL = "https://www.youtube.com/@JonOverDoesIt"
 
 
 @dataclass(frozen=True)

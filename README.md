@@ -8,7 +8,7 @@
   <a href="#current-status"><img alt="Status: Next core, Spec256 and debugger on hardware" src="https://img.shields.io/badge/status-Next_core_%7C_Spec256_%7C_debugger_on_hardware-f97316?style=flat-square"></a>
   <a href="#hardware-targets"><img alt="Targets: Console 138K with Pi 5, Console 60K, Tang Nano 20K" src="https://img.shields.io/badge/targets-Console_138K_%2B_Pi_5_%7C_60K_%7C_Nano_20K-334155?style=flat-square"></a>
   <a href="https://t.me/NextTang"><img alt="Telegram: NextTang" src="https://img.shields.io/badge/Telegram-NextTang-26A5E4?style=flat-square&amp;logo=telegram&amp;logoColor=white"></a>
-  <a href="https://www.youtube.com/@NextTangFPGA"><img alt="YouTube: NextTang" src="https://img.shields.io/badge/YouTube-NextTang-FF0000?style=flat-square&amp;logo=youtube&amp;logoColor=white"></a>
+  <a href="https://www.youtube.com/@JonOverDoesIt"><img alt="YouTube: JonOverDoesIt" src="https://img.shields.io/badge/YouTube-JonOverDoesIt-FF0000?style=flat-square&amp;logo=youtube&amp;logoColor=white"></a>
   <a href="https://github.com/jattree/NextTang/issues"><img alt="Open issues" src="https://img.shields.io/github/issues/jattree/NextTang?style=flat-square"></a>
 </p>
 
@@ -18,7 +18,7 @@
   <a href="docs/provenance.md">Provenance</a> ·
   <a href="docs/toolchain.md">Toolchain</a> ·
   <a href="https://t.me/NextTang">Telegram</a> ·
-  <a href="https://www.youtube.com/@NextTangFPGA">YouTube</a> ·
+  <a href="https://www.youtube.com/@JonOverDoesIt">YouTube</a> ·
   <a href="#contributing">Contributing</a> ·
   <a href="#references">References</a>
 </p>
@@ -152,7 +152,7 @@ remain unverified.
 
 Generated bitstreams, vendor work products, ROMs, games, packs and captures
 remain outside Git. The hardware progression is shown on the
-[NextTang YouTube channel](https://www.youtube.com/@NextTangFPGA).
+[JonOverDoesIt YouTube channel](https://www.youtube.com/@JonOverDoesIt).
 
 ## Companion projects
 
@@ -353,7 +353,7 @@ independently verifiable contributions are preferred.
 
 Project discussion, coordination, announcements, and roadmap updates are hosted
 in the [NextTang Telegram group](https://t.me/NextTang). Less technical project
-updates and build videos are on the [NextTang YouTube channel](https://www.youtube.com/@NextTangFPGA).
+updates and build videos are on the [JonOverDoesIt YouTube channel](https://www.youtube.com/@JonOverDoesIt).
 
 ## References
 
