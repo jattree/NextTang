@@ -1,0 +1,41 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 NextTang contributors
+//
+// Bring-up step 1 pins: a subset of nano20k_v3923.cst (same numbers).
+
+// 27 MHz crystal
+IO_LOC "clock_27" 4;
+IO_PORT "clock_27" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+
+// HDMI, true LVDS pairs (P, N)
+IO_LOC "tmds_clk_p" 33,34;
+IO_PORT "tmds_clk_p" PULL_MODE=NONE DRIVE=8;
+IO_LOC "tmds_d_p[0]" 35,36;
+IO_PORT "tmds_d_p[0]" PULL_MODE=NONE DRIVE=8;
+IO_LOC "tmds_d_p[1]" 37,38;
+IO_PORT "tmds_d_p[1]" PULL_MODE=NONE DRIVE=8;
+IO_LOC "tmds_d_p[2]" 39,40;
+IO_PORT "tmds_d_p[2]" PULL_MODE=NONE DRIVE=8;
+
+// Buttons S1, S2 and the six LEDs
+IO_LOC "button[0]" 88;
+IO_PORT "button[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC "button[1]" 87;
+IO_PORT "button[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC "led[0]" 15;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[1]" 16;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[2]" 17;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[3]" 18;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[4]" 19;
+IO_PORT "led[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[5]" 20;
+IO_PORT "led[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+// PROPOSAL, unverified: Pi0 on the official Pi debug slave's SPI (GPIO 8 CE0,
+// 9 MISO, 10 MOSI, 11 SCLK) and the debug UART, on header pins the USB build
+// leaves free. They are NextNano's LCD / matrix-keyboard pins, so a Pi0 and a
+// matrix keyboard exclude each other. Pins 48, 52, 53, 71 and 72 stay free
+// for an external RP2040/M0S companion (NextNano issue #4).
