@@ -64,6 +64,8 @@ source_files+=(
     "$repo_root/rtl/input/nexttang_keyboard_matrix.v"
     "$repo_root/rtl/video/hdmi_frame.vhd"
     "$repo_root/rtl/video/nexttang_tmds_encoder.v"
+    "$repo_root/rtl/audio/nexttang_zxnext_audio_pcm.v"
+    "$repo_root/rtl/audio/nexttang_i2s_transmitter.v"
     "$repo_root/boards/nano20k/nexttang_nano20k_zxnext.v"
     "$repo_root/boards/nano20k/nano20k_v3923.cst"
     "$repo_root/boards/nano20k/nano20k_zxnext.sdc"

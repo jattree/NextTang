@@ -1,5 +1,6 @@
 """Simulations behind the Tang Nano 20K board: the SDR SDRAM service (ports A
-and C, and Layer 2 on port B) and hdmi_frame's G_RELOCK option."""
+and C, and Layer 2 on port B), the I2S transmitter and hdmi_frame's G_RELOCK
+option."""
 
 from pathlib import Path
 import shutil
@@ -39,6 +40,17 @@ class SdrSdramServiceTest(unittest.TestCase):
     def test_layer2_columns(self) -> None:
         output = self.iverilog(SIM / "sdram" / "tb_sdr_layer2.v", {"MODE": 1, "LINES": 24, "INJECT_LINE": 10})
         self.assertIn("PASS", output, output)
+
+
+@unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "iverilog not installed")
+class I2sTransmitterTest(unittest.TestCase):
+    def test_words_decode_back(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sim.vvp"
+            run(["iverilog", "-g2012", "-o", str(image), str(SIM / "audio" / "tb_i2s_transmitter.v"),
+                 str(REPO_ROOT / "rtl" / "audio" / "nexttang_i2s_transmitter.v")], REPO_ROOT)
+            output = run(["vvp", "-n", str(image)], REPO_ROOT)
+            self.assertIn("PASS", output, output)
 
 
 @unittest.skipUnless(shutil.which("ghdl"), "ghdl not installed")

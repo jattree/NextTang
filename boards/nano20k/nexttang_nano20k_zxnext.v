@@ -33,8 +33,10 @@
 //   Pi0       the official Pi debug slave on header pins 25 CE0, 26 MISO,
 //             27 MOSI, 28 SCLK (PI_SPI_PINS), for a Pi Zero.
 //
-// Still planned: audio (I2S amplifier and HDMI audio), the BL616 companion
-// keyboard.
+//   audio     written but off (AUDIO): the core's stereo to the on-board
+//             MAX98357A amplifier over I2S; it does not fit yet (see below).
+//
+// Still planned: HDMI audio, the BL616 companion keyboard.
 // Capability limits on this part (2026-11-06 synthesis probe): no Spec256,
 // no Layer 2 block-RAM mirror, no DDR3 frame store or 720p scaler.
 
@@ -389,10 +391,33 @@ module nexttang_nano20k_zxnext (
     assign debug_uart_tx = uart_tx;
     assign companion_irq_n = uart_tx;     // BL616 USB serial RX (stock firmware)
     assign companion_miso = 1'b1;
-    assign amp_enable = 1'b0;
-    assign amp_data = 1'b0;
-    assign amp_lrck = 1'b0;
-    assign amp_bclk = 1'b0;
+    // ------------------------------------------------------------- audio
+    // The core's mixed stereo to the on-board MAX98357A over I2S: signed,
+    // DC removed (nexttang_zxnext_audio_pcm, one sample per I2S frame:
+    // 2^32 / 576), 48.828 kHz frames from a 28.125 MHz / 18 bit clock.
+    // AUDIO is off for now: using the core's audio output keeps its whole
+    // sound hardware (TurboSound's three AYs, DACs, mixer), about 1,700 logic
+    // cells, which takes the Nano to 89 percent and misses 28 MHz by 8 ns
+    // (2026-11-11). Room has to be made first.
+    localparam integer AUDIO = 0;
+    generate
+    if (AUDIO != 0) begin : amplifier
+        wire signed [15:0] pcm_left, pcm_right;
+        nexttang_zxnext_audio_pcm #(.PHASE_INCREMENT(32'd7456540)) audio_pcm (
+            .core_clock(clock_28), .core_left(core_audio_left), .core_right(core_audio_right),
+            .clock(clock_28), .reset(machine_reset), .audio_ce(),
+            .left(pcm_left), .right(pcm_right));
+        nexttang_i2s_transmitter #(.BCLK_HALF(9)) i2s (
+            .clock(clock_28), .reset(machine_reset), .left(pcm_left), .right(pcm_right),
+            .bclk(amp_bclk), .lrclk(amp_lrck), .data(amp_data));
+        assign amp_enable = 1'b1;
+    end else begin : no_amplifier
+        assign amp_enable = 1'b0;
+        assign amp_data = 1'b0;
+        assign amp_lrck = 1'b0;
+        assign amp_bclk = 1'b0;
+    end
+    endgenerate
 
     // LEDs, lit when driven low (to be confirmed on the board with the
     // bring-up image): 0 machine PLL, 1 SDRAM ready, 2 machine running,
