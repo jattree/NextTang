@@ -16,6 +16,7 @@ module tb;
     parameter integer MODE = 0;          // 0 row, 1 column
     parameter integer LINES = 60;
     parameter integer INJECT_LINE = 20;  // one wrong announcement on this line
+    parameter integer CPU_GAP_MASK = 7;  // port A idles 0..mask cycles between accesses (0: back to back)
     reg mclk = 0; always #5.926 mclk = ~mclk;
     reg clk28 = 0; always #17.778 clk28 = ~clk28;
     reg reset = 1;
@@ -148,7 +149,7 @@ module tb;
             if (!rd) begin shadow[off] = wd; a_have[off] = 1; end
             @(posedge clk28); #0.1 a_cycle = 0;
             a_ops = a_ops + 1;
-            repeat ($random(seed) & 7) @(posedge clk28);
+            repeat ($random(seed) & CPU_GAP_MASK) @(posedge clk28);
         end
     end
 endmodule
