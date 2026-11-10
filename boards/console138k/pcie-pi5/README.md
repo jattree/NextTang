@@ -8,7 +8,8 @@ Console 138K with a Pi 5 is the project's flagship pairing.
 Status: **hardware-verified link, register access and bus-master DMA** on one
 bench (Console 138K, 30354 1 GB SOM, GW5AST-LV138PG484AC1/I0; Raspberry Pi 5).
 The Tang writes into the Pi's RAM at **475 MB/s**, 99.3% of what a Gen2 x1 link
-can carry. Since 2026-11-09 the link comes up **at boot** with no steps on the
+can carry. A Gen3 build also works, at **935 MB/s**, with the Pi at its
+unofficial Gen3 setting (see [Gen3](#gen3-8-gts)); Gen2 stays the default. Since 2026-11-09 the link comes up **at boot** with no steps on the
 Pi, including from flash and from a cold power-on (one run so far; see below). The NextTang Next core does not
 use PCIe yet.
 
@@ -64,6 +65,41 @@ SerDes IP regenerated with the PCIe controller at x1 on Q0 lane 0, Q0 REFCLK0 at
    `set_option -route_option 1`). This closes 100 MHz with margin (TLP clock
    100.7 MHz); place option 2 missed by 2 ns and corrupted DMA data.
 
+## Gen3 (8 GT/s)
+
+Sipeed's Gen2 and Gen3 demos differ only in the SerDes register file, so Gen3
+needs no new IP. [`tools/gen3_csr.py`](tools/gen3_csr.py) makes a Gen3 x1
+`serdes.csr` from GOWIN's `pcie_gen3_x1.csr` template (in the IDE's
+`ipcore/SERDES_IP/IPlib/PCIE/csrDoc/`) with the edits Sipeed's Gen3 file carries:
+
+1. `tools/gen3_csr.py .../csrDoc/pcie_gen3_x1.csr > src/serdes/serdes.csr`
+2. `tools/csr_rom.py src/serdes/serdes.csr > src/include/nt_serdes_reinit_rom.vh`
+   (213 writes instead of 179).
+3. Build as above, with `set_csr src/serdes/serdes.csr`. Timing closed at
+   100.2 MHz, with little margin.
+
+On the Pi, `dtparam=pciex1_gen=3` in `config.txt`. Raspberry Pi does not
+officially support Gen3 on the Pi 5.
+
+| Test (2026-11-10, same bench and cable) | Result |
+| --- | --- |
+| Tang configured with REFCLK off, then the Pi boots | link up at boot, 8.0 GT/s x1, 4 of 4 |
+| Same, control build (reset hold, no replay) | link down, 2 of 2 at boot and 6 of 6 rebinds |
+| Tang loaded from flash with REFCLK off, then the Pi boots | 2 of 2 |
+| DMA ladder from SRAM and from flash | passed, AER clear |
+
+| Payload per packet | Gen3 x1 (Tang / Pi) | Gen2 x1 (Tang / Pi) |
+| --- | --- | --- |
+| 128 B | 823.0 / 822.8 MB/s | 417.8 / 417.7 MB/s |
+| 256 B | 893.8 / 893.2 MB/s | 454.0 / 453.8 MB/s |
+| 512 B | 934.7 / 933.9 MB/s | 475.1 / 474.7 MB/s |
+
+Once, straight after an unbind, reload from flash and rebind, the driver read
+all ones from BAR2 and refused to load; three later rebinds and every clean boot
+were fine. Not yet tested at Gen3: a long soak, a cold power-on. NextTang's
+debug traffic needs nowhere near Gen2's bandwidth, so Gen2, the Pi 5's
+supported speed, stays the default.
+
 ## Manual recipe (designs without the replay)
 
 Pi 5 with `dtparam=pciex1` (and `dtparam=pciex1_gen=2` for 5 GT/s). The Tang
@@ -95,6 +131,7 @@ not need it.
 | 2026-11-06 | 52Pi PCIe 3.0 x1 FPC | 5 GT/s x1, first try | 1,720,001 rounds (27.5M writes and 27.5M reads) | 0 mismatches, AER clear on root port and endpoint |
 | 2026-11-06 | 52Pi PCIe 3.0 x1 FPC | 5 GT/s x1 | DMA ladder to 16 MiB x 100 | 4.8 GiB exact, 475 MB/s, AER clear |
 | 2026-11-09 | 52Pi PCIe 3.0 x1 FPC | 5 GT/s x1, at boot | DMA ladder with the SerDes replay, from SRAM and from flash | passed both, 475 MB/s, AER clear |
+| 2026-11-10 | 52Pi PCIe 3.0 x1 FPC | 8 GT/s x1, at boot | Gen3 build, DMA ladder from SRAM and from flash | passed both, 935 MB/s, AER clear |
 
 A read from the Pi to the FPGA takes about 1.35 us round trip, so single-word
 reads move only about 3 MB/s: the CPU waits for each completion. Bulk data
@@ -137,6 +174,7 @@ and nothing in the design can issue reads to the host.
 - `rtl/ltssm_uart3.v`: LTSSM and SerDes status on the Console's status UART.
 - `rtl/nt_serdes_reinit.v`: the SerDes boot-register replay described above.
 - `tools/csr_rom.py`, `tools/patch_serdes.py`: build helpers (see Building).
+- `tools/gen3_csr.py`: the Gen3 x1 `serdes.csr` from GOWIN's template (see Gen3).
 - `rtl/top_pcie_dma.v`: top level of Sipeed's TangMega-138K `pcie_dma_demo`
   (Apache-2.0) with the NextTang changes marked. It needs the rest of that demo
   (PLL, SerDes, PCIe IP), which is not in this repository; the demo's own TLP
