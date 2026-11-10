@@ -4,7 +4,10 @@
 # Profiles: skeleton (lists sources only) and first (the first buildable
 # shell: clocks, SDRAM ports A and C, hdmi_frame DVI, keys over the debug
 # UART; see nexttang_nano20k_zxnext.v). Never run on a Nano yet.
-#   build_zxnext.sh --profile first --output ABSOLUTE_EMPTY_DIR
+#   build_zxnext.sh --profile first --output ABSOLUTE_EMPTY_DIR [--boot-image FILE]
+# --boot-image FILE replaces the diagnostic boot ROM with an image of at most
+# 8 KiB, such as the Next's own boot loader from scripts/build_next_ipl.sh
+# (FILE.notice holds its licence notice), as the Console's driver does.
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
@@ -12,6 +15,7 @@ repo_root=$(cd -- "$script_dir/../.." && pwd -P)
 
 profile=
 output_dir=
+boot_image=
 place_option=1   # closes 28.125 MHz (worst slack +0.008 ns, 2026-11-11); 0 misses by 0.75 ns
 route_option=0
 print_sources=0
@@ -21,7 +25,8 @@ while (($#)); do
         --output) [[ $# -ge 2 ]] || exit 2; output_dir=$2; shift 2 ;;
         --place) [[ $# -ge 2 ]] || exit 2; place_option=$2; shift 2 ;;
         --route) [[ $# -ge 2 ]] || exit 2; route_option=$2; shift 2 ;;
-        --toolchain|--vendor-source|--boot-image) [[ $# -ge 2 ]] || exit 2; shift 2 ;;
+        --boot-image) [[ $# -ge 2 ]] || exit 2; boot_image=$2; shift 2 ;;
+        --toolchain|--vendor-source) [[ $# -ge 2 ]] || exit 2; shift 2 ;;
         --print-sources) print_sources=1; shift ;;
         -h|--help)
             printf '%s\n' 'usage: boards/nano20k/build_zxnext.sh --profile skeleton|first [--print-sources] [--output DIR]'
@@ -85,6 +90,17 @@ fi
     exit 2
 }
 base_name=nexttang_nano20k_zxnext
+if [[ -n "$boot_image" ]]; then
+    [[ "$boot_image" == /* && -s "$boot_image" && -s "$boot_image.notice" ]] || {
+        printf '%s\n' 'nano20k zxnext build: --boot-image needs an absolute FILE and FILE.notice' >&2
+        exit 2
+    }
+    python3 "$repo_root/scripts/build_diagnostic_boot.py" --binary "$boot_image" \
+        --notice-file "$boot_image.notice" --output "$output_dir/bootrom.vhd" || exit 1
+    for i in "${!source_files[@]}"; do
+        [[ "${source_files[$i]}" == */rtl/core/nexttang_diagnostic_bootrom.vhd ]] && source_files[$i]="$output_dir/bootrom.vhd"
+    done
+fi
 sha256sum "${source_files[@]}" >"$output_dir/source-sha256.txt"
 {
     printf 'set_device -device_version C GW2AR-LV18QN88C8/I7\n'
