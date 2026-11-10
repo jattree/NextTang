@@ -7,6 +7,7 @@
 --
 -- Modifications for the ZX Spectrum Next Project
 -- Copyright 2020 Fabio Belavenuto, Victor Trucco, Charlie Ingley, Garry Lancaster, ACX
+-- Copyright 2026 David Saphier
 --
 -- All rights reserved
 --
@@ -70,6 +71,7 @@
 -- Victor Trucco, Fabio Belavenuto, Garry Lancaster : additional instructions
 -- Charlie Ingley : complete fix of wait logic
 -- ACX : implement undocumented flags for SLI r,(IY+s)
+-- David Saphier : debug interface
 
 library IEEE;
 use IEEE.std_logic_1164.all;
@@ -85,6 +87,8 @@ entity T80Na is
    port(
       RESET_n  : in    std_logic;
       CLK_n    : in    std_logic;
+      CEN_R    : in    std_logic := '1';  -- NextTang: CLK_n rising-edge enable
+      CEN_F    : in    std_logic := '1';  -- NextTang: CLK_n falling-edge enable
       WAIT_n   : in    std_logic;
       INT_n    : in    std_logic;
       NMI_n    : in    std_logic;
@@ -100,6 +104,13 @@ entity T80Na is
       A        : out   std_logic_vector(15 downto 0);
 --    D        : inout std_logic_vector( 7 downto 0);
       D_i      : in    std_logic_vector( 7 downto 0);
+      -- NextTang: with Split_edge_inputs, the falling-edge samples of the
+      -- data bus and WAIT come from these instead, so a Spec256 lane running
+      -- a cycle behind its master can be given a registered copy of each
+      -- edge's input.
+      Split_edge_inputs : in std_logic := '0';
+      D_i_fall    : in    std_logic_vector( 7 downto 0) := (others => '0');
+      WAIT_n_fall : in    std_logic := '1';
       D_o      : out   std_logic_vector( 7 downto 0);
 
       Spec256_cen : in std_logic := '1';
@@ -116,8 +127,19 @@ entity T80Na is
        Spec256_sync_xy : in std_logic_vector(1 downto 0) := (others => '0');
        Spec256_sync_int_cycle : in std_logic := '0';
        Spec256_sync_nmi_cycle : in std_logic := '0';
+       Spec256_sync_acc : in std_logic := '0';
        Spec256_master_addressing : in std_logic := '0';
        Spec256_master_regs : in std_logic_vector(159 downto 0) := (others => '0');
+       Spec256_master_control : in std_logic := '0';
+       Spec256_master_incdecz : in std_logic := '0';
+       Spec256_fetch_from_master : in std_logic := '0';
+       Spec256_master_ir : in std_logic_vector(7 downto 0) := (others => '0');
+       Spec256_master_vector : in std_logic_vector(7 downto 0) := (others => '0');
+       Spec256_state_ir : out std_logic_vector(7 downto 0);
+       Spec256_state_vector : out std_logic_vector(7 downto 0);
+       -- The data the wrapper latched on the falling edge, for a lane a cycle
+       -- behind to take in place of the data bus.
+       Spec256_state_di : out std_logic_vector(7 downto 0);
       Spec256_state_pc : out std_logic_vector(15 downto 0);
       Spec256_state_sp : out std_logic_vector(15 downto 0);
       Spec256_state_i : out std_logic_vector(7 downto 0);
@@ -132,12 +154,24 @@ entity T80Na is
        Spec256_state_int_cycle : out std_logic;
        Spec256_state_nmi_cycle : out std_logic;
        Spec256_state_instruction_boundary : out std_logic;
+       Spec256_state_incdecz : out std_logic;
        Spec256_instruction_access : out std_logic := '0';
 
       -- extended functions
       Z80N_dout_o       : out std_logic := '0';
       Z80N_data_o       : out std_logic_vector(15 downto 0);
-      Z80N_command_o    : out Z80N_seq 
+      Z80N_command_o    : out Z80N_seq;
+
+      -- debug interface
+      -- NextTang: defaults so cores without a debugger leave these open
+      i_debug_reg       : in std_logic_vector(4 downto 0) := (others => '0');
+      i_debug_wr        : in std_logic := '0';
+      i_debug_dat       : in std_logic_vector(7 downto 0) := (others => '0');
+      o_debug_dat       : out std_logic_vector(7 downto 0);
+      o_debug_lastM     : out std_logic;
+      i_debug_pause     : in std_logic := '0';   -- NextTang
+      o_debug_next_pc   : out std_logic_vector(15 downto 0);   -- NextTang
+      i_debug_break     : in std_logic := '0'   -- NextTang
    );
 end T80Na;
 
@@ -175,7 +209,7 @@ architecture rtl of T80Na is
 
 begin
 
-   CEN <= Spec256_cen;
+   CEN <= Spec256_cen and CEN_R;
 
    BUSAK_n <= BUSAK_n_i;                                    -- 30/10/19 Charlie Ingley - IORQ/RD/WR changes
    MREQ_rw <= MREQ and (Req_Inhibit or MReq_Inhibit);             --          added MREQ timing control
@@ -205,7 +239,7 @@ begin
    begin
       if RESET_n = '0' then
          Reset_s <= '0';
-      elsif CLK_n'event and CLK_n = '1' then
+      elsif CLK_n'event and CLK_n = '1' and CEN_R = '1' then
          Reset_s <= '1';
       end if;
    end process;
@@ -250,8 +284,16 @@ begin
           Spec256_sync_xy => Spec256_sync_xy,
           Spec256_sync_int_cycle => Spec256_sync_int_cycle,
           Spec256_sync_nmi_cycle => Spec256_sync_nmi_cycle,
+          Spec256_sync_acc => Spec256_sync_acc,
           Spec256_master_addressing => Spec256_master_addressing,
           Spec256_master_regs => Spec256_master_regs,
+          Spec256_master_control => Spec256_master_control,
+          Spec256_master_incdecz => Spec256_master_incdecz,
+          Spec256_fetch_from_master => Spec256_fetch_from_master,
+          Spec256_master_ir => Spec256_master_ir,
+          Spec256_master_vector => Spec256_master_vector,
+          Spec256_state_ir => Spec256_state_ir,
+          Spec256_state_vector => Spec256_state_vector,
          Spec256_state_pc => Spec256_state_pc,
          Spec256_state_sp => Spec256_state_sp,
          Spec256_state_i => Spec256_state_i,
@@ -266,19 +308,35 @@ begin
           Spec256_state_int_cycle => Spec256_state_int_cycle,
           Spec256_state_nmi_cycle => Spec256_state_nmi_cycle,
           Spec256_state_instruction_boundary => Spec256_state_instruction_boundary,
+          Spec256_state_incdecz => Spec256_state_incdecz,
           Spec256_instruction_access => Spec256_instruction_access,
          
          Z80N_dout_o       => Z80N_dout_o,      
          Z80N_data_o       => Z80N_data_o,      
-         Z80N_command_o    => Z80N_command_o 
+         Z80N_command_o    => Z80N_command_o,
+
+         i_debug_reg       => i_debug_reg,
+         i_debug_wr        => i_debug_wr,
+         i_debug_dat       => i_debug_dat,
+         o_debug_dat       => o_debug_dat,
+         o_debug_lastM     => o_debug_lastM,
+         i_debug_pause     => i_debug_pause,
+         o_debug_next_pc   => o_debug_next_pc,
+         i_debug_break     => i_debug_break
       );
+
+   Spec256_state_di <= DI_Reg;
 
    process (CLK_n)
    begin
-      if CLK_n'event and CLK_n = '0' then
+      if CLK_n'event and CLK_n = '0' and CEN_F = '1' then
          if TState = "011" and BUSAK_n_i = '1' then
 --          DI_Reg <= to_x01(D);
-            DI_Reg <= D_i;
+            if Split_edge_inputs = '1' then
+               DI_Reg <= D_i_fall;
+            else
+               DI_Reg <= D_i;
+            end if;
          end if;
       end if;
    end process;
@@ -288,7 +346,7 @@ begin
    begin
       if Reset_s = '0' then         
          WR_t2 <= '0';
-      elsif CLK_n'event and CLK_n = '0' then
+      elsif CLK_n'event and CLK_n = '0' and CEN_F = '1' then
          if MCycle /= "001" then 
                if TState = "010" then  -- WR starts on falling edge of T2 for MREQ
                   WR_t2 <=  Write;
@@ -305,7 +363,7 @@ begin
    begin
       if Reset_s = '0' then
          Req_Inhibit <= '1';  -- Charlie Ingley 30/10/19 - changed Req_Inhibit polarity
-      elsif CLK_n'event and CLK_n = '1' then
+      elsif CLK_n'event and CLK_n = '1' and CEN_R = '1' then
          if MCycle = "001" and TState = "010" and WAIT_n = '1' then  -- by Fabio Belavenuto - fix behavior of Wait_n
             Req_Inhibit <= '0';
          else
@@ -319,8 +377,10 @@ begin
    begin
       if Reset_s = '0' then
          MReq_Inhibit <= '1'; -- Charlie Ingley 30/10/19 - changed Req_Inhibit polarity
-      elsif CLK_n'event and CLK_n = '0' then
-         if MCycle = "001" and TState = "010" and WAIT_n = '1' then  -- by Fabio Belavenuto - fix behavior of Wait_n
+      elsif CLK_n'event and CLK_n = '0' and CEN_F = '1' then
+         if MCycle = "001" and TState = "010" and
+            ((Split_edge_inputs = '0' and WAIT_n = '1') or
+             (Split_edge_inputs = '1' and WAIT_n_fall = '1')) then  -- by Fabio Belavenuto - fix behavior of Wait_n
             MReq_Inhibit <= '0';
          else
             MReq_Inhibit <= '1';
@@ -334,7 +394,7 @@ begin
       if Reset_s = '0' then
          RD <= '0';
          MREQ <= '0';
-      elsif CLK_n'event and CLK_n = '0' then
+      elsif CLK_n'event and CLK_n = '0' and CEN_F = '1' then
          if MCycle = "001" then
             if TState = "001" then
                RD <= IntCycle_n;
@@ -365,7 +425,7 @@ begin
    begin
       if Reset_s = '0' then
          IORQ_int <= '0';
-      elsif CLK_n'event and CLK_n = '1' then
+      elsif CLK_n'event and CLK_n = '1' and CEN_R = '1' then
          if MCycle = "001" then
             if TState = "001" then
                IORQ_int <= not IntCycle_n;
@@ -381,7 +441,7 @@ begin
    begin
       if Reset_s = '0' then
          IORQ_int_inhibit <= "111";
-      elsif CLK_n'event and CLK_n = '0' then
+      elsif CLK_n'event and CLK_n = '0' and CEN_F = '1' then
          if IntCycle_n = '0' then
             if MCycle = "001" then
                IORQ_int_inhibit <= IORQ_int_inhibit(1 downto 0) & '0';
@@ -398,7 +458,7 @@ begin
    begin
       if Reset_s = '0' then
          IORQ_t1 <= '1';
-      elsif CLK_n'event and CLK_n = '0' then 
+      elsif CLK_n'event and CLK_n = '0' and CEN_F = '1' then 
          if TState = "001" then 
             IORQ_t1 <= not IntCycle_n;
          end if;
@@ -413,7 +473,7 @@ begin
    begin
       if RESET_n = '0' then
          IORQ_t2 <= '1';
-      elsif CLK_n'event and CLK_n = '1' then
+      elsif CLK_n'event and CLK_n = '1' and CEN_R = '1' then
          IORQ_t2 <= IORQ_t1;  
       end if;
    end process; 

@@ -1,0 +1,6 @@
+upar_write_driver(0xb00000,0x00FFAA55) # synthetic test list for sim/tb_reinit.v, not a real SerDes setting
+upar_write_driver(0x808104,0x00022322)
+upar_write_driver(0x8003a9,0x0000A000)
+upar_wirte_driver(0xb00048,0xFFF00004)
+upar_write_driver(0x80882c,0x01000100)
+upar_write_driver(0x80882c,0x03000100)

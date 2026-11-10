@@ -18,6 +18,7 @@ module nexttang_cpu_memory_path #(
     input  wire [20:0]  core_address,
     input  wire [7:0]   core_write_data,
     output wire [7:0]   core_read_data,
+    output wire [127:0] core_read_line,
     output wire         core_wait,
     output wire         core_complete,
 
@@ -43,6 +44,7 @@ module nexttang_cpu_memory_path #(
     wire [7:0] service_write_data;
     wire service_response_valid;
     wire [7:0] service_read_data;
+    wire [127:0] service_read_line;
 
     wire memory_byte_request;
     wire memory_byte_ready;
@@ -51,6 +53,7 @@ module nexttang_cpu_memory_path #(
     wire [7:0] memory_byte_write_data;
     wire memory_byte_response_valid;
     wire [7:0] memory_byte_read_data;
+    wire [127:0] memory_byte_read_line;
 
     nexttang_cpu_memory_service #(
         .MAX_WAIT_CYCLES(MAX_WAIT_CYCLES)
@@ -63,6 +66,7 @@ module nexttang_cpu_memory_path #(
         .core_address(core_address),
         .core_write_data(core_write_data),
         .core_read_data(core_read_data),
+        .core_read_line(core_read_line),
         .core_wait(core_wait),
         .core_complete(core_complete),
         .memory_request(service_request),
@@ -72,6 +76,7 @@ module nexttang_cpu_memory_path #(
         .memory_write_data(service_write_data),
         .memory_response_valid(service_response_valid),
         .memory_read_data(service_read_data),
+        .memory_read_line(service_read_line),
         .fault_timeout(fault_timeout),
         .fault_overrun(fault_overrun),
         .fault_calibration_lost(fault_calibration_lost)
@@ -87,6 +92,7 @@ module nexttang_cpu_memory_path #(
         .source_write_data(service_write_data),
         .source_response_valid(service_response_valid),
         .source_read_data(service_read_data),
+        .source_read_line(service_read_line),
         .destination_clock(memory_clock),
         .destination_reset(memory_reset),
         .destination_request(memory_byte_request),
@@ -95,7 +101,8 @@ module nexttang_cpu_memory_path #(
         .destination_address(memory_byte_address),
         .destination_write_data(memory_byte_write_data),
         .destination_response_valid(memory_byte_response_valid),
-        .destination_read_data(memory_byte_read_data)
+        .destination_read_data(memory_byte_read_data),
+        .destination_read_line(memory_byte_read_line)
     );
 
     nexttang_byte_line_adapter line_adapter (
@@ -108,6 +115,7 @@ module nexttang_cpu_memory_path #(
         .byte_write_data(memory_byte_write_data),
         .byte_response_valid(memory_byte_response_valid),
         .byte_read_data(memory_byte_read_data),
+        .byte_read_line(memory_byte_read_line),
         .line_request(line_request),
         .line_ready(line_ready),
         .line_write(line_write),

@@ -15,17 +15,19 @@ class ClassicAudioPcmTests(unittest.TestCase):
         bench = r"""
 `timescale 1ns/1ps
 module testbench;
-    reg clock = 0, reset = 1, beeper = 0, ay_enable = 0;
+    reg clock = 0, reset = 1, beeper = 0, tape = 0, tape_enable = 0;
+    reg ay_enable = 0;
     reg [7:0] ay_a = 0, ay_b = 0, ay_c = 0;
     wire audio_ce;
     wire signed [15:0] sample;
     integer cycles = 0, strobes = 0;
-    integer beeper_sample = 0, ay_sample = 0;
+    integer beeper_sample = 0, ay_sample = 0, tape_sample = 0;
     always #5 clock = ~clock;
 
     // Make the arithmetic easy to check: one sample strobe every 16 clocks.
     nexttang_classic_audio_pcm #(.PHASE_INCREMENT(32'h10000000)) dut (
         .clock(clock), .reset(reset), .beeper(beeper),
+        .tape(tape), .tape_enable(tape_enable),
         .ay_enable(ay_enable), .ay_a(ay_a), .ay_b(ay_b), .ay_c(ay_c),
         .audio_ce(audio_ce), .sample(sample)
     );
@@ -70,6 +72,13 @@ module testbench;
         if (sample >= ay_sample)
             $fatal(1, "AY disable did not reduce mix: before=%0d after=%0d",
                    ay_sample, sample);
+        beeper_sample = sample;
+        tape_enable = 1; tape = 1;
+        repeat (3) @(posedge clock);
+        wait_strobe; tape_sample = sample;
+        if (tape_sample <= beeper_sample)
+            $fatal(1, "EAR waveform did not enter mix: before=%0d tape=%0d",
+                   beeper_sample, tape_sample);
         $display("CLASSIC_AUDIO_PCM_PASS");
         $finish;
     end

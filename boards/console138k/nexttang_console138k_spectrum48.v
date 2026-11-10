@@ -203,6 +203,23 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     reg [3:0] pixel_reset_shift = 0;
     reg [3:0] cpu_reset_shift = 0;
     wire pixel_reset = !pixel_reset_shift[3];
+`ifdef NEXTTANG_CLASSIC_SD_LOADER
+    wire poke_hold_cpu;
+    wire poke_memory_write;
+    wire [1:0] poke_write_target;
+    wire [2:0] poke_write_bank;
+    wire [15:0] poke_write_address;
+    wire [7:0] poke_write_data;
+    wire poke_write_complete;
+`else
+    wire poke_hold_cpu = 1'b0;
+    wire poke_memory_write = 1'b0;
+    wire [1:0] poke_write_target = 2'b0;
+    wire [2:0] poke_write_bank = 3'b0;
+    wire [15:0] poke_write_address = 16'b0;
+    wire [7:0] poke_write_data = 8'b0;
+    wire poke_write_complete;
+`endif
 `ifdef NEXTTANG_SPEC256_RUNTIME
     wire loader_hold_reset;
     wire loader_ready;
@@ -381,7 +398,8 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     reg  [7:0]  cpu_data_in;
     wire mreq_n, iorq_n, rd_n, wr_n, m1_n, rfsh_n, halt_n;
 
-    wire cpu_wait_n;
+    wire memory_cpu_wait_n;
+    wire cpu_wait_n = memory_cpu_wait_n && !poke_hold_cpu;
 
 `ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
     wire spec256_sync_enable;
@@ -664,8 +682,14 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .cpu_wr_n(wr_n),
         .cpu_rfsh_n(rfsh_n),
         .ram_read_data(ram_data),
-        .cpu_wait_n(cpu_wait_n),
+        .cpu_wait_n(memory_cpu_wait_n),
         .transaction_complete(upper_transaction_complete),
+        .poke_write(poke_memory_write),
+        .poke_bank(poke_write_target == 2'd1 ? poke_write_bank :
+                   poke_write_address[15:14] == 2'b01 ? 3'd5 :
+                   poke_write_address[15:14] == 2'b10 ? 3'd2 : cpu_ram_bank),
+        .poke_address(poke_write_address[13:0]),
+        .poke_write_data(poke_write_data), .poke_complete(poke_write_complete),
         .video_clock(clock_7),
         .video_bank(screen_bank),
         .video_address(ula_vram_address),
@@ -696,8 +720,10 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .cpu_wr_n(wr_n),
         .cpu_rfsh_n(rfsh_n),
         .ram_read_data(ram_data),
-        .cpu_wait_n(cpu_wait_n),
+        .cpu_wait_n(memory_cpu_wait_n),
         .upper_transaction_complete(upper_transaction_complete),
+        .poke_write(poke_memory_write), .poke_address(poke_write_address),
+        .poke_write_data(poke_write_data), .poke_complete(poke_write_complete),
         .video_clock(clock_7),
         .video_address(ula_vram_address),
         .video_data(ula_vram_data),
@@ -789,7 +815,7 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 
 `ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
 `ifndef NEXTTANG_SPECTRUM48_USE_DDR3
-    assign cpu_wait_n = 1'b1;
+    assign memory_cpu_wait_n = 1'b1;
 `endif
 
 `ifdef NEXTTANG_SPEC256_RUNTIME
@@ -896,8 +922,13 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 
 `ifdef NEXTTANG_SPECTRUM48_USE_DDR3
     reg loader_ddr_write_busy = 1'b0;
-    wire loader_main_upper_write = loader_main_write &&
-                                   loader_main_address[15];
+    wire combined_main_loader_write = loader_main_write || poke_memory_write;
+    wire [15:0] combined_main_loader_address = poke_memory_write ?
+        poke_write_address : loader_main_address;
+    wire [7:0] combined_main_loader_data = poke_memory_write ?
+        poke_write_data : loader_write_data;
+    wire loader_main_upper_write = combined_main_loader_write &&
+                                   combined_main_loader_address[15];
     wire spec256_ddr_path_reset = !cpu_reset_shift[3] ||
                                   !memory_available_cpu;
     always @(posedge cpu_clock) begin
@@ -917,8 +948,9 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .memory_available(memory_available_cpu), .cpu_address(cpu_address),
         .cpu_write_data(cpu_data_out), .cpu_mreq_n(mreq_n), .cpu_rd_n(rd_n),
         .cpu_wr_n(wr_n), .cpu_rfsh_n(rfsh_n), .ram_read_data(ram_data),
-        .cpu_wait_n(cpu_wait_n), .loader_write(loader_main_write),
-        .loader_address(loader_main_address), .loader_write_data(loader_write_data),
+        .cpu_wait_n(memory_cpu_wait_n), .loader_write(combined_main_loader_write),
+        .loader_address(combined_main_loader_address),
+        .loader_write_data(combined_main_loader_data),
         .loader_upper_complete(upper_transaction_complete),
         .video_clock(pixel_clock), .video_address({1'b0,display_address}),
         .video_data(display_data), .memory_clock(controller_clock),
@@ -929,6 +961,9 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .line_response_valid(line_response_valid), .line_read_data(line_read_data),
         .fault_timeout(fault_timeout), .fault_overrun(fault_overrun),
         .fault_calibration_lost(fault_calibration_lost));
+    assign poke_write_complete = poke_write_target>=2 ||
+        (poke_memory_write && !poke_write_address[15]) ||
+        (poke_memory_write && upper_transaction_complete);
 `else
 `ifdef NEXTTANG_SPEC256_SD_PACK
     assign spec256_pack_consumer_ready = 1'b1;
@@ -940,9 +975,11 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     ) machine_ram (
         .clock(cpu_clock),
 `ifdef NEXTTANG_SPEC256_RUNTIME
-        .write_enable(loader_main_write || memory_write),
-        .write_address(loader_main_write ? loader_main_address : cpu_address),
-        .write_data(loader_main_write ? loader_write_data : cpu_data_out),
+        .write_enable(loader_main_write || poke_memory_write || memory_write),
+        .write_address(poke_memory_write ? poke_write_address :
+                       loader_main_write ? loader_main_address : cpu_address),
+        .write_data(poke_memory_write ? poke_write_data :
+                    loader_main_write ? loader_write_data : cpu_data_out),
 `else
         .write_enable(memory_write),
         .write_address(cpu_address),
@@ -956,7 +993,11 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .port_b_address({3'b010, display_address}),
         .port_b_data(display_data)
     );
+    assign poke_write_complete = poke_memory_write || poke_write_target>=2;
 `endif
+
+    wire [7:0] poke_graphics_write = poke_write_target==2'd3 ? 8'hff :
+        poke_write_target==2'd2 ? (8'b1<<poke_write_bank) : 8'b0;
 
     nexttang_spectrum_ram #(
         .IMAGE_0(`NEXTTANG_SPEC256_INITIAL_IMAGE("spec256-plane0-bank0.mem")),
@@ -965,13 +1006,15 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     spec256_ram_0 (
         .clock(cpu_clock),
 `ifdef NEXTTANG_SPEC256_RUNTIME
-        .write_enable(loader_graphics_ram_write[0] ||
+        .write_enable(loader_graphics_ram_write[0] || poke_graphics_write[0] ||
                       (spec256_graphics_write[0] &&
                        spec256_graphics_address[15:14] != 2'b00)),
-        .write_address(loader_graphics_ram_write[0] ?
+        .write_address(poke_graphics_write[0] ? poke_write_address :
+                       loader_graphics_ram_write[0] ?
                        loader_graphics_ram_address :
                        spec256_graphics_address[15:0]),
-        .write_data(loader_graphics_ram_write[0] ? loader_write_data :
+        .write_data(poke_graphics_write[0] ? poke_write_data :
+                    loader_graphics_ram_write[0] ? loader_write_data :
                     spec256_graphics_data_out[7:0]),
 `else
         .write_enable(spec256_graphics_write[0] &&
@@ -992,13 +1035,15 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     spec256_ram_1 (
         .clock(cpu_clock),
 `ifdef NEXTTANG_SPEC256_RUNTIME
-        .write_enable(loader_graphics_ram_write[1] ||
+        .write_enable(loader_graphics_ram_write[1] || poke_graphics_write[1] ||
                       (spec256_graphics_write[1] &&
                        spec256_graphics_address[31:30] != 2'b00)),
-        .write_address(loader_graphics_ram_write[1] ?
+        .write_address(poke_graphics_write[1] ? poke_write_address :
+                       loader_graphics_ram_write[1] ?
                        loader_graphics_ram_address :
                        spec256_graphics_address[31:16]),
-        .write_data(loader_graphics_ram_write[1] ? loader_write_data :
+        .write_data(poke_graphics_write[1] ? poke_write_data :
+                    loader_graphics_ram_write[1] ? loader_write_data :
                     spec256_graphics_data_out[15:8]),
 `else
         .write_enable(spec256_graphics_write[1] &&
@@ -1019,13 +1064,15 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     spec256_ram_2 (
         .clock(cpu_clock),
 `ifdef NEXTTANG_SPEC256_RUNTIME
-        .write_enable(loader_graphics_ram_write[2] ||
+        .write_enable(loader_graphics_ram_write[2] || poke_graphics_write[2] ||
                       (spec256_graphics_write[2] &&
                        spec256_graphics_address[47:46] != 2'b00)),
-        .write_address(loader_graphics_ram_write[2] ?
+        .write_address(poke_graphics_write[2] ? poke_write_address :
+                       loader_graphics_ram_write[2] ?
                        loader_graphics_ram_address :
                        spec256_graphics_address[47:32]),
-        .write_data(loader_graphics_ram_write[2] ? loader_write_data :
+        .write_data(poke_graphics_write[2] ? poke_write_data :
+                    loader_graphics_ram_write[2] ? loader_write_data :
                     spec256_graphics_data_out[23:16]),
 `else
         .write_enable(spec256_graphics_write[2] &&
@@ -1046,13 +1093,15 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     spec256_ram_3 (
         .clock(cpu_clock),
 `ifdef NEXTTANG_SPEC256_RUNTIME
-        .write_enable(loader_graphics_ram_write[3] ||
+        .write_enable(loader_graphics_ram_write[3] || poke_graphics_write[3] ||
                       (spec256_graphics_write[3] &&
                        spec256_graphics_address[63:62] != 2'b00)),
-        .write_address(loader_graphics_ram_write[3] ?
+        .write_address(poke_graphics_write[3] ? poke_write_address :
+                       loader_graphics_ram_write[3] ?
                        loader_graphics_ram_address :
                        spec256_graphics_address[63:48]),
-        .write_data(loader_graphics_ram_write[3] ? loader_write_data :
+        .write_data(poke_graphics_write[3] ? poke_write_data :
+                    loader_graphics_ram_write[3] ? loader_write_data :
                     spec256_graphics_data_out[31:24]),
 `else
         .write_enable(spec256_graphics_write[3] &&
@@ -1073,13 +1122,15 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     spec256_ram_4 (
         .clock(cpu_clock),
 `ifdef NEXTTANG_SPEC256_RUNTIME
-        .write_enable(loader_graphics_ram_write[4] ||
+        .write_enable(loader_graphics_ram_write[4] || poke_graphics_write[4] ||
                       (spec256_graphics_write[4] &&
                        spec256_graphics_address[79:78] != 2'b00)),
-        .write_address(loader_graphics_ram_write[4] ?
+        .write_address(poke_graphics_write[4] ? poke_write_address :
+                       loader_graphics_ram_write[4] ?
                        loader_graphics_ram_address :
                        spec256_graphics_address[79:64]),
-        .write_data(loader_graphics_ram_write[4] ? loader_write_data :
+        .write_data(poke_graphics_write[4] ? poke_write_data :
+                    loader_graphics_ram_write[4] ? loader_write_data :
                     spec256_graphics_data_out[39:32]),
 `else
         .write_enable(spec256_graphics_write[4] &&
@@ -1100,13 +1151,15 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     spec256_ram_5 (
         .clock(cpu_clock),
 `ifdef NEXTTANG_SPEC256_RUNTIME
-        .write_enable(loader_graphics_ram_write[5] ||
+        .write_enable(loader_graphics_ram_write[5] || poke_graphics_write[5] ||
                       (spec256_graphics_write[5] &&
                        spec256_graphics_address[95:94] != 2'b00)),
-        .write_address(loader_graphics_ram_write[5] ?
+        .write_address(poke_graphics_write[5] ? poke_write_address :
+                       loader_graphics_ram_write[5] ?
                        loader_graphics_ram_address :
                        spec256_graphics_address[95:80]),
-        .write_data(loader_graphics_ram_write[5] ? loader_write_data :
+        .write_data(poke_graphics_write[5] ? poke_write_data :
+                    loader_graphics_ram_write[5] ? loader_write_data :
                     spec256_graphics_data_out[47:40]),
 `else
         .write_enable(spec256_graphics_write[5] &&
@@ -1127,13 +1180,15 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     spec256_ram_6 (
         .clock(cpu_clock),
 `ifdef NEXTTANG_SPEC256_RUNTIME
-        .write_enable(loader_graphics_ram_write[6] ||
+        .write_enable(loader_graphics_ram_write[6] || poke_graphics_write[6] ||
                       (spec256_graphics_write[6] &&
                        spec256_graphics_address[111:110] != 2'b00)),
-        .write_address(loader_graphics_ram_write[6] ?
+        .write_address(poke_graphics_write[6] ? poke_write_address :
+                       loader_graphics_ram_write[6] ?
                        loader_graphics_ram_address :
                        spec256_graphics_address[111:96]),
-        .write_data(loader_graphics_ram_write[6] ? loader_write_data :
+        .write_data(poke_graphics_write[6] ? poke_write_data :
+                    loader_graphics_ram_write[6] ? loader_write_data :
                     spec256_graphics_data_out[55:48]),
 `else
         .write_enable(spec256_graphics_write[6] &&
@@ -1154,13 +1209,15 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     spec256_ram_7 (
         .clock(cpu_clock),
 `ifdef NEXTTANG_SPEC256_RUNTIME
-        .write_enable(loader_graphics_ram_write[7] ||
+        .write_enable(loader_graphics_ram_write[7] || poke_graphics_write[7] ||
                       (spec256_graphics_write[7] &&
                        spec256_graphics_address[127:126] != 2'b00)),
-        .write_address(loader_graphics_ram_write[7] ?
+        .write_address(poke_graphics_write[7] ? poke_write_address :
+                       loader_graphics_ram_write[7] ?
                        loader_graphics_ram_address :
                        spec256_graphics_address[127:112]),
-        .write_data(loader_graphics_ram_write[7] ? loader_write_data :
+        .write_data(poke_graphics_write[7] ? poke_write_data :
+                    loader_graphics_ram_write[7] ? loader_write_data :
                     spec256_graphics_data_out[63:56]),
 `else
         .write_enable(spec256_graphics_write[7] &&
@@ -1255,7 +1312,7 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 `undef NEXTTANG_SPEC256_INITIAL_IMAGE
 `else
 `ifndef NEXTTANG_SPECTRUM48_USE_DDR3
-    assign cpu_wait_n = 1'b1;
+    assign memory_cpu_wait_n = 1'b1;
 
     nexttang_block_ram #(
         .ADDRESS_BITS(16),
@@ -1511,11 +1568,16 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     assign {usb1_game_select, usb1_game_start, usb1_game_extra} = 6'b0;
 `else
     usb_hid_host #(
+`ifdef NEXTTANG_USB_SPLIT_HID_PORTS
+        .FULL_SPEED(1), .KEYBOARD_SUPPORT(0),
+        .MOUSE_SUPPORT(0), .GAME_SUPPORT(1)
+`else
         .FULL_SPEED(1), .KEYBOARD_SUPPORT(1),
 `ifdef NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
         .MOUSE_SUPPORT(0), .GAME_SUPPORT(0)
 `else
         .MOUSE_SUPPORT(0), .GAME_SUPPORT(1)
+`endif
 `endif
     ) usb_host_one (
         .clk(usb_clock), .reset(!usb_pll_locked), .cs(1'b1),
@@ -1546,11 +1608,16 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 `endif
 
     usb_hid_host #(
+`ifdef NEXTTANG_USB_SPLIT_HID_PORTS
+        .FULL_SPEED(1), .KEYBOARD_SUPPORT(1),
+        .MOUSE_SUPPORT(0), .GAME_SUPPORT(0)
+`else
         .FULL_SPEED(1), .KEYBOARD_SUPPORT(1),
 `ifdef NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
         .MOUSE_SUPPORT(0), .GAME_SUPPORT(0)
 `else
         .MOUSE_SUPPORT(0), .GAME_SUPPORT(1)
+`endif
 `endif
     ) usb_host_two (
         .clk(usb_clock), .reset(!usb_pll_locked), .cs(1'b1),
@@ -1585,11 +1652,20 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .dout(usb2_rom_data), .en(usb2_rom_enable)
     );
 `else
+`ifdef NEXTTANG_USB_DUPLICATE_MICROCODE
+    usb_hid_host_rom usb1_microcode (
+        .clk(usb_clock),.addr(usb1_rom_address),
+        .dout(usb1_rom_data),.en(usb1_rom_enable));
+    usb_hid_host_rom usb2_microcode (
+        .clk(usb_clock),.addr(usb2_rom_address),
+        .dout(usb2_rom_data),.en(usb2_rom_enable));
+`else
     usb_hid_host_dual_rom usb_microcode (
         .clk(usb_clock),
         .addra(usb1_rom_address), .douta(usb1_rom_data), .ena(usb1_rom_enable),
         .addrb(usb2_rom_address), .doutb(usb2_rom_data), .enb(usb2_rom_enable)
     );
+`endif
 `endif
 
     nexttang_usb_keyboard_matrix usb1_key_decode (
@@ -1796,14 +1872,62 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 
 `ifdef NEXTTANG_CLASSIC_SD_LOADER
     wire tape_ear,tape_active,tape_finished,tape_fault,tape_fault_unsupported;
+    wire[7:0]tape_block;
+    wire[16:0]tape_byte_position;
+    wire poke_content = loader_content_format == 3'd6;
+    wire poke_fifo_full;
+    wire [6:0] poke_fifo_level;
+    wire [7:0] poke_stream_byte;
+    wire poke_stream_valid,poke_stream_pop;
+    reg poke_content_done_sys=0;
+    reg poke_done_meta=0,poke_done_cpu=0;
+    wire poke_ready,poke_fault,poke_apply_valid;
+
+    always@(posedge sys_clk)begin
+        if(!machine_pll_locked||loader_content_start)poke_content_done_sys<=0;
+        else if(loader_content_done&&poke_content)poke_content_done_sys<=1;
+    end
+    always@(posedge cpu_clock)begin
+        poke_done_meta<=poke_content_done_sys;poke_done_cpu<=poke_done_meta;
+    end
+    nexttang_async_byte_fifo_small poke_fifo(
+        .write_clock(sys_clk),.write_reset(!machine_pll_locked),
+        .write_clear(loader_content_start),.write_data(loader_content_byte),
+        .write_enable(loader_content_valid&&poke_content),.write_full(poke_fifo_full),
+        .write_level(poke_fifo_level),.read_clock(cpu_clock),
+        .read_reset(!cpu_reset_shift[3]),.read_clear(loader_content_start),
+        .read_data(poke_stream_byte),.read_valid(poke_stream_valid),
+        .read_pop(poke_stream_pop));
+    assign poke_stream_pop=poke_stream_valid;
+    nexttang_poke_loader #(
+`ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
+        .MACHINE_KIND(2)
+`elsif NEXTTANG_SPECTRUM128
+        .MACHINE_KIND(1)
+`else
+        .MACHINE_KIND(0)
+`endif
+    ) poke_loader(
+        .clock(cpu_clock),.reset(!cpu_reset_shift[3]),
+        .content_start(loader_content_start&&poke_content),
+        .byte_data(poke_stream_byte),.byte_valid(poke_stream_valid),
+        .content_done(poke_done_cpu),.hold_cpu(poke_hold_cpu),
+        .ready(poke_ready),.fault(poke_fault),.write_valid(poke_apply_valid),
+        .write_ready(poke_write_complete),.write_target(poke_write_target),
+        .write_bank(poke_write_bank),.write_address(poke_write_address),
+        .write_data(poke_write_data));
+    assign poke_memory_write=poke_apply_valid&&poke_write_target<2;
+    wire poke_file_pause=poke_fifo_level>=7'd48;
+    wire tape_file_pause;
 `ifdef NEXTTANG_SPEC256_SD_PACK
     wire [6:0] spec256_pack_fifo_level;
     wire spec256_pack_fifo_full;
-    assign loader_file_pause = spec256_pack_fifo_level >= 11'd48;
+    wire spec256_pack_file_pause = spec256_pack_fifo_level >= 7'd48;
+    assign loader_file_pause = poke_file_pause || spec256_pack_file_pause;
     nexttang_async_byte_fifo_small spec256_pack_fifo (
         .write_clock(sys_clk), .write_reset(!machine_pll_locked),
         .write_clear(loader_content_start), .write_data(loader_content_byte),
-        .write_enable(loader_content_valid), .write_full(spec256_pack_fifo_full),
+        .write_enable(loader_content_valid&&!poke_content), .write_full(spec256_pack_fifo_full),
         .write_level(spec256_pack_fifo_level), .read_clock(cpu_clock),
         .read_reset(!cpu_reset_shift[3]), .read_clear(loader_content_start),
         .read_data(spec256_pack_byte), .read_valid(spec256_pack_byte_valid),
@@ -1812,9 +1936,11 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     assign typing_finished=1'b1; assign tape_ear=1'b0;
     assign tape_active=loader_content_valid||spec256_pack_byte_valid;
     assign tape_finished=loader_content_done&&!spec256_pack_byte_valid;
-    assign tape_fault=loader_catalog_error||loader_storage_error||
+    assign tape_fault=loader_catalog_error||loader_storage_error||poke_fault||
                       (loader_content_valid&&spec256_pack_fifo_full);
     assign tape_fault_unsupported=1'b0;
+    assign tape_block=8'b0;
+    assign tape_byte_position=17'b0;
 `elsif NEXTTANG_SPECTRUM128
     // The 128 ROM boots with Tape Loader selected; ENTER is sufficient.
     nexttang_post_tape_key_sequencer #(.CLOCK_HZ(3500000),.START_DELAY_MS(3000),
@@ -1827,15 +1953,18 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .keys(typist_keys),.finished(typing_finished));
 `endif
 `ifndef NEXTTANG_SPEC256_SD_PACK
+    assign loader_file_pause=poke_file_pause||tape_file_pause;
     assign post_tape_keys=40'b0;
     nexttang_classic_tape_loader tape_loader(
         .write_clock(sys_clk),.write_reset(!machine_pll_locked),
-        .content_start(loader_content_start),.content_format(loader_content_format),
-        .content_byte(loader_content_byte),.content_valid(loader_content_valid),
-        .content_done(loader_content_done),.file_pause(loader_file_pause),
-        .tape_clock(cpu_clock),.tape_reset(cpu_reset),.play_start(typing_finished),
+        .content_start(loader_content_start&&!poke_content),.content_format(loader_content_format),
+        .content_byte(loader_content_byte),.content_valid(loader_content_valid&&!poke_content),
+        .content_done(loader_content_done&&!poke_content),.file_pause(tape_file_pause),
+        .tape_clock(cpu_clock),.tape_reset(cpu_reset),.tape_enable(cpu_wait_n),
+        .play_start(typing_finished),
         .ear(tape_ear),.active(tape_active),.finished(tape_finished),
-        .fault(tape_fault),.fault_unsupported(tape_fault_unsupported));
+        .fault(tape_fault),.fault_unsupported(tape_fault_unsupported),
+        .current_block(tape_block),.byte_position(tape_byte_position));
 `endif
 `elsif NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
     assign typist_keys = 40'b0;
@@ -1933,6 +2062,36 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     );
 `endif
     wire tape_ear = 1'b0;
+`elsif NEXTTANG_CLASSIC_SD_LOADER
+    // SD-loader status is deliberately about the live load rather than the
+    // generic DDR transaction count. V/M/R are CPU activity, high-memory
+    // writes and DDR calibration; C/P/Y are tape active, tape finished and
+    // the combined tape/memory fault. The value packs the current TZX block,
+    // full stream byte position and the live 128K paging state. For 48K the
+    // paging bits are zero.
+    wire [5:0] status_flags = {
+`ifdef NEXTTANG_SPECTRUM48_USE_DDR3
+        tape_fault | tape_fault_unsupported | fault_calibration_lost |
+            fault_overrun | fault_timeout,
+`else
+        tape_fault | tape_fault_unsupported,
+`endif
+        tape_finished, tape_active,
+`ifdef NEXTTANG_SPECTRUM48_USE_DDR3
+        calibration_complete,
+`else
+        video_pll_locked,
+`endif
+        high_ram_write_seen, opcode_seen
+    };
+`ifdef NEXTTANG_SPECTRUM128
+    wire [5:0] status_paging = {cpu_ram_bank, rom_select, paging_locked,
+                                tape_active};
+`else
+    wire [5:0] status_paging = {5'b0, tape_active};
+`endif
+    wire [31:0] status_value = {tape_block, tape_byte_position,
+                                status_paging, 1'b0};
 `elsif NEXTTANG_SPECTRUM48_USE_TAPE
     // The capture card takes about forty seconds to relock after the FPGA is
     // reconfigured, so a tape that starts at the ROM's own pace is already
@@ -1964,6 +2123,7 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .clock(cpu_clock),
         .reset(cpu_reset),
         .start(typing_finished),
+        .clock_enable(cpu_wait_n),
         .ear(tape_ear),
         .active(tape_active),
         .finished(tape_finished),
@@ -2471,6 +2631,18 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .clock(pixel_clock),
         .reset(cpu_reset),
         .beeper(beeper),
+        .tape(tape_ear),
+`ifdef NEXTTANG_CLASSIC_SD_LOADER
+`ifdef NEXTTANG_SPECTRUM48_USE_SPEC256
+        .tape_enable(1'b0),
+`else
+        .tape_enable(tape_active),
+`endif
+`elsif NEXTTANG_SPECTRUM48_USE_TAPE
+        .tape_enable(tape_active),
+`else
+        .tape_enable(1'b0),
+`endif
 `ifdef NEXTTANG_SPECTRUM128
         .ay_enable(1'b1),
 `else
@@ -2487,10 +2659,19 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 `ifdef NEXTTANG_CLASSIC_SD_LOADER
     wire loader_overlay_enable;
     wire[7:0]loader_overlay_red,loader_overlay_green,loader_overlay_blue;
+`ifdef NEXTTANG_SPECTRUM48_USE_DDR3
+    wire loader_memory_fault = fault_timeout || fault_overrun ||
+                               fault_calibration_lost;
+`else
+    wire loader_memory_fault = 1'b0;
+`endif
     nexttang_loader_overlay loader_overlay(
-        .clock(pixel_clock),.enable(loader_menu_active),.ready(loader_menu_ready),
-        .error(loader_storage_error||loader_catalog_error),
-        .diagnostic_code(loader_storage_error?loader_storage_diagnostic:3'd0),
+        .clock(pixel_clock),
+        .enable(loader_menu_active||tape_fault||poke_fault||loader_memory_fault),
+        .ready(loader_menu_ready),
+        .error(loader_storage_error||loader_catalog_error||tape_fault||poke_fault||loader_memory_fault),
+        .diagnostic_code(loader_memory_fault?4'd9:(tape_fault||poke_fault)?4'd8:
+                         loader_storage_error?{1'b0,loader_storage_diagnostic}:4'd0),
         .x(hdmi_x),.y(hdmi_y),
         .selection(loader_selection),.file_count(loader_file_count),
         .display_entry(loader_display_entry),.display_name_index(loader_display_name_index),

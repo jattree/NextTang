@@ -1,0 +1,18 @@
+# Phantis (Part 1): English text for Alberto Conde's Spec256 conversion (SPEC256_MISTER).
+# Apply with tools/spec256/patch256.py to your own copy; the .256 is not
+# included. Only the game's text changes; the colours are untouched.
+# English text: NextTang.
+game: Phantis (Part 1)
+sha256: 9ed1b18b97c14a81cea04218bf804c617aab50d4835b3b977918eb77fb3cf006
+redraw-run: e44b e487
+"CLAVE ACCESO" = "ACCESS CODE "
+"PUNTOS" = "POINTS"
+"T TECLADO " = "T KEYS    "
+"E EMPEZAR" = "E START  "
+"' POR CARLOS ABRIL" = "' BY CARLOS ABRIL "
+" DERECHA " = "  RIGHT  "
+"IZQUIERDA" = "  LEFT   "
+"  SUBIR  " = "   UP    "
+"  BAJAR " = "  DOWN  "
+"DISPARAR " = "  FIRE   "
+"  PAUSA  " = "  PAUSE  "

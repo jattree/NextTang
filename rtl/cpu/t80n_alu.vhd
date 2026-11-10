@@ -71,6 +71,7 @@
 -- Victor Trucco, Fabio Belavenuto, Garry Lancaster : additional instructions
 -- Charlie Ingley : complete fix of wait logic
 -- ACX : implement undocumented flags for SLI r,(IY+s)
+-- David Saphier : debug interface
 
 library IEEE;
 use IEEE.std_logic_1164.all;

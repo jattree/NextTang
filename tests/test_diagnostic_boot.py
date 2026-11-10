@@ -78,6 +78,39 @@ pathlib.Path(output).write_bytes(b'bad')
         with self.assertRaisesRegex(ValueError, "8191 bytes; expected 8192"):
             BUILDER_MODULE.render_vhdl(bytes(8191), ASSEMBLY)
 
+    def test_binary_image_is_padded_and_carries_its_own_notice(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            binary = directory / "loader.bin"
+            binary.write_bytes(bytes([0xF3, 0xFF, 0x00]))
+            notice = directory / "loader.bin.notice"
+            notice.write_text("SPDX-License-Identifier: GPL-3.0-or-later\nCopyright 2020 Someone\n")
+            output = directory / "bootrom.vhd"
+            result = subprocess.run(
+                [sys.executable, str(BUILDER), "--binary", str(binary),
+                 "--notice-file", str(notice), "--output", str(output)],
+                check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = output.read_text(encoding="utf-8")
+            self.assertTrue(text.startswith(
+                "-- SPDX-License-Identifier: GPL-3.0-or-later\n-- Copyright 2020 Someone\n"))
+            self.assertNotIn("NextTang contributors", text)
+            self.assertIn('0 => x"f3",', text)
+            self.assertIn('2 => x"00",', text)
+            self.assertNotIn('1 => x"ff"', text)
+
+            binary.write_bytes(bytes(8193))
+            with self.assertRaisesRegex(ValueError, "8193 bytes; at most 8192"):
+                BUILDER_MODULE.load_binary(binary)
+
+            result = subprocess.run(
+                [sys.executable, str(BUILDER), "--binary", str(binary), "--output", str(output)],
+                check=False, capture_output=True, text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--binary requires --notice-file", result.stderr)
+
     def test_bootrom_reads_are_synchronous_and_padded(self) -> None:
         testbench = r"""
 library ieee;

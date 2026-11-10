@@ -133,8 +133,16 @@ package T80N_Pack is
       Spec256_sync_xy : in std_logic_vector(1 downto 0) := (others => '0');
       Spec256_sync_int_cycle : in std_logic := '0';
       Spec256_sync_nmi_cycle : in std_logic := '0';
+      Spec256_sync_acc : in std_logic := '0';
       Spec256_master_addressing : in std_logic := '0';
       Spec256_master_regs : in std_logic_vector(159 downto 0) := (others => '0');
+      Spec256_master_control : in std_logic := '0';
+      Spec256_master_incdecz : in std_logic := '0';
+      Spec256_fetch_from_master : in std_logic := '0';
+      Spec256_master_ir : in std_logic_vector(7 downto 0) := (others => '0');
+      Spec256_master_vector : in std_logic_vector(7 downto 0) := (others => '0');
+      Spec256_state_ir : out std_logic_vector(7 downto 0);
+      Spec256_state_vector : out std_logic_vector(7 downto 0);
       Spec256_state_pc : out std_logic_vector(15 downto 0);
       Spec256_state_sp : out std_logic_vector(15 downto 0);
       Spec256_state_i : out std_logic_vector(7 downto 0);
@@ -149,11 +157,21 @@ package T80N_Pack is
       Spec256_state_int_cycle : out std_logic;
       Spec256_state_nmi_cycle : out std_logic;
       Spec256_state_instruction_boundary : out std_logic;
+      Spec256_state_incdecz : out std_logic;
       Spec256_instruction_access : out std_logic := '0';
       -- extended functions
       Z80N_dout_o       : out std_logic := '0';
       Z80N_data_o       : out std_logic_vector(15 downto 0);
-      Z80N_command_o    : out Z80N_seq
+      Z80N_command_o    : out Z80N_seq;
+      -- NextTang: the official debug interface (t80n-debug)
+      i_debug_reg       : in std_logic_vector(4 downto 0) := (others => '0');
+      i_debug_wr        : in std_logic := '0';
+      i_debug_dat       : in std_logic_vector(7 downto 0) := (others => '0');
+      o_debug_dat       : out std_logic_vector(7 downto 0);
+      o_debug_lastM     : out std_logic;
+      i_debug_pause     : in std_logic := '0';
+      o_debug_next_pc   : out std_logic_vector(15 downto 0);
+      i_debug_break     : in std_logic := '0'
    );
    end component;
 

@@ -7,9 +7,7 @@ import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CONTENTION_RTL = REPO_ROOT / "rtl" / "clock" / "nexttang_cpu_clock_contention.v"
 ENABLES_RTL = REPO_ROOT / "rtl" / "clock" / "nexttang_machine_clock_enables.v"
-MUX_RTL = REPO_ROOT / "boards" / "console138k" / "nexttang_console138k_cpu_clock_mux.v"
 PLL_RTL = REPO_ROOT / "boards" / "console138k" / "nexttang_console138k_machine_pll.v"
 TREE_RTL = (
     REPO_ROOT / "boards" / "console138k" / "nexttang_console138k_machine_clock_tree.v"
@@ -56,29 +54,16 @@ def run_testbench(testbench: str, *sources: Path) -> str:
         return simulation_result.stdout
 
 
-class MachineClockTest(unittest.TestCase):
-    def test_contention_hold_and_psg_enable_cadence(self) -> None:
-        testbench = r"""
+PSG_TESTBENCH = r"""
 `timescale 1ns/1ps
 module testbench;
-    reg clock_7 = 0;
     reg clock_28 = 0;
     reg reset = 1;
-    reg cpu_clock_lsb = 0;
-    reg cpu_contend = 0;
-    wire clock_3m5;
     wire psg_enable;
     integer pulse_count = 0;
     integer cycle_count = 0;
 
-    always #4 clock_7 = ~clock_7;
     always #1 clock_28 = ~clock_28;
-
-    nexttang_cpu_clock_contention contention (
-        .clock_7(clock_7), .reset(reset),
-        .cpu_clock_lsb(cpu_clock_lsb), .cpu_contend(cpu_contend),
-        .clock_3m5(clock_3m5)
-    );
 
     nexttang_machine_clock_enables enables (
         .clock_28(clock_28), .reset(reset), .psg_enable(psg_enable)
@@ -92,141 +77,24 @@ module testbench;
         end
     end
 
-    task clock_7_step;
-        begin
-            @(posedge clock_7); #1;
-        end
-    endtask
-
     initial begin
-        #1;
-        if (clock_3m5 !== 1'b0)
-            $fatal(1, "contention clock did not reset low");
-
-        #2 reset = 0;
-        cpu_clock_lsb = 0;
-        clock_7_step();
-        if (!clock_3m5)
-            $fatal(1, "low CPU phase did not raise the 3.5 MHz clock");
-
-        cpu_clock_lsb = 1;
-        cpu_contend = 1;
-        clock_7_step();
-        if (!clock_3m5)
-            $fatal(1, "contention failed to hold the high phase");
-
-        cpu_contend = 0;
-        clock_7_step();
-        if (clock_3m5)
-            $fatal(1, "uncontended high CPU phase did not lower the clock");
-
-        cpu_contend = 1;
-        clock_7_step();
-        if (clock_3m5)
-            $fatal(1, "contention failed to hold the low phase");
-
-        cpu_clock_lsb = 0;
-        clock_7_step();
-        if (!clock_3m5)
-            $fatal(1, "clock failed to resume after contention");
-
-        #1 reset = 1;
-        #1;
-        if (clock_3m5 !== 1'b0)
-            $fatal(1, "asynchronous reset did not clear the contention clock");
-        reset = 0;
-
+        #3 reset = 0;
         while (cycle_count < 33)
             @(posedge clock_28);
-        #1;
+        #0.1;
         if (pulse_count != 2)
             $fatal(1, "PSG enable count was %0d instead of 2 in 33 cycles", pulse_count);
-
-        $display("MACHINE_CLOCK_CONTROL_PASS");
+        $display("PSG_ENABLE_PASS");
         $finish;
     end
 endmodule
 """
-        output = run_testbench(testbench, CONTENTION_RTL, ENABLES_RTL)
-        self.assertIn("MACHINE_CLOCK_CONTROL_PASS", output)
 
-    def test_console_mux_maps_every_speed_to_its_clock(self) -> None:
-        testbench = r"""
-`timescale 1ns/1ps
 
-module DCS #(
-    parameter DCS_MODE = "RISING"
-) (
-    output wire CLKOUT,
-    input wire CLKIN0,
-    input wire CLKIN1,
-    input wire CLKIN2,
-    input wire CLKIN3,
-    input wire [3:0] CLKSEL,
-    input wire SELFORCE
-);
-    assign CLKOUT = CLKSEL[0] ? CLKIN0 :
-                    CLKSEL[1] ? CLKIN1 :
-                    CLKSEL[2] ? CLKIN2 :
-                    CLKSEL[3] ? CLKIN3 : 1'b0;
-endmodule
-
-module testbench;
-    reg clock_3m5 = 0;
-    reg clock_7 = 0;
-    reg clock_14 = 0;
-    reg clock_28 = 0;
-    reg [1:0] cpu_speed = 0;
-    wire cpu_clock;
-
-    nexttang_console138k_cpu_clock_mux dut (
-        .clock_3m5(clock_3m5), .clock_7(clock_7),
-        .clock_14(clock_14), .clock_28(clock_28),
-        .cpu_speed(cpu_speed), .cpu_clock(cpu_clock)
-    );
-
-    task expect_selected;
-        input [1:0] speed;
-        begin
-            cpu_speed = speed;
-            {clock_28, clock_14, clock_7, clock_3m5} = 4'b0000;
-            #1;
-            if (cpu_clock !== 1'b0)
-                $fatal(1, "speed %0d did not start low", speed);
-            case (speed)
-                2'b00: clock_3m5 = 1;
-                2'b01: clock_7 = 1;
-                2'b10: clock_14 = 1;
-                2'b11: clock_28 = 1;
-            endcase
-            #1;
-            if (cpu_clock !== 1'b1)
-                $fatal(1, "speed %0d selected the wrong input", speed);
-            {clock_28, clock_14, clock_7, clock_3m5} = 4'b1111;
-            case (speed)
-                2'b00: clock_3m5 = 0;
-                2'b01: clock_7 = 0;
-                2'b10: clock_14 = 0;
-                2'b11: clock_28 = 0;
-            endcase
-            #1;
-            if (cpu_clock !== 1'b0)
-                $fatal(1, "speed %0d leaked an unselected input", speed);
-        end
-    endtask
-
-    initial begin
-        expect_selected(2'b00);
-        expect_selected(2'b01);
-        expect_selected(2'b10);
-        expect_selected(2'b11);
-        $display("CONSOLE138K_CPU_CLOCK_MUX_PASS");
-        $finish;
-    end
-endmodule
-"""
-        output = run_testbench(testbench, MUX_RTL)
-        self.assertIn("CONSOLE138K_CPU_CLOCK_MUX_PASS", output)
+class MachineClockTest(unittest.TestCase):
+    def test_psg_enable_cadence(self) -> None:
+        output = run_testbench(PSG_TESTBENCH, ENABLES_RTL)
+        self.assertIn("PSG_ENABLE_PASS", output)
 
     def test_console_pll_parameters_and_output_mapping(self) -> None:
         testbench = r"""
@@ -277,8 +145,20 @@ module PLL #(
     input wire ENCLK4, ENCLK5, ENCLK6, SSCPOL, SSCON
 );
     assign CLKOUT0 = testbench.source_28;
-    assign CLKOUT1 = 1'b0;
-    assign CLKOUT2 = 1'b0;
+    // Outputs 1 and 2, when enabled, divide the same VCO by 2 and 4 of
+    // CLKOUT0's divider and start together with it, so 7 MHz rises with 14.
+    reg pll_14 = 1'b0;
+    reg pll_7 = 1'b0;
+    reg [1:0] pll_count = 2'd0;
+    always @(posedge testbench.source_28)
+        if (testbench.source_lock) begin
+            pll_14 <= ~pll_14;
+            pll_count <= pll_count + 2'd1;
+            if (!pll_count[0])
+                pll_7 <= ~pll_7;
+        end
+    assign CLKOUT1 = CLKOUT1_EN == "TRUE" ? pll_14 : 1'b0;
+    assign CLKOUT2 = CLKOUT2_EN == "TRUE" ? pll_7 : 1'b0;
     assign CLKOUT3 = testbench.source_28_n;
     assign CLKOUT4 = 0;
     assign CLKOUT5 = 0;
@@ -314,15 +194,27 @@ module PLL #(
             $fatal(1, "the shifted output must divide the same as CLKOUT0");
         if (CLKOUT0_EN != "TRUE" || CLKOUT3_EN != "TRUE")
             $fatal(1, "a machine-clock output was disabled");
-        // 14 and 7 are divided from 28 in fabric. Taking them as further PLL
-        // outputs put them on unrelated clock resources, and the skew between
-        // them broke hold timing inside the ULA.
-        if (CLKOUT1_EN != "FALSE" || CLKOUT2_EN != "FALSE")
-            $fatal(1, "14 and 7 MHz must not be separate PLL outputs");
+        // 14 and 7 MHz are either both divided in fabric or both PLL outputs
+        // dividing the same VCO exactly, at phase zero like 28 MHz.
+        if (CLKOUT1_EN != CLKOUT2_EN)
+            $fatal(1, "14 and 7 MHz must come from the same place");
+        if (CLKOUT1_EN == "TRUE") begin
+            if (vco_mhz / ODIV1_SEL != 14.0 || vco_mhz / ODIV2_SEL != 7.0)
+                $fatal(1, "PLL outputs are %f and %f MHz, not 14 and 7",
+                       vco_mhz / ODIV1_SEL, vco_mhz / ODIV2_SEL);
+            if (CLKOUT1_PE_COARSE != 0 || CLKOUT1_PE_FINE != 0 ||
+                    CLKOUT2_PE_COARSE != 0 || CLKOUT2_PE_FINE != 0)
+                $fatal(1, "14 or 7 MHz phase was not zero");
+        end
         if (CLKOUT0_PE_COARSE != 0 || CLKOUT0_PE_FINE != 0)
             $fatal(1, "machine-clock phase was not zero");
-        if (CLKOUT3_PE_COARSE != 13 || CLKOUT3_PE_FINE != 4)
-            $fatal(1, "complementary 28 MHz phase was not 180 degrees");
+        // The phase is counted in VCO periods, so it has to be derived from the
+        // divider rather than matched as a literal: 13 and 4 were 180 degrees
+        // against the old 27 divider and became 194 when the divider moved to
+        // 25, unnoticed for two months.
+        if ((CLKOUT3_PE_COARSE + CLKOUT3_PE_FINE / 8.0) * 2.0 != ODIV3_SEL)
+            $fatal(1, "complementary 28 MHz phase was %f of a period, not a half",
+                   (CLKOUT3_PE_COARSE + CLKOUT3_PE_FINE / 8.0) / ODIV3_SEL);
     end
 endmodule
 
@@ -373,10 +265,19 @@ module testbench;
     integer edges_14 = 0;
     integer edges_7 = 0;
 
-    nexttang_console138k_machine_pll dut (
+    nexttang_console138k_machine_pll #(.PLL_DIVIDERS(PLL_DIVIDERS_UNDER_TEST)) dut (
         .clock_in(clock_in), .clock_28(clock_28), .clock_28_n(clock_28_n),
         .clock_14(clock_14), .clock_7(clock_7), .locked(locked)
     );
+
+    // From PLL outputs, 7 MHz must rise with 14 MHz, as the core assumes.
+    // (The CLKDIV model here does not reproduce the hardware's divider phase,
+    // which the board reports on its status UART instead.)
+    always @(posedge clock_7) begin
+        #1;
+        if (PLL_DIVIDERS_UNDER_TEST && locked && !clock_14)
+            $fatal(1, "7 MHz rose while 14 MHz was low");
+    end
 
     always #5 source_28 = ~source_28;
     always @(*) source_28_n = ~source_28;
@@ -417,8 +318,11 @@ module testbench;
     end
 endmodule
 """
-        output = run_testbench(testbench, PLL_RTL)
-        self.assertIn("CONSOLE138K_MACHINE_PLL_PASS", output)
+        for pll_dividers in (0, 1):
+            with self.subTest(pll_dividers=pll_dividers):
+                output = run_testbench(
+                    testbench.replace("PLL_DIVIDERS_UNDER_TEST", str(pll_dividers)), PLL_RTL)
+                self.assertIn("CONSOLE138K_MACHINE_PLL_PASS", output)
 
     def test_console_clock_tree_reset_and_core_contract(self) -> None:
         testbench = r"""
@@ -535,20 +439,15 @@ module testbench;
     reg force_reset = 0;
     reg memory_calibrated = 0;
     reg memory_fault = 0;
-    reg cpu_clock_lsb = 0;
-    reg cpu_contend = 0;
-    reg [1:0] cpu_speed = 0;
-    wire clock_28, clock_28_n, clock_14, clock_7, clock_3m5;
-    wire cpu_clock, psg_enable, machine_reset, clock_locked;
+    wire clock_28, clock_28_n, clock_14, clock_7;
+    wire psg_enable, machine_reset, clock_locked;
     integer cycle;
 
     nexttang_console138k_machine_clock_tree #(.RESET_RELEASE_STAGES(3)) dut (
         .clock_27(clock_27), .force_reset(force_reset),
         .memory_calibrated(memory_calibrated), .memory_fault(memory_fault),
-        .cpu_clock_lsb(cpu_clock_lsb), .cpu_contend(cpu_contend),
-        .cpu_speed(cpu_speed), .clock_28(clock_28),
+        .clock_28(clock_28),
         .clock_28_n(clock_28_n), .clock_14(clock_14), .clock_7(clock_7),
-        .clock_3m5(clock_3m5), .cpu_clock(cpu_clock),
         .psg_enable(psg_enable), .machine_reset(machine_reset),
         .clock_locked(clock_locked)
     );
@@ -597,24 +496,9 @@ module testbench;
         if (!clock_locked)
             $fatal(1, "PLL lock did not propagate");
 
-        pulse_7();
-        if (!clock_3m5)
-            $fatal(1, "contended 3.5 MHz clock did not join the tree");
-        cpu_speed = 0;
-        #1;
-        if (!cpu_clock)
-            $fatal(1, "slow CPU clock was not selectable");
-
-        cpu_speed = 2'b10;
-        source_14 = 1;
-        #1;
-        if (!cpu_clock)
-            $fatal(1, "14 MHz CPU clock was not selectable");
-        source_14 = 0;
-
         memory_fault = 1;
         #1;
-        if (!machine_reset || clock_3m5 || psg_enable)
+        if (!machine_reset || psg_enable)
             $fatal(1, "memory fault did not reset the machine tree");
         memory_fault = 0;
         release_reset();
@@ -648,9 +532,7 @@ endmodule
             PLL_RTL,
             TREE_RTL,
             RESET_RELEASE_RTL,
-            CONTENTION_RTL,
             ENABLES_RTL,
-            MUX_RTL,
         )
         self.assertIn("CONSOLE138K_MACHINE_CLOCK_TREE_PASS", output)
 

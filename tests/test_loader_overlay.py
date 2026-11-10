@@ -16,7 +16,7 @@ class LoaderOverlayTests(unittest.TestCase):
         bench = r"""
 `timescale 1ns/1ps
 module testbench;
- reg clock=0,enable=1,ready=1,error=0;reg[2:0]diagnostic_code=0;
+ reg clock=0,enable=1,ready=1,error=0;reg[3:0]diagnostic_code=0;
  reg[10:0]x=0;reg[9:0]y=0;reg[5:0]selection=0,file_count=1;
  wire[5:0]display_entry,display_name_index;reg[7:0]display_name_data="B",display_name_length=5;
  wire overlay_enable;wire[7:0]red,green,blue;

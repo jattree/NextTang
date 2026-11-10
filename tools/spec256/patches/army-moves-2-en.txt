@@ -1,0 +1,28 @@
+# Army Moves (Part 2): English text for Alberto Conde's Spec256 conversion (SPEC256_MISTER).
+# Apply with tools/spec256/patch256.py to your own copy; the .256 is not
+# included. Only the game's text changes; the colours are untouched.
+# English text: NextTang, following Imagine's 1987 English release
+# where its wording fits the Spanish strings' lengths.
+game: Army Moves (Part 2)
+sha256: 35a33f7c2b5ac46ea36f88f4a6be46f319a540fd67ada772d56b5d80d66fd4b7
+redraw: 13
+# The menu lines' clean copies, which the game puts back as the jeeps pass.
+buffer: 6e60 5 1 30, 7220 9 1 30
+# The panel's PUNTOS is a picture: POINTS laid out as Imagine's English
+# release draws it, with Dinamic's own O, its letters coloured from this
+# game's PUNTOS (the I shaded the same way, left to right).
+label: a959 8 8
+pixels: 000000f0000000003fc3f0f1c77fc7fc38e7f801e77fcffc38e718f1f70e0e003fe718f1df0e07f83fc718f1cf0e003c3807f8f1c70e0ffc3803f0f1c70e0ff8
+take: 2-10 2-10, 13-20 43-50, 31-39 23-31, 41-49 33-41, 52-61 52-61
+shade: 24-27 16 19 20 23
+background: 16
+# The controls table as Imagine's English release has it (Imagine left the
+# second, unused copy at 0xC355 in Spanish, and so does this patch).
+"DERECHA  IZQUIERDA  SUBIR   FUEGO-1   BAJAR   FUEGO-2 REINICIAR  PAUSA  " = "  RIGHT    LEFT      UP     FIRE-1    DOWN    FIRE-2    ABORT    PAUSE  "
+"1-TECLADO" = "1-KEYS   "
+"3-JUGAR" = "3-PLAY "
+"PROGRAMA POR VICTOR RUIZ" = "PROGRAM BY VICTOR RUIZ  "
+"LA MISION HA FRACASADO" = "THE MISSION HAS FAILED"
+"COMPLETADA FASE " = "COMPLETED PHASE "
+"LO HAS CONSEGUIDO" = "YOU MADE IT      "
+"CONTINUARA EN NAVY MOVES." = "CONTINUES IN NAVY MOVES. "

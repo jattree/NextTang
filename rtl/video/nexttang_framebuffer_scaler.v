@@ -19,11 +19,18 @@ module nexttang_framebuffer_scaler #(
     parameter integer SCALE = 2,
     parameter integer OUTPUT_WIDTH = 1280,
     parameter integer OUTPUT_HEIGHT = 720,
-    parameter integer PIXEL_BITS = 8
+    parameter integer PIXEL_BITS = 8,
+    // A second, shorter source frame (60 Hz timing gives 360x240): frames that
+    // start while source_short is high end at line ALT_SOURCE_HEIGHT - 1 and
+    // are shown centred at that height. Each frame's height travels with it to
+    // the output. 0 keeps the single frame height, and source_short is then
+    // ignored.
+    parameter integer ALT_SOURCE_HEIGHT = 0
 ) (
     input  wire                              source_clock,
     input  wire                              source_reset,
     input  wire                              source_frame_start,
+    input  wire                              source_short,
     input  wire                              source_pixel_valid,
     input  wire [$clog2(SOURCE_WIDTH)-1:0]   source_x,
     input  wire [$clog2(SOURCE_HEIGHT)-1:0]  source_y,
@@ -51,6 +58,9 @@ module nexttang_framebuffer_scaler #(
     localparam integer SCALED_HEIGHT = SOURCE_HEIGHT * SCALE;
     localparam integer LEFT = (OUTPUT_WIDTH - SCALED_WIDTH) / 2;
     localparam integer TOP = (OUTPUT_HEIGHT - SCALED_HEIGHT) / 2;
+    localparam integer SHORT_HEIGHT = ALT_SOURCE_HEIGHT == 0 ? SOURCE_HEIGHT : ALT_SOURCE_HEIGHT;
+    localparam integer SCALED_HEIGHT_SHORT = SHORT_HEIGHT * SCALE;
+    localparam integer TOP_SHORT = (OUTPUT_HEIGHT - SCALED_HEIGHT_SHORT) / 2;
 
     initial begin
         if (SCALE < 1)
@@ -66,6 +76,8 @@ module nexttang_framebuffer_scaler #(
     reg [1:0] published_bank;
     reg       publish_toggle;
     reg       capture_active;
+    reg       frame_short;       // the frame being written is the short one
+    reg       published_short;   // and the one last published
 
     reg       acknowledge_meta;
     reg       acknowledge_sync;
@@ -77,7 +89,7 @@ module nexttang_framebuffer_scaler #(
     wire [ADDRESS_BITS-1:0] source_address =
         source_address_wide[ADDRESS_BITS-1:0];
     wire source_last_pixel = source_x == SOURCE_WIDTH - 1 &&
-                             source_y == SOURCE_HEIGHT - 1;
+                             source_y == (frame_short ? SHORT_HEIGHT - 1 : SOURCE_HEIGHT - 1);
 
     function automatic [1:0] remaining_bank;
         input [1:0] first;
@@ -108,9 +120,13 @@ module nexttang_framebuffer_scaler #(
             publish_toggle <= 1'b0;
             capture_active <= 1'b0;
             source_overrun <= 1'b0;
+            frame_short <= 1'b0;
+            published_short <= 1'b0;
         end else begin
-            if (source_frame_start)
+            if (source_frame_start) begin
                 capture_active <= 1'b1;
+                frame_short <= ALT_SOURCE_HEIGHT != 0 && source_short;
+            end
 
             if (source_pixel_valid && (capture_active || source_frame_start)) begin
                 frame_memory[source_address] <= source_pixel;
@@ -120,6 +136,7 @@ module nexttang_framebuffer_scaler #(
                     if (acknowledge_sync == publish_toggle &&
                             read_bank_sync != write_bank) begin
                         published_bank <= write_bank;
+                        published_short <= frame_short;
                         publish_toggle <= !publish_toggle;
                         write_bank <= remaining_bank(write_bank, read_bank_sync);
                     end else begin
@@ -140,14 +157,21 @@ module nexttang_framebuffer_scaler #(
     reg [1:0] published_bank_sync;
     reg [1:0] read_bank;
     reg       acknowledge_toggle;
+    reg       published_short_meta;
+    reg       published_short_sync;
+    reg       read_short;          // the frame being shown is the short one
 
+    wire [$clog2(OUTPUT_HEIGHT)-1:0] picture_top =
+        read_short ? TOP_SHORT[$clog2(OUTPUT_HEIGHT)-1:0] : TOP[$clog2(OUTPUT_HEIGHT)-1:0];
+    wire [$clog2(OUTPUT_HEIGHT):0] picture_bottom =
+        read_short ? TOP_SHORT + SCALED_HEIGHT_SHORT : TOP + SCALED_HEIGHT;
     wire inside_picture = output_data_enable &&
                           output_x >= LEFT && output_x < LEFT + SCALED_WIDTH &&
-                          output_y >= TOP && output_y < TOP + SCALED_HEIGHT;
+                          output_y >= picture_top && output_y < picture_bottom;
     wire [30:0] mapped_x_calculation =
         (output_x - LEFT) / SCALE;
     wire [30:0] mapped_y_calculation =
-        (output_y - TOP) / SCALE;
+        (output_y - picture_top) / SCALE;
     wire [$clog2(OUTPUT_WIDTH)-1:0] mapped_x_wide =
         mapped_x_calculation[$clog2(OUTPUT_WIDTH)-1:0];
     wire [$clog2(OUTPUT_HEIGHT)-1:0] mapped_y_wide =
@@ -172,17 +196,22 @@ module nexttang_framebuffer_scaler #(
             publish_sync <= 1'b0;
             published_bank_meta <= 2'd1;
             published_bank_sync <= 2'd1;
+            published_short_meta <= 1'b0;
+            published_short_sync <= 1'b0;
         end else begin
             publish_meta <= publish_toggle;
             publish_sync <= publish_meta;
             published_bank_meta <= published_bank;
             published_bank_sync <= published_bank_meta;
+            published_short_meta <= published_short;
+            published_short_sync <= published_short_meta;
         end
     end
 
     always @(posedge output_clock) begin
         if (output_reset) begin
             read_bank <= 2'd0;
+            read_short <= 1'b0;
             acknowledge_toggle <= 1'b0;
             output_frame_valid <= 1'b0;
             scaled_hsync <= 1'b0;
@@ -195,6 +224,7 @@ module nexttang_framebuffer_scaler #(
         end else begin
             if (output_frame_start && publish_sync != acknowledge_toggle) begin
                 read_bank <= published_bank_sync;
+                read_short <= published_short_sync;
                 acknowledge_toggle <= publish_sync;
                 output_frame_valid <= 1'b1;
             end

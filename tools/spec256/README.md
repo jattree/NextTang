@@ -79,3 +79,45 @@ When a conversion has no graphical ROM, omit `--rom-gfx` and pass the ordinary
 eight graphical execution planes, matching GZX initialization. It never embeds
 a ROM unless the user explicitly supplies it, and generated packs remain
 private build artifacts.
+
+## English text patches
+
+Some of Alberto Conde's conversions are of the Spanish releases (Army Moves,
+for one). `patches/` holds English text for them as patches, so anyone can
+apply them to their own copy of the `.256`; the games themselves are not
+included. Only the game's text changes, never the colours, and each English
+string is exactly as long as the Spanish one it replaces, because the games
+print strings inline in their code.
+
+```sh
+python3 tools/spec256/patch256.py tools/spec256/patches/army-moves-1-en.txt \
+    "Army Moves (Part 1).256" "Army Moves (Part 1) (English).256"
+```
+
+The patch checks the `.256`'s SHA-256 first and refuses any other version.
+In the game's text all nine bytes of a character (eight planes and the
+game's byte) hold its code, and the patch changes all nine.
+
+A conversion's snapshot is often taken with the menu already on screen, so
+patches marked `redraw` also print the visible text again, by running the
+game's own print code on a Z80 emulator for the game's bytes and each colour
+plane. That needs a 48K ROM image and the `z80` package:
+
+```sh
+pip install z80
+python3 tools/spec256/patch256.py tools/spec256/patches/army-moves-1-en.txt \
+    "Army Moves (Part 1).256" "Army Moves (Part 1) (English).256" --rom 48.rom
+```
+For IPS tools (Lunar IPS, Floating IPS), `patch256.py PATCH GAME.256 --ips
+OUT.ips` writes the same change as an IPS patch, with any redraw already
+done; IPS files are release downloads, generated from the `.256`, and are
+not kept in the repository.
+
+Add a BGX2 block (more backgrounds and rules than BGX1 holds) to a `.256`; every
+existing byte stays, and a file ending before OPT1 gets an OPT1 first:
+
+```bash
+tools/spec256/add_bgx2.py IN.256 OUT.256 \
+  --image /absolute/path/to/GAME.B03 --image /absolute/path/to/GAME.B04 \
+  --rule 4:17d1b,=1,ff,0c,19 --default keep
+```

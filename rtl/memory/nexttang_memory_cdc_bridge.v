@@ -18,6 +18,7 @@ module nexttang_memory_cdc_bridge (
     input  wire [7:0]  source_write_data,
     output reg         source_response_valid,
     output reg  [7:0]  source_read_data,
+    output reg  [127:0] source_read_line,
 
     input  wire        destination_clock,
     input  wire        destination_reset,
@@ -27,7 +28,8 @@ module nexttang_memory_cdc_bridge (
     output reg  [20:0] destination_address,
     output reg  [7:0]  destination_write_data,
     input  wire        destination_response_valid,
-    input  wire [7:0]  destination_read_data
+    input  wire [7:0]  destination_read_data,
+    input  wire [127:0] destination_read_line
 );
     localparam [1:0] DESTINATION_IDLE = 2'd0;
     localparam [1:0] DESTINATION_ISSUE = 2'd1;
@@ -41,6 +43,7 @@ module nexttang_memory_cdc_bridge (
 
     reg response_toggle;
     reg [7:0] response_read_data_hold;
+    reg [127:0] response_read_line_hold;
 
     (* async_reg = "true" *) reg response_toggle_sync_1;
     (* async_reg = "true" *) reg response_toggle_sync_2;
@@ -64,6 +67,7 @@ module nexttang_memory_cdc_bridge (
             response_toggle_sync_2 <= 1'b0;
             source_response_valid <= 1'b0;
             source_read_data <= 0;
+            source_read_line <= 0;
         end else begin
             response_toggle_sync_1 <= response_toggle;
             response_toggle_sync_2 <= response_toggle_sync_1;
@@ -78,6 +82,7 @@ module nexttang_memory_cdc_bridge (
             end else if (source_outstanding &&
                          response_toggle_sync_2 == request_toggle) begin
                 source_read_data <= response_read_data_hold;
+                source_read_line <= response_read_line_hold;
                 source_response_valid <= 1'b1;
                 source_outstanding <= 1'b0;
             end
@@ -90,6 +95,7 @@ module nexttang_memory_cdc_bridge (
             request_toggle_sync_2 <= 1'b0;
             response_toggle <= 1'b0;
             response_read_data_hold <= 0;
+            response_read_line_hold <= 0;
             destination_state <= DESTINATION_IDLE;
             handled_request_toggle <= 1'b0;
             active_request_toggle <= 1'b0;
@@ -119,6 +125,7 @@ module nexttang_memory_cdc_bridge (
                         destination_request <= 1'b0;
                         if (destination_response_valid) begin
                             response_read_data_hold <= destination_read_data;
+                            response_read_line_hold <= destination_read_line;
                             response_toggle <= active_request_toggle;
                             handled_request_toggle <= active_request_toggle;
                             destination_state <= DESTINATION_IDLE;
@@ -131,6 +138,7 @@ module nexttang_memory_cdc_bridge (
                 DESTINATION_RESPONSE: begin
                     if (destination_response_valid) begin
                         response_read_data_hold <= destination_read_data;
+                        response_read_line_hold <= destination_read_line;
                         response_toggle <= active_request_toggle;
                         handled_request_toggle <= active_request_toggle;
                         destination_state <= DESTINATION_IDLE;

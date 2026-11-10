@@ -24,6 +24,7 @@ module testbench;
     reg clock = 0;
     reg reset = 1;
     reg start = 0;
+    reg clock_enable = 1;
     wire ear, active, finished, fault, fault_unsupported;
     wire [7:0] current_block;
     wire [16:0] byte_position;
@@ -49,7 +50,7 @@ module testbench;
         .HEADER_PILOT_PULSES(3),
         .DATA_PILOT_PULSES(2)
     ) dut (
-        .clock(clock), .reset(reset), .start(start), .ear(ear),
+        .clock(clock), .reset(reset), .start(start), .clock_enable(clock_enable), .ear(ear),
         .active(active), .finished(finished), .fault(fault),
         .fault_unsupported(fault_unsupported),
         .current_block(current_block), .byte_position(byte_position)
@@ -133,6 +134,26 @@ endmodule
         tape = b"ZXTape!\x1a\x01\x14\x11" + turbo_header + b"\xa0"
         output = self.run_player(tape, expected_toggles=10, expect_fault=0)
         self.assertIn("PASS toggles=10", output)
+
+    def test_three_weeks_turbo_loader_pulse_profile(self) -> None:
+        """Pin the custom-loader timings observed in Three Weeks in Paradise."""
+        turbo_header = (
+            (2165).to_bytes(2, "little")
+            + (714).to_bytes(2, "little")
+            + (714).to_bytes(2, "little")
+            + (583).to_bytes(2, "little")
+            + (1166).to_bytes(2, "little")
+            + (3).to_bytes(2, "little")
+            + b"\x08"
+            + (0).to_bytes(2, "little")
+            + b"\x01\x00\x00"
+        )
+        tape = b"ZXTape!\x1a\x01\x14\x11" + turbo_header + b"\xa0"
+        widths = self.measure_widths(tape)
+        pulses = widths[1:]
+        self.assertTrue(any(abs(width - 714) <= 4 for width in pulses))
+        self.assertTrue(any(abs(width - 583) <= 4 for width in pulses))
+        self.assertTrue(any(abs(width - 1166) <= 4 for width in pulses))
 
     def test_standard_pulses_are_the_lengths_the_rom_decodes(self) -> None:
         # The other tests count edges. The ROM decodes the interval between
@@ -219,6 +240,7 @@ module testbench;
     reg clock = 0;
     reg reset = 1;
     reg start = 0;
+    reg clock_enable = 1;
     wire ear, active, finished, fault, fault_unsupported;
     wire [7:0] current_block;
     wire [16:0] byte_position;
@@ -235,7 +257,7 @@ module testbench;
         .HEADER_PILOT_PULSES({header_pilot}),
         .DATA_PILOT_PULSES(4)
     ) dut (
-        .clock(clock), .reset(reset), .start(start), .ear(ear),
+        .clock(clock), .reset(reset), .start(start), .clock_enable(clock_enable), .ear(ear),
         .active(active), .finished(finished), .fault(fault),
         .fault_unsupported(fault_unsupported),
         .current_block(current_block), .byte_position(byte_position)

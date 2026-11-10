@@ -28,6 +28,8 @@ module testbench;
     wire [7:0] ram_read_data;
     wire cpu_wait_n;
     wire upper_transaction_complete;
+    reg poke_write = 0; reg [15:0] poke_address = 0;
+    reg [7:0] poke_write_data = 0; wire poke_complete;
 
     reg [13:0] video_address = 0;
     wire [7:0] video_data;
@@ -64,6 +66,8 @@ module testbench;
         .cpu_wr_n(cpu_wr_n), .cpu_rfsh_n(cpu_rfsh_n),
         .ram_read_data(ram_read_data), .cpu_wait_n(cpu_wait_n),
         .upper_transaction_complete(upper_transaction_complete),
+        .poke_write(poke_write), .poke_address(poke_address),
+        .poke_write_data(poke_write_data), .poke_complete(poke_complete),
         .video_clock(memory_clock), .video_address(video_address),
         .video_data(video_data),
         .memory_clock(memory_clock), .memory_reset(memory_reset),
@@ -116,6 +120,15 @@ module testbench;
                 $fatal(1, "lower RAM write was stalled");
             cpu_mreq_n <= 1;
             cpu_wr_n <= 1;
+        end
+    endtask
+
+    task lower_poke;
+        input [15:0] address; input [7:0] value;
+        begin
+            @(negedge cpu_clock);poke_address=address;poke_write_data=value;
+            poke_write=1;#1;if(!poke_complete)$fatal(1,"lower POKE did not complete");
+            @(negedge cpu_clock);poke_write=0;
         end
     endtask
 
@@ -206,6 +219,8 @@ module testbench;
 
         lower_write(16'h4001, 8'h5a);
         lower_read(16'h4001, 8'h5a);
+        lower_poke(16'h4002,8'hc3);
+        lower_read(16'h4002,8'hc3);
         video_address <= 14'h0001;
         repeat (2) @(posedge memory_clock);
         if (video_data !== 8'h5a)

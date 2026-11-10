@@ -24,6 +24,8 @@
 module nexttang_block_ram #(
     parameter integer ADDRESS_BITS = 13,
     parameter integer DATA_BITS = 8,
+    // Words actually stored; addresses at or past it are never used.
+    parameter integer DEPTH = 1 << ADDRESS_BITS,
     parameter IMAGE = ""
 ) (
     input  wire                     clock,
@@ -37,8 +39,6 @@ module nexttang_block_ram #(
     input  wire [ADDRESS_BITS-1:0]  port_b_address,
     output reg  [DATA_BITS-1:0]     port_b_data
 );
-    localparam integer DEPTH = 1 << ADDRESS_BITS;
-
     reg [DATA_BITS-1:0] storage [0:DEPTH-1];
 
     initial begin

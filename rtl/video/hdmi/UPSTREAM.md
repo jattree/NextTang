@@ -13,3 +13,12 @@ the asynchronous audio clock input with a 48 kHz enable in the pixel-clock
 domain. This avoids placing a fabric-generated clock on the Console and keeps
 the packet transfer synchronous. Serialization is supplied by the separate
 project-owned Gowin shim.
+
+`hdmi.sv` and `packet_picker.sv` also gain an optional second mode,
+`ALT_VIDEO_ID_CODE`, selected at runtime by a new `alt_mode` input. The
+transmitter takes `alt_mode` as a frame ends, so a mode never changes mid-frame.
+Only 19 (720p50) with 4 (720p60) is supported: the two share the pixel clock and
+differ in the line length (1980 or 1650) and the horizontal sync position (440
+or 110), and the AVI InfoFrame announces the VIC of the mode in effect. The
+default, 0, keeps the single fixed mode and ignores `alt_mode`. The ZX Next
+board uses it to follow the core's 50/60 Hz setting.

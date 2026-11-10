@@ -24,6 +24,11 @@ module nexttang_spectrum48_split_memory #(
     output wire         cpu_wait_n,
     output wire         upper_transaction_complete,
 
+    input  wire         poke_write,
+    input  wire [15:0]  poke_address,
+    input  wire [7:0]   poke_write_data,
+    output wire         poke_complete,
+
     input  wire         video_clock,
     input  wire [13:0]  video_address,
     output wire [7:0]   video_data,
@@ -47,8 +52,14 @@ module nexttang_spectrum48_split_memory #(
     wire upper_selected = cpu_address[15];
     wire memory_cycle = !cpu_mreq_n && cpu_rfsh_n &&
                         (!cpu_rd_n || !cpu_wr_n);
-    wire upper_request = memory_cycle && upper_selected;
-    wire lower_write = memory_cycle && lower_selected && !cpu_wr_n;
+    wire poke_lower = poke_write && poke_address[15:14] == 2'b01;
+    wire poke_upper = poke_write && poke_address[15];
+    wire upper_request = (memory_cycle && upper_selected) || poke_upper;
+    wire lower_write = poke_lower ||
+                       (memory_cycle && lower_selected && !cpu_wr_n);
+    wire [15:0] selected_address = poke_write ? poke_address : cpu_address;
+    wire [7:0] selected_write_data = poke_write ? poke_write_data :
+                                                 cpu_write_data;
 
     wire [7:0] lower_read_data;
     wire [7:0] upper_read_data;
@@ -57,8 +68,8 @@ module nexttang_spectrum48_split_memory #(
     nexttang_block_ram #(.ADDRESS_BITS(14)) lower_ram (
         .clock(cpu_clock),
         .write_enable(lower_write),
-        .write_address(cpu_address[13:0]),
-        .write_data(cpu_write_data),
+        .write_address(selected_address[13:0]),
+        .write_data(selected_write_data),
         .read_data(lower_read_data),
         .port_b_clock(video_clock),
         .port_b_address(video_address),
@@ -72,9 +83,9 @@ module nexttang_spectrum48_split_memory #(
         .machine_reset(cpu_reset),
         .memory_available(memory_available),
         .core_request(upper_request),
-        .core_read_n(cpu_rd_n),
-        .core_address({5'b00000, cpu_address}),
-        .core_write_data(cpu_write_data),
+        .core_read_n(poke_upper ? 1'b1 : cpu_rd_n),
+        .core_address({5'b00000, selected_address}),
+        .core_write_data(selected_write_data),
         .core_read_data(upper_read_data),
         .core_wait(upper_wait),
         .core_complete(upper_transaction_complete),
@@ -102,6 +113,8 @@ module nexttang_spectrum48_split_memory #(
     // Completion releases exactly the transaction whose bus values are still
     // being held by the processor.
     assign cpu_wait_n = !upper_request || upper_transaction_complete;
+    assign poke_complete = poke_lower ||
+                           (poke_upper && upper_transaction_complete);
 endmodule
 
 `default_nettype wire

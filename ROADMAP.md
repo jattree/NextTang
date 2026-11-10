@@ -5,6 +5,30 @@ delivery dates yet. A milestone is complete only when its source, repeatable
 commands, exact tool and hardware versions, results, and known limitations are
 committed to the repository.
 
+## Where things stand (2026-11-09)
+
+The milestones below were written before the board arrived, around the MiSTer
+port. The Next core now comes from the official ZX Spectrum Next FPGA source
+(3.02.03, then 3.02.05), merged by `scripts/merge_official_core.py`, so some
+items describe a route the project no longer takes. Current state, with the
+evidence level of each:
+
+- **Console 138K, hardware:** NextZXOS boots from the SD card (10 of 10) at 28,
+  14, 7 and 3.5 MHz; Next, 48K and 128K games; 50/60 Hz HDMI with audio; USB
+  keyboard and controller. Spec256 plays inside the Next core. The official Pi
+  debug interface works with NextTang's host debugger, DZRP bridge and ten
+  page-qualified hardware breakpoints. See the [README](README.md#current-status).
+- **Console 138K with Pi 5, hardware (test design):** PCIe at 5 GT/s x1, up at
+  boot; the Tang writes into the Pi's RAM at 475 MB/s. The Next core does not use
+  PCIe yet ([boards/console138k/pcie-pi5](boards/console138k/pcie-pi5/)).
+- **Open on the 138K:** Layer 2 outside the mirrored banks, 128K games through
+  NextZXOS, a sprite glitch, the debugger over PCIe, and official core 3.03.03
+  (zero-wait-state 28 MHz) once its source is published
+  ([#8](https://github.com/jattree/NextTang/issues/8)).
+- **Tang Nano 20K, planned:** a parallel target with Pi0 support; a board-shell
+  split and a skeleton exist on a branch, with no image yet.
+- **Console 60K, planned:** build-only until a board is in hand.
+
 The [MiSTer ZXNext core](https://github.com/MiSTer-devel/ZXNext_MISTer) is the
 planned implementation baseline. The
 [official ZX Spectrum Next FPGA repository](https://gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA)
@@ -203,7 +227,7 @@ demonstrates every required physical interface independently.
   without an original Spectrum ROM, NextZXOS or NextBASIC.
 - [ ] Load a self-contained `.NEX` test from SD through a project-owned or
   independently licensed monitor, without NextZXOS or proprietary ROM services.
-- [ ] Bring up keyboard, SD loading, HDMI audio/video, and UART diagnostics.
+- [x] Bring up keyboard, SD loading, HDMI audio/video, and UART diagnostics.
 - [ ] Preserve a first-boot test artifact and exact reproduction instructions.
 
 **Exit evidence:** a fresh checkout builds a bitstream that boots repeatedly on
@@ -212,7 +236,7 @@ visible over UART.
 
 ## Milestone 4: Baseline compatibility and 60K target
 
-- [ ] Add and verify 7, 14, and 28 MHz modes with measured wait-state behavior.
+- [x] Add and verify 7, 14, and 28 MHz modes with measured wait-state behavior.
 - [ ] Add 50/60 Hz switching, audio sources, mouse, and gamepad support.
 - [ ] Implement `boards/console60k` behind the same platform interfaces.
 - [ ] Synthesize `release` for both targets on every core change.
@@ -258,7 +282,7 @@ never imply that alternate FPGA evidence proves official-hardware parity.
 
 ## Milestone 6: Debug-lite
 
-- [ ] Adopt the [DeZog Remote Protocol](https://github.com/maziac/DeZog/blob/main/design/DeZogProtocol.md)
+- [x] Adopt the [DeZog Remote Protocol](https://github.com/maziac/DeZog/blob/main/design/DeZogProtocol.md)
   as the wire protocol rather than defining one. It already treats real ZX Next
   hardware as a first-class remote, bounds memory reads by start and size,
   carries slot and banking state, negotiates versions on init, and expects
@@ -275,7 +299,7 @@ never imply that alternate FPGA evidence proves official-hardware parity.
 - [ ] Implement distinct CPU-halt and whole-machine-freeze semantics.
 - [ ] Expose an explicit instruction-retirement event for reliable single-step.
 - [ ] Read registers, NextREGs, MMU mappings, and physical memory safely.
-- [ ] Add page-aware execution breakpoints and a bounded breakpoint count.
+- [x] Add page-aware execution breakpoints and a bounded breakpoint count.
 - [ ] Implement the UART transport on the NextTang side and drive it with the client from
   the [host tooling track](#host-tooling-track) rather than a NextTang-specific tool.
 - [ ] Attempt `debug-lite` synthesis and timing closure on both 60K and 138K.
@@ -329,6 +353,11 @@ capture/restore and is not implied by instruction tracing alone.
 - [ ] Run long-duration NextZXOS, SD, input, HDMI, and audio tests on both boards.
 - [ ] Complete official-hardware comparisons for claims that require them.
 - [ ] Establish maintainers and an upstream-update procedure.
+- [ ] Add an optional boot ident hook to the IPL: when an ident program is
+  present on the SD card, load and run it before the Next firmware, then boot
+  as normal; with no file, boot is unchanged. First use: the Fogjaw ident
+  (animation and jingle) built from Gods' existing player. The loader has
+  about 700 bytes free, enough for the hook but not the player.
 
 **Exit evidence:** a new contributor can build, program, test, recover, and
 diagnose both supported targets using only the published instructions and

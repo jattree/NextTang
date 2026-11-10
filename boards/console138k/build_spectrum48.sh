@@ -416,6 +416,7 @@ if [[ "$profile" == spec256-snapshot || "$profile" == spec256-snapshot-audio || 
                 "$repo_root/rtl/storage/nexttang_fat32_storage.v"
                 "$repo_root/rtl/loader/nexttang_async_byte_fifo.v"
                 "$repo_root/rtl/loader/nexttang_async_byte_fifo_small.v"
+                "$repo_root/rtl/loader/nexttang_poke_loader.v"
                 "$repo_root/rtl/loader/nexttang_loader_catalog.v"
                 "$repo_root/rtl/loader/nexttang_loader_font.v"
                 "$repo_root/rtl/loader/nexttang_loader_overlay.v"
@@ -537,6 +538,8 @@ elif [[ "$profile" == ula || "$profile" == ula-tape || \
                     "$repo_root/rtl/storage/nexttang_fat32_directory.v"
                     "$repo_root/rtl/storage/nexttang_fat32_storage.v"
                     "$repo_root/rtl/loader/nexttang_async_byte_fifo.v"
+                    "$repo_root/rtl/loader/nexttang_async_byte_fifo_small.v"
+                    "$repo_root/rtl/loader/nexttang_poke_loader.v"
                     "$repo_root/rtl/loader/nexttang_tzx_stream.v"
                     "$repo_root/rtl/loader/nexttang_tap_to_tzx_stream.v"
                     "$repo_root/rtl/loader/nexttang_classic_tape_loader.v"
@@ -724,12 +727,11 @@ fi
     # A plain-text timing report. The HTML one has to be tag-stripped before it
     # can be read, which is how a broken check went unnoticed for so long.
     printf 'set_option -gen_text_timing_rpt 1\n'
-    if [[ "$profile" == spec256-loader-ddr3 ]]; then
-        # This dense target contains one distributed 16 KiB graphical-ROM
-        # lane. Let Arora V replicate its high-fanout address/decode resources
-        # before routing rather than relying only on route-time fanout repair.
-        printf 'set_option -replicate_resources 1\n'
-    fi
+    # Do not enable Arora V's optional resource-replication pass for the dense
+    # Spec256 DDR3 target. After master-address CPU semantics were added, the
+    # replicated netlist remained CPU-active in routing phase zero for more
+    # than twenty minutes. The otherwise identical unreplicated netlist routed
+    # normally and passed setup/hold timing.
     for vendor_file in "${vendor_files[@]}"; do
         printf 'add_file {%s}\n' "$vendor_file"
     done

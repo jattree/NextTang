@@ -28,6 +28,135 @@ literal, which Gowin rejects as a width mismatch. It is changed to
 gives that line. The modification is recorded here because the file is otherwise
 byte-identical and its blob hash therefore no longer matches the audit.
 
+The third import, on 2026-10-26, brings in the rest of the machine core:
+`rtl/zxnext.vhd` and the 28 files it instantiates under `rtl/audio/`,
+`rtl/device/`, `rtl/misc/`, `rtl/serial/` and `rtl/video/`. That set is the
+transitive closure of `zxnext.vhd`, less three files:
+
+- `rtl/rom/bootrom.vhd`, which stays excluded and is replaced by the
+  project-owned `rtl/core/nexttang_diagnostic_bootrom.vhd`.
+- MiSTer's `rtl/mister/bram.vhd`, which is replaced by the inferred RAMs under
+  `rtl/core/memory/`.
+- `rtl/serial/uart_old.vhd`, which redefines the `uart` entity and is not in the
+  upstream project file list.
+
+The membrane, keymap and `i2s_master` files belong to MiSTer's top level, not
+the core, and stay candidates. Every imported file matched its audited blob.
+
+One line of `rtl/serial/fifop.vhd` is modified. Upstream computes the
+"almost full" flag by comparing `stored(DEPTH_BITS-1 downto 1)` with
+`std_logic_vector(to_unsigned(-1, stored'length-1))`. Gowin rejects the
+negative argument to `to_unsigned`. The two operands also differ in width, so
+the comparison could never match on any toolchain. It now compares the slice
+with an all-ones aggregate, which is what the "full - 2 bytes" comment
+describes. The flag drives the UART receivers' RTR line when hardware flow
+control is enabled. NextNano carries the same replacement in its Gowin build.
+
+On 2026-10-27 nine files gain clock enables for the CPU's own clock, so the
+Console 138K can run the CPU on `i_CLK_28` instead of a separate CPU clock:
+`rtl/zxnext.vhd`, `rtl/cpu/t80na.vhd`, `rtl/device/dma.vhd`,
+`rtl/device/im2_control.vhd`, `rtl/device/im2_device.vhd`,
+`rtl/device/im2_peripheral.vhd`, `rtl/device/peripherals.vhd`,
+`rtl/serial/spi_master.vhd` and `rtl/video/zxula.vhd`. Each process clocked
+on an edge of the CPU clock gains a condition on a new enable input,
+`rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1'` or the falling-edge equivalent
+with `i_CPU_CEN_F`, and the inputs are passed down to the submodules that hold
+such processes. In `t80na.vhd` the wrapper's own processes are gated the same
+way and the inner T80N's existing `CEN` becomes `Spec256_cen and CEN_R`. Every
+new input defaults to `'1'`, so a board that supplies a real CPU clock and
+leaves them unconnected gets the upstream core unchanged; a simulation of the
+whole core shows identical outputs on every 28 MHz edge for 4.5 million cycles
+in that configuration. The reason, the enable generator and the equivalence
+evidence are in the project wiki under
+`raw/zxnext-single-clock-cpu-2026-10-27.md`.
+
+Later the same day `rtl/zxnext.vhd` gains two more changes:
+
+- **Interrupt pulse.** The pulsed interrupt counts its 32 (or 36) CPU cycles
+  only while `i_CPU_WAIT` is low. The Z80 samples INT at the end of an
+  instruction, and the Console's DDR3 can hold the CPU for longer than the
+  whole pulse, which hid frame interrupts from a halted CPU in simulation. On
+  a board where nothing drives `i_CPU_WAIT` the pulse is unchanged.
+- **Debug outputs.** Four outputs give a debug view: `o_DEBUG_NR_WE`,
+  `o_DEBUG_NR_REG` and `o_DEBUG_NR_DAT` show every NextREG write from the CPU
+  or the copper, and `o_DEBUG_IORQ_n` is the CPU's IORQ, which `o_BUS_IORQ_n`
+  hides for internal ports. Nothing inside the core reads them.
+- **Reset type after a hard reset.** NextREG 0x02's reset type returns to its
+  power-on value while `i_RESET` and `i_BOOT` are both high. A real Next
+  reconfigures the FPGA on a hard reset, which does the same; without it a
+  hard reset after a soft one was reported to software as a soft reset.
+- **Layer 2 window.** A generic, `g_layer2_units`, passes to a new generic
+  of the same purpose in `rtl/video/layer2.vhd`: one bit for each 16K unit
+  of the 2MB space. Layer 2 pixels in a unit whose bit is clear are treated
+  as transparent, as upstream already treats addresses past the end of
+  memory. The Console 138K serves Layer 2 from a block RAM copy of part of
+  memory and clears the bits for the rest. The default sets every bit, which
+  is the upstream behaviour.
+
+## Moving the Next core to the official tree
+
+On 2026-10-28 the Next core's baseline moved from the MiSTer copy to the
+official ZX Spectrum Next FPGA tree,
+[`gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA`](https://gitlab.com/SpectrumNext/ZX_Spectrum_Next_FPGA)
+at `b047011d82bf3086f2b7db76451c6254506f5fe8` (core 3.02.03), which is also
+GPL-3.0-or-later. The MiSTer copy carries official core 3.02.00. Each core
+file was merged three ways, with the pinned MiSTer file as the base, the
+NextTang file as one side and the official file as the other, so NextTang's
+own patches carry over and every official change since 3.02.00 comes in. The
+per-file result is in [`upstream-official-files.tsv`](upstream-official-files.tsv):
+
+- **From the official tree:** `i2s.vhd`, `ctc.vhd`, `ctc_chan.vhd`,
+  `im2_control.vhd`, `im2_peripheral.vhd`, `debounce.vhd` and `sprites.vhd`
+  (among the fixes: the CTC count, IM2 peripherals, and sprites drawn about 70
+  to a line instead of 100).
+- **`zxnext.vhd`:** official 3.02.03 with NextTang's patches (clock enables,
+  debug outputs, the interrupt pulse, `g_layer2_units`) and three MiSTer
+  additions the Console needs: `i_CPU_WAIT` into the Z80's WAIT,
+  `o_RAM_A_REQ2`, and `i_BOOT`, which on a hard reset restores NextREG
+  power-on values as reloading the FPGA does on a Next (nextregs 0x04 and 0x10
+  are reset in the per-issue processes where the official core drives them).
+  The anti-brick boot ROM branch (machine ID 0xFA) is removed and the boot ROM
+  stays `bootrom`. The official Xilinx DNA, XADC, floppy and 4 MB ports are
+  tied off in the Console wrapper. The core reports 3.02.03.
+- **Kept from MiSTer:** the T80 family, which is Sorgelig's ZEXALL- and
+  MEMPTR-correct T80 and already contains every official T80N change;
+  `spi_master.vhd`, because the official rewrite has a different interface;
+  and `zxula_timing.vhd`, whose split blanking and centring the classic
+  profiles use. One line of it changes: in 48K 60 Hz timing MiSTer set the
+  active area 12 pixels late even with centring off (`128 + 12` in both
+  branches); it now uses the official 128.
+- **Every other file** has the same body in both trees.
+
+The memory-cycle delay MiSTer kept, which the official tree removed in
+`3a5ba97f` ("DMA and LDPIRX work at all speeds"), was dropped the day before on
+the MiSTer baseline and stays dropped.
+
+## Following official 3.02.05 and its Pi debug interface
+
+On 2026-11-02 the core moved to official branch `30205`
+(`15e206dd0c55a887e292e5e7ff6f556f4404d70d`, core 3.02.05) with
+`scripts/merge_official_core.py`, which three-way merges each file in
+[`upstream-official-files.tsv`](upstream-official-files.tsv) against the
+official blob recorded there and updates the record. The next official
+release moves the same way: `scripts/merge_official_core.py --upstream DIR
+--to REV --write`, then resolve any reported conflicts and rebuild.
+
+- **Taken verbatim from 30205** (GPL-3.0-or-later, notices kept):
+  `rtl/device/pi_debug_control/pi_debug_control_param.vhd` (David Saphier),
+  `rtl/device/arbiter_dma.vhd` (Alvin Albrecht) and `rtl/serial/spi_slave.vhd`.
+- **The T80 family** stays Sorgelig's. It now follows the official
+  debug-interface CPU (`cpu/t80n-debug/`): David Saphier's debug wedge merged
+  onto it without conflicts, under NextTang's own entity names.
+  `rtl/cpu/nexttang_t80na_variants.vhd` gives it the official variant names.
+  The T80 package keeps NextTang's layout, with the debug ports added by hand.
+- **NextTang changes for the debugger** are marked `NextTang` in
+  `zxnext.vhd` and `t80n.vhd`. They open the Pi debug slave without NextREG
+  0xA0, grant the slave's pause only at an instruction end, catch a
+  single-step release at full clock rate, and export the CPU's next fetch
+  address and the MMU for hardware breakpoints.
+- `spi_master.vhd` remains MiSTer's; the official 3.02.04 change to it
+  (`spi_active`) is not taken yet.
+
 ## Reference projects
 
 These are read for their answers to device-specific questions. Nothing is
@@ -45,6 +174,27 @@ line, and that the `ioq` line above has to be rewritten to synthesize. Its
 `t80n.vhd` carries the same replacement text.
 
 No NextNano code is in this repository.
+
+## The Next boot loader, built outside the repository
+
+`rtl/rom/bootrom.vhd` stays excluded, but the program it holds has published
+source. The official System/Next distribution carries the boot loader (the
+IPL) in `src/firmware/loader`, with "Copyright 2020 Garry Lancaster, Fabio
+Belavenuto & Victor Trucco" and GPL-3.0-or-later notices, and a GPL v3
+`LICENSE` beside it. `scripts/build_next_ipl.sh` fetches that directory from
+`https://gitlab.com/thesmog358/tbblue.git` at commit
+`f287c48bf6af3528e32977b913bac2c589d9f973` and compiles it with SDCC 4.0.0 in
+a Debian bullseye container pinned by digest. The published source lags the
+binaries: `main.c` uses `RESET_POWERON`, which `hardware.h` no longer defines,
+so the script defines it as `0x04` on the command line and leaves the source
+untouched. The result is not byte-identical to MiSTer's `bootrom.vhd`, and
+no SDCC version tried (3.8, 4.0, 4.2) reproduces it.
+
+The image and the VHDL `build_zxnext.sh --boot-image` renders from it stay in
+the build directory. Neither is committed, and nothing here distributes them;
+the generated VHDL carries the loader's notice, not this project's. Whether a
+released NextTang image may carry the loader is the open release question in
+the project wiki, not something this build decides.
 
 ## Audit result
 

@@ -188,9 +188,123 @@ endmodule
 """
 
 
+# 60 Hz timing gives a shorter source frame (360x240 beside 360x288). Here
+# 4x4 frames double to 8 rows from row 1 of a 10-row output, and short 4x2
+# frames double to 4 rows from row 3. Each frame keeps the height it started
+# with, and a short frame does not complete while short frames are off.
+SHORT_FRAME_TESTBENCH = r"""
+`timescale 1ns/1ps
+module testbench;
+    localparam integer SW = 4, SH = 4, OW = 12, OH = 10;
+    reg source_clock = 0, output_clock = 0, source_reset = 1, output_reset = 1;
+    reg source_frame_start = 0, source_pixel_valid = 0, source_short = 0;
+    reg [1:0] source_x = 0, source_y = 0;
+    reg [7:0] source_pixel = 0;
+    wire source_overrun;
+    reg output_frame_start = 0, output_hsync = 0, output_vsync = 0, output_data_enable = 1;
+    reg [3:0] output_x = 0, output_y = 0;
+    wire scaled_hsync, scaled_vsync, scaled_data_enable, output_frame_valid;
+    wire [7:0] scaled_pixel;
+
+    always #7 source_clock = ~source_clock;
+    always #5 output_clock = ~output_clock;
+
+    nexttang_framebuffer_scaler #(
+        .SOURCE_WIDTH(SW), .SOURCE_HEIGHT(SH), .SCALE(2),
+        .OUTPUT_WIDTH(OW), .OUTPUT_HEIGHT(OH), .PIXEL_BITS(8),
+        .ALT_SOURCE_HEIGHT(2)
+    ) dut (
+        .source_clock(source_clock), .source_reset(source_reset),
+        .source_frame_start(source_frame_start), .source_short(source_short),
+        .source_pixel_valid(source_pixel_valid),
+        .source_x(source_x), .source_y(source_y), .source_pixel(source_pixel),
+        .source_overrun(source_overrun),
+        .output_clock(output_clock), .output_reset(output_reset),
+        .output_frame_start(output_frame_start),
+        .output_hsync(output_hsync), .output_vsync(output_vsync),
+        .output_data_enable(output_data_enable),
+        .output_x(output_x), .output_y(output_y),
+        .scaled_hsync(scaled_hsync), .scaled_vsync(scaled_vsync),
+        .scaled_data_enable(scaled_data_enable), .scaled_pixel(scaled_pixel),
+        .output_frame_valid(output_frame_valid)
+    );
+
+    task send_frame(input [7:0] base, input integer rows);
+        integer x, y;
+        begin
+            for (y = 0; y < rows; y = y + 1)
+                for (x = 0; x < SW; x = x + 1) begin
+                    @(negedge source_clock);
+                    source_x = x[1:0]; source_y = y[1:0];
+                    source_pixel = base + y * SW + x;
+                    source_frame_start = x == 0 && y == 0;
+                    source_pixel_valid = 1;
+                end
+            @(negedge source_clock);
+            source_frame_start = 0; source_pixel_valid = 0;
+            repeat (6) @(posedge output_clock);
+        end
+    endtask
+
+    task output_boundary;
+        begin
+            @(negedge output_clock);
+            output_x = 0; output_y = 0; output_frame_start = 1;
+            @(negedge output_clock);
+            output_frame_start = 0;
+        end
+    endtask
+
+    task expect_pixel(input [3:0] x, input [3:0] y, input [7:0] expected);
+        begin
+            @(negedge output_clock);
+            output_x = x; output_y = y;
+            repeat (2) @(posedge output_clock); #1;
+            if (scaled_pixel !== expected)
+                $fatal(1, "pixel (%0d,%0d) was %02x, expected %02x", x, y, scaled_pixel, expected);
+        end
+    endtask
+
+    initial begin
+        repeat (3) @(posedge source_clock);
+        source_reset = 0; output_reset = 0;
+
+        send_frame(8'h10, 4);              // full height
+        output_boundary();
+        expect_pixel(2, 1, 8'h10);
+        expect_pixel(2, 8, 8'h1c);
+        expect_pixel(2, 9, 8'h00);
+
+        send_frame(8'h20, 2);              // two rows while short frames are off:
+        output_boundary();                 // never completes, nothing changes
+        expect_pixel(2, 1, 8'h10);
+
+        source_short = 1;
+        send_frame(8'h40, 2);              // a short frame
+        output_boundary();
+        expect_pixel(2, 2, 8'h00);         // above the shorter picture
+        expect_pixel(2, 3, 8'h40);
+        expect_pixel(2, 6, 8'h44);
+        expect_pixel(2, 7, 8'h00);         // below it
+
+        source_short = 0;
+        send_frame(8'h60, 4);              // back to full height
+        output_boundary();
+        expect_pixel(2, 1, 8'h60);
+        expect_pixel(2, 8, 8'h6c);
+        $display("FRAMEBUFFER_SHORT_PASS");
+        $finish;
+    end
+endmodule
+"""
+
+
 class FramebufferScalerTest(unittest.TestCase):
     def test_frames_cross_clocks_only_at_output_boundaries(self) -> None:
         self.assertIn("FRAMEBUFFER_SCALER_PASS", run_testbench(TESTBENCH))
+
+    def test_short_frames_complete_early_and_show_centred(self) -> None:
+        self.assertIn("FRAMEBUFFER_SHORT_PASS", run_testbench(SHORT_FRAME_TESTBENCH))
 
 
 if __name__ == "__main__":

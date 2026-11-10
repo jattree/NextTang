@@ -206,7 +206,11 @@ class CpuExecutesBootRomTest(unittest.TestCase):
             '        assert writes_seen > 6144 '
             'report "no writes beyond the bitmap; diagnostic did not complete" '
             'severity error;\n'
-            '        assert display_ram(0) = x"00" report "origin: offset 0x0000 wrong" severity error;\n        assert display_ram(5) = x"05" report "column offset within a row: offset 0x0005 wrong" severity error;\n        assert display_ram(256) = x"01" report "pixel row field, y and 0x07: offset 0x0100 wrong" severity error;\n        assert display_ram(291) = x"0a" report "character row field, y and 0x38: offset 0x0123 wrong" severity error;\n        assert display_ram(2055) = x"47" report "screen third field, y and 0xc0: offset 0x0807 wrong" severity error;\n        assert display_ram(6143) = x"a0" report "last byte of the bitmap: offset 0x17ff wrong" severity error;'
+            '        assert display_ram(0) = x"00" report "origin: offset 0x0000 wrong" severity error;\n        assert display_ram(5) = x"05" report "column offset within a row: offset 0x0005 wrong" severity error;\n        assert display_ram(256) = x"01" report "pixel row field, y and 0x07: offset 0x0100 wrong" severity error;\n        assert display_ram(291) = x"0a" report "character row field, y and 0x38: offset 0x0123 wrong" severity error;\n        assert display_ram(2055) = x"47" report "screen third field, y and 0xc0: offset 0x0807 wrong" severity error;\n        assert display_ram(6143) = x"a0" report "last byte of the bitmap: offset 0x17ff wrong" severity error;',
+            # DIAG 4 reads the keyboard and reworks the border on every step of
+            # the attribute cycle, so one pass of 736 writes takes about 600 ms
+            # of 3.5 MHz time; 1500 ms covers the second pass the check needs.
+            duration="1500 ms",
         )
         self.assertIn("opcode_fetches=", output)
         self.assertIn("attribute_writes=", output)

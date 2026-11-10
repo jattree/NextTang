@@ -384,6 +384,77 @@ class UsbKeyboardMatrixTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("USB_FULL_SPEED_KEYBOARD_PASS", result.stdout)
 
+    def test_xbox_pad_completes_every_control_read_and_reports(self) -> None:
+        # The 8BitDo M30 2.4G enumerates as 045e:028e with a 64-byte EP0. The
+        # strict model withholds reports until each control read has had its
+        # status stage, which the pre-2026-10-30 microcode skipped.
+        for ep0_size in (8, 64):
+            with self.subTest(ep0_size=ep0_size), tempfile.TemporaryDirectory() as directory:
+                simulation = Path(directory) / "usb-host-xbox-sim"
+                build = subprocess.run(
+                    [
+                        "iverilog", "-g2012", "-DNEXTTANG_USB_SIM_FAST",
+                        "-Ptestbench.XBOX=1",
+                        "-Ptestbench.STRICT_STATUS=1",
+                        f"-Ptestbench.EP0_SIZE={ep0_size}",
+                        "-o", str(simulation),
+                        str(USB_HOST_TESTBENCH), str(USB_DEVICE_MODEL),
+                        str(USB_HOST_RTL), str(USB_HOST_ROM_RTL),
+                    ],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=30,
+                )
+                self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+                result = subprocess.run(
+                    [str(simulation)],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("USB_XBOX_PAD_PASS", result.stdout)
+
+    def test_slow_starting_pad_survives_the_watchdog(self) -> None:
+        # A pad that NAKs descriptor reads for longer than the ~1023-frame
+        # watchdog after each bus reset. With only data bytes feeding the
+        # watchdog, its reset restarted the pad and enumeration never ended.
+        with tempfile.TemporaryDirectory() as directory:
+            simulation = Path(directory) / "usb-host-slow-pad-sim"
+            build = subprocess.run(
+                [
+                    "iverilog", "-g2012", "-DNEXTTANG_USB_SIM_FAST",
+                    "-Ptestbench.XBOX=1",
+                    "-Ptestbench.STRICT_STATUS=1",
+                    "-Ptestbench.EP0_SIZE=64",
+                    "-Ptestbench.BOOT_NAK_SOFS=1200",
+                    "-Ptestbench.SIM_NS=30000000",
+                    "-o", str(simulation),
+                    str(USB_HOST_TESTBENCH), str(USB_DEVICE_MODEL),
+                    str(USB_HOST_RTL), str(USB_HOST_ROM_RTL),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            result = subprocess.run(
+                [str(simulation)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=180,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("USB_XBOX_PAD_PASS", result.stdout)
+
     def test_full_speed_latch_rejects_a_one_sample_idle_dip(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             simulation = Path(directory) / "usb-host-dip-sim"
@@ -498,6 +569,40 @@ module testbench;
 endmodule
 """
         self.assertIn("USB_MATRIX_PASS", run(testbench, USB_MATRIX_RTL))
+
+    def test_hid_report_maps_function_keys_for_the_next(self) -> None:
+        testbench = r"""
+module testbench;
+    reg [1:0] device_type = 1;
+    reg [7:0] modifiers = 0;
+    reg [7:0] key1 = 0, key2 = 0, key3 = 0, key4 = 0, key5 = 0, key6 = 0;
+    wire [39:0] keys;
+    wire [10:1] function_keys;
+
+    nexttang_usb_keyboard_matrix dut (
+        .device_type(device_type), .modifiers(modifiers),
+        .key1(key1), .key2(key2), .key3(key3), .key4(key4),
+        .key5(key5), .key6(key6), .keys(keys), .function_keys(function_keys)
+    );
+
+    initial begin
+        key1 = 8'h3a; #1;   // F1
+        if (function_keys != 10'b0000000001) $fatal(1, "F1 wrong: %b", function_keys);
+        if (keys != 0) $fatal(1, "F1 reached the matrix: %010x", keys);
+        key1 = 8'h3c; key2 = 8'h3d; #1;   // F3 and F4 together
+        if (function_keys != 10'b0000001100) $fatal(1, "F3+F4 wrong: %b", function_keys);
+        key1 = 8'h43; key2 = 8'h04; #1;   // F10 with A
+        if (function_keys != 10'b1000000000 || !keys[5]) $fatal(1, "F10+A wrong: %b %010x", function_keys, keys);
+        key1 = 8'h44; key2 = 0; #1;       // F11 is not a Next hot key
+        if (function_keys != 0) $fatal(1, "F11 leaked: %b", function_keys);
+        key1 = 8'h3a; device_type = 0; #1;
+        if (function_keys != 0) $fatal(1, "non-keyboard report leaked: %b", function_keys);
+        $display("USB_FUNCTION_KEYS_PASS");
+        $finish;
+    end
+endmodule
+"""
+        self.assertIn("USB_FUNCTION_KEYS_PASS", run(testbench, USB_MATRIX_RTL))
 
 if __name__ == "__main__":
     unittest.main()

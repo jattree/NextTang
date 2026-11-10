@@ -3,11 +3,23 @@
 // It models the descriptors of the 258a:0049 composite gaming keyboard seen
 // on the Console bench. EP0 is eight bytes, so the 18-byte configuration read
 // is delivered as 8/8/2 bytes rather than as one unrealistic test packet.
+//
+// XBOX=1 instead models an Xbox 360-compatible pad (045e:028e, interface
+// FF/5D/01, as the 8BitDo M30 2.4G enumerates), with the EP0 size set by
+// EP0_SIZE and 20-byte reports. STRICT_STATUS=1 NAKs the report endpoint
+// until the pad is configured and every control read has had its status
+// stage; status_missed counts control reads abandoned without one.
+// BOOT_NAK_SOFS models a pad still starting up: after each bus reset it NAKs
+// EP0 data for that many frames.
 `default_nettype none
 `timescale 1ns / 1ps
 module usb_full_speed_keyboard_model #(
   parameter LOW_SPEED = 0,
   parameter CONFIG_LEADING_SHORT = 0,
+  parameter XBOX = 0,
+  parameter EP0_SIZE = 8,
+  parameter STRICT_STATUS = 0,
+  parameter BOOT_NAK_SOFS = 0,
   parameter TURNAROUND = LOW_SPEED ? 270 : 34
 ) (
   input  wire clk,
@@ -15,13 +27,16 @@ module usb_full_speed_keyboard_model #(
   inout  wire dm,
   output integer setup_seen,
   output integer in0_seen,
-  output integer in1_seen
+  output integer in1_seen,
+  output integer status_missed
 );
 
 reg [7:0] devdesc [0:17];
 reg [7:0] cfgdesc [0:58];
 reg [7:0] repdesc [0:8];
-reg [7:0] report  [0:7];
+reg [7:0] report  [0:19];
+reg [7:0] xdevdesc [0:17];
+reg [7:0] xcfgdesc [0:20];
 
 integer k;
 initial begin
@@ -58,6 +73,31 @@ initial begin
 
   report[0]=8'h00; report[1]=8'h00; report[2]=8'h04; report[3]=8'h00;
   report[4]=8'h00; report[5]=8'h00; report[6]=8'h00; report[7]=8'h00;
+  for (k = 8; k < 20; k = k + 1)
+    report[k] = 8'h00;
+
+  // 045e:028e, bMaxPacketSize0 from EP0_SIZE.
+  xdevdesc[0]=8'h12; xdevdesc[1]=8'h01; xdevdesc[2]=8'h00; xdevdesc[3]=8'h02;
+  xdevdesc[4]=8'hff; xdevdesc[5]=8'hff; xdevdesc[6]=8'hff; xdevdesc[7]=EP0_SIZE;
+  xdevdesc[8]=8'h5e; xdevdesc[9]=8'h04; xdevdesc[10]=8'h8e; xdevdesc[11]=8'h02;
+  xdevdesc[12]=8'h14; xdevdesc[13]=8'h01; xdevdesc[14]=8'h01; xdevdesc[15]=8'h02;
+  xdevdesc[16]=8'h03; xdevdesc[17]=8'h01;
+  // Configuration, interface 0 (FF/5D/01) and the start of its unknown
+  // class descriptor: the first 21 bytes, which is all the host asks for.
+  xcfgdesc[0]=8'h09; xcfgdesc[1]=8'h02; xcfgdesc[2]=8'h99; xcfgdesc[3]=8'h00;
+  xcfgdesc[4]=8'h04; xcfgdesc[5]=8'h01; xcfgdesc[6]=8'h00; xcfgdesc[7]=8'ha0;
+  xcfgdesc[8]=8'hfa;
+  xcfgdesc[9]=8'h09; xcfgdesc[10]=8'h04; xcfgdesc[11]=8'h00; xcfgdesc[12]=8'h00;
+  xcfgdesc[13]=8'h02; xcfgdesc[14]=8'hff; xcfgdesc[15]=8'h5d; xcfgdesc[16]=8'h01;
+  xcfgdesc[17]=8'h00;
+  xcfgdesc[18]=8'h11; xcfgdesc[19]=8'h21; xcfgdesc[20]=8'h00;
+  if (XBOX) begin
+    // Report type 0, length 20, d-pad up and A held.
+    for (k = 0; k < 20; k = k + 1)
+      report[k] = 8'h00;
+    report[1]=8'h14; report[2]=8'h01; report[3]=8'h10;
+  end
+  status_missed = 0;
 
   setup_seen = 0;
   in0_seen = 0;
@@ -98,6 +138,15 @@ always @(*) begin
   else if (line_k) line_state = 0;
   else line_state = line_state_d;
 end
+
+// A bus reset is SE0 for far longer than any EOP.
+always @(posedge clk)
+  if (line_se0 && !dev_oe) begin
+    se0_clocks = se0_clocks + 1;
+    if (se0_clocks == 1000)
+      sofs_since_reset = 0;
+  end else
+    se0_clocks = 0;
 
 always @(posedge clk) begin
   line_state_d <= line_state;
@@ -260,6 +309,7 @@ localparam PID_SETUP = 8'h2d;
 localparam PID_DATA0 = 8'hc3;
 localparam PID_DATA1 = 8'h4b;
 localparam PID_ACK   = 8'hd2;
+localparam PID_NAK   = 8'h5a;
 
 reg [6:0] dev_addr = 0;
 reg [6:0] pending_addr = 0;
@@ -277,22 +327,33 @@ integer   ep1_toggle = 0;
 integer   n;
 integer   chunk;
 reg       config_leading_short_pending = 0;
+reg [7:0] last_pid = 0;
+integer   sofs_since_reset = 0;
+integer   se0_clocks = 0;
+reg       status_due = 0;
+reg       configured = 0;
+integer   report_len;
 
 always @(posedge packet_done) begin
   if (rxlen >= 2 && rxbuf[0] == 8'h80) begin
     case (rxbuf[1])
-      PID_SOF: ;
+      PID_SOF: sofs_since_reset = sofs_since_reset + 1;
       PID_SETUP: begin
+        last_pid = PID_SETUP;
         last_addr = rxbuf[2][6:0];
         last_ep = {rxbuf[3][2:0], rxbuf[2][7]};
       end
       PID_IN: begin
+        last_pid = PID_IN;
         last_addr = rxbuf[2][6:0];
         last_ep = {rxbuf[3][2:0], rxbuf[2][7]};
         if (last_addr == dev_addr) begin
           if (last_ep == 0) begin
             in0_seen = in0_seen + 1;
-            if (in_stage) begin
+            if (sofs_since_reset < BOOT_NAK_SOFS) begin
+              repeat (TURNAROUND) @(posedge clk);
+              send_handshake(PID_NAK);
+            end else if (in_stage) begin
               if (CONFIG_LEADING_SHORT && src == 2 &&
                   config_leading_short_pending) begin
                 // Match the packet sequence captured from both Console USB
@@ -302,13 +363,14 @@ always @(posedge packet_done) begin
                 chunk = 2;
               end else begin
                 chunk = in_remaining;
-                if (chunk > 8)
-                  chunk = 8;
+                if (chunk > EP0_SIZE)
+                  chunk = EP0_SIZE;
               end
               for (n = 0; n < chunk; n = n + 1)
                 case (src)
-                  1: txpayload[n] = devdesc[in_ptr + n];
-                  2: txpayload[n] = cfgdesc[in_ptr + n];
+                  1: txpayload[n] = XBOX ? xdevdesc[in_ptr + n] : devdesc[in_ptr + n];
+                  2: txpayload[n] = XBOX ? xcfgdesc[in_ptr + n] : cfgdesc[in_ptr + n];
+                  4: txpayload[n] = 8'h00;
                   default: txpayload[n] = repdesc[in_ptr + n];
                 endcase
               repeat (TURNAROUND) @(posedge clk);
@@ -330,23 +392,31 @@ always @(posedge packet_done) begin
                 addr_pending = 0;
               end
             end
+          end else if (STRICT_STATUS && (!configured || status_due)) begin
+            repeat (TURNAROUND) @(posedge clk);
+            send_handshake(PID_NAK);
           end else begin
             in1_seen = in1_seen + 1;
-            for (n = 0; n < 8; n = n + 1)
+            report_len = XBOX ? 20 : 8;
+            for (n = 0; n < report_len; n = n + 1)
               txpayload[n] = report[n];
             repeat (TURNAROUND) @(posedge clk);
-            send_data(ep1_toggle ? PID_DATA1 : PID_DATA0, 8);
+            send_data(ep1_toggle ? PID_DATA1 : PID_DATA0, report_len);
             ep1_toggle = ~ep1_toggle;
           end
         end
       end
       PID_OUT: begin
+        last_pid = PID_OUT;
         last_addr = rxbuf[2][6:0];
         last_ep = {rxbuf[3][2:0], rxbuf[2][7]};
       end
       PID_DATA0, PID_DATA1: begin
-        if (last_addr == dev_addr && rxlen >= 12) begin
+        if (last_pid == PID_SETUP && last_addr == dev_addr && rxlen >= 12) begin
           setup_seen = setup_seen + 1;
+          if (status_due)
+            status_missed = status_missed + 1;
+          status_due = 0;
           for (n = 0; n < 8; n = n + 1)
             setup[n] = rxbuf[n + 2];
           in_ptr = 0;
@@ -357,6 +427,7 @@ always @(posedge packet_done) begin
           if (setup[0] == 8'h80 && setup[1] == 8'h06) begin
             in_len = {setup[7], setup[6]};
             in_stage = 1;
+            status_due = 1;
             if (setup[3] == 8'h01) begin
               src = 1;
               if (in_len > 18)
@@ -368,7 +439,17 @@ always @(posedge packet_done) begin
                 in_len = 59;
             end
             in_remaining = in_len;
+          end else if (XBOX && setup[0] == 8'hc1 && setup[1] == 8'h01) begin
+            // xpad's start-up request for third-party pads: 20 bytes.
+            src = 4;
+            in_len = {setup[7], setup[6]};
+            if (in_len > 20)
+              in_len = 20;
+            in_remaining = in_len;
+            in_stage = 1;
+            status_due = 1;
           end else if (setup[0] == 8'h81 && setup[1] == 8'h06) begin
+            status_due = 1;
             src = 3;
             in_len = {setup[7], setup[6]};
             if (in_len > 9)
@@ -378,10 +459,14 @@ always @(posedge packet_done) begin
           end else if (setup[1] == 8'h05) begin
             pending_addr = setup[2][6:0];
             addr_pending = 1;
+          end else if (setup[0] == 8'h00 && setup[1] == 8'h09) begin
+            configured = 1;
           end
           repeat (TURNAROUND) @(posedge clk);
           send_handshake(PID_ACK);
         end else if (last_addr == dev_addr && rxlen >= 4) begin
+          if (last_pid == PID_OUT && last_ep == 0 && rxlen == 4)
+            status_due = 0;  // zero-length OUT: the control read's status stage
           repeat (TURNAROUND) @(posedge clk);
           send_handshake(PID_ACK);
         end

@@ -62,6 +62,7 @@ entity zxula is
       i_CLK_7                 : in std_logic;
       i_CLK_14                : in std_logic;
       i_CLK_CPU               : in std_logic;
+      i_CPU_CEN_R             : in std_logic := '1';   -- NextTang: i_CLK_CPU edge enable
       
       i_cpu_mreq_n            : in std_logic;
       i_cpu_iorq_n            : in std_logic;
@@ -586,7 +587,7 @@ begin
 
    process (i_CLK_CPU)
    begin
-      if rising_edge(i_CLK_CPU) then
+      if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
          mreq23_n <= i_cpu_mreq_n;
          ioreqtw3_n <= i_cpu_iorq_n or not i_contention_port;
       end if;

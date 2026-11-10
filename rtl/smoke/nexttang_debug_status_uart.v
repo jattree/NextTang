@@ -23,22 +23,29 @@
 //
 // The trailing field is a free-running tick counter, so a stalled transmitter,
 // a repeated line, or a restarted FPGA are all obvious from the log alone.
+//
+// EXTRA_VALUE further 32-bit fields, up to five, follow the first: extra
+// bits 31:0, then 63:32, and so on.
+//
+//     NT V+ M+ R- C- 0001a2b3 00000000 00000000
 
 `default_nettype none
 
 module nexttang_debug_status_uart #(
     parameter integer CLOCK_HZ = 50000000,
     parameter integer BAUD_RATE = 115200,
-    parameter integer GAP_CLOCKS = 12500000    // a line every 0.25 s at 50 MHz
+    parameter integer GAP_CLOCKS = 12500000,   // a line every 0.25 s at 50 MHz
+    parameter integer EXTRA_VALUE = 0
 ) (
     input  wire clock,
     input  wire reset,
     input  wire [5:0] flags,
     // {vsync_alive, pixel_clock_alive, calibration, released, memory, video}
     input  wire [31:0] value,   // reported verbatim, for a measured quantity
+    input  wire [159:0] extra,  // reported after value, EXTRA_VALUE words of it
     output reg  transmit
 );
-    localparam integer MESSAGE_BYTES = 40;
+    localparam integer MESSAGE_BYTES = 40 + 9 * EXTRA_VALUE;
 
     // Flags may originate in the video, memory or observer clock domains. The
     // reporter owns that boundary, so sticky state only consumes the second
@@ -76,7 +83,7 @@ module nexttang_debug_status_uart #(
     // The whole line is assembled once, at the moment transmission starts, and
     // then shifted out a byte at a time. Building it in one place keeps the
     // format readable and avoids indexing the message by position.
-    wire [MESSAGE_BYTES*8-1:0] message = {
+    wire [40*8-1:0] base_message = {
         "N", "T", " ",
         "V", state_character(seen[0], lost[0]), " ",
         "M", state_character(seen[1], lost[1]), " ",
@@ -94,6 +101,22 @@ module nexttang_debug_status_uart #(
         hex_digit(value[7:4]),   hex_digit(value[3:0]),
         8'h0d, 8'h0a
     };
+    function [9*8-1:0] field(input [31:0] word);
+        field = {
+            " ",
+            hex_digit(word[31:28]), hex_digit(word[27:24]),
+            hex_digit(word[23:20]), hex_digit(word[19:16]),
+            hex_digit(word[15:12]), hex_digit(word[11:8]),
+            hex_digit(word[7:4]),   hex_digit(word[3:0])
+        };
+    endfunction
+    wire [5*9*8-1:0] extra_fields = {field(extra[31:0]), field(extra[63:32]), field(extra[95:64]),
+                                     field(extra[127:96]), field(extra[159:128])};
+    // The extra fields go between the first value and the line ending.
+    wire [MESSAGE_BYTES*8-1:0] message = EXTRA_VALUE != 0
+        ? {base_message[40*8-1:16], extra_fields[5*9*8-1 -: (EXTRA_VALUE == 0 ? 1 : EXTRA_VALUE) * 9 * 8],
+           base_message[15:0]}
+        : base_message;
 
     reg [MESSAGE_BYTES*8-1:0] shift_message = 0;
     reg [7:0] bytes_left = 0;

@@ -141,6 +141,7 @@ vsim.wlf
 *.nex
 *.sna
 *.z80
+*.ips
 *.tap
 *.tzx
 *.dsk

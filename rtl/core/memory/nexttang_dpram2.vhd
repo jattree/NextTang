@@ -6,8 +6,9 @@ use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
 -- Portable 1RW + 1R dual-port RAM matching the direct ZXNext core boundary.
--- Both reads are synchronous and a same-port read during write returns the
--- previous value. Only blank initialisation is supported here.
+-- Both reads are synchronous and a same-port read during write returns the new
+-- value, as MiSTer's NEW_DATA_NO_NBE_READ setting does. Gowin dual-port block
+-- RAM cannot place read-before-write. Only blank initialisation is supported.
 entity dpram2 is
     generic (
         addr_width_g : integer := 8;
@@ -40,8 +41,10 @@ begin
         if rising_edge(clk_a_i) then
             if we_i = '1' then
                 ram(to_integer(unsigned(addr_a_i))) <= data_a_i;
+                data_a_o <= data_a_i;
+            else
+                data_a_o <= ram(to_integer(unsigned(addr_a_i)));
             end if;
-            data_a_o <= ram(to_integer(unsigned(addr_a_i)));
         end if;
     end process;
 
@@ -97,15 +100,19 @@ begin
                 report "tdpram simultaneous writes selected one address"
                 severity failure;
 
+            -- Each port is write-through, as in dpram2 above.
             if we_a_i = '1' then
                 ram(to_integer(unsigned(addr_a_i))) <= data_a_i;
+                data_a_o <= data_a_i;
+            else
+                data_a_o <= ram(to_integer(unsigned(addr_a_i)));
             end if;
             if we_b_i = '1' then
                 ram(to_integer(unsigned(addr_b_i))) <= data_b_i;
+                data_b_o <= data_b_i;
+            else
+                data_b_o <= ram(to_integer(unsigned(addr_b_i)));
             end if;
-
-            data_a_o <= ram(to_integer(unsigned(addr_a_i)));
-            data_b_o <= ram(to_integer(unsigned(addr_b_i)));
         end if;
     end process;
 end architecture;
