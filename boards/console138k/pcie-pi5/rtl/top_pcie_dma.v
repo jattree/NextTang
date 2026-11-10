@@ -3,7 +3,9 @@
 // the LTSSM/SerDes status UART (ltssm_uart3), CLKREQ# held low on the Console's
 // J4, BAR2 routed to NextTang's one-DW completer (nt_bar_completer) and the
 // bus-master write engine (nt_dma_writer) through a packet-locked TX mux
-// (nt_tl_tx_mux), with the demo's own logic cut off from the transmitter.
+// (nt_tl_tx_mux), with the demo's own logic cut off from the transmitter, and
+// the SerDes re-init (nt_serdes_reinit) that replays the IP's boot CSR over the
+// PCIe core's DRP port once the Pi's REFCLK is a steady 100 MHz.
 // It needs the rest of Sipeed's demo (PLL, SerDes and its PCIe IP), which is
 // not in this repository; see ../README.md.
 `include "top_define.v"
@@ -153,6 +155,30 @@ module top(
         .crc      (nt_cr_cpl),
         .meas     (nt_clk),
         .tx       (uart_tx)
+    );
+
+// NextTang: SerDes re-init. The Pi 5 drives REFCLK at 54 MHz while it boots; a
+// SerDes configured before the clock reaches 100 MHz never trains. Once REFCLK
+// (nt_clk[0]) has been a steady 100 MHz after being absent or wrong, replay the
+// IP's boot CSR over DRP and hold the core in reset ~10 ms.
+    wire [23:0] nt_drp_addr;
+    wire [31:0] nt_drp_wrdata;
+    wire [7:0]  nt_drp_strb;
+    wire        nt_drp_wr, nt_drp_rd, nt_drp_clk, nt_drp_ready, nt_reinit_hold;
+    nt_serdes_reinit u_serdes_reinit (
+        .clk        (pll_100m_clk),
+        .refclk     (nt_clk[0]),
+        .drp_clk    (nt_drp_clk),
+        .drp_ready  (nt_drp_ready),
+        .drp_addr   (nt_drp_addr),
+        .drp_wrdata (nt_drp_wrdata),
+        .drp_strb   (nt_drp_strb),
+        .drp_wr     (nt_drp_wr),
+        .drp_rd     (nt_drp_rd),
+        .hold_reset (nt_reinit_hold),
+        .refclk_ok  (),
+        .replays    (),
+        .timeouts   ()
     );
 
 //leds
@@ -826,8 +852,8 @@ module top(
     SerDes_Top	u_pcie_ctrl(
         // NextTang: reset the hard core on the host's PERST# too (Sipeed tied it to
         // the board button only), so it starts link training fresh when the Pi
-        // releases PERST#.
-        .PCIE_Controller_Top_pcie_rstn_i               (rst_n & pcie_rstn),
+        // releases PERST#. NextTang: and while the SerDes re-init holds it.
+        .PCIE_Controller_Top_pcie_rstn_i               (rst_n & pcie_rstn & ~nt_reinit_hold),
         .PCIE_Controller_Top_pcie_tl_clk_i             (tlp_clk        ),
         //RX TLP
         .PCIE_Controller_Top_pcie_tl_rx_sop_o	       (tl_rx_sop          ),
@@ -856,6 +882,17 @@ module top(
         .PCIE_Controller_Top_pcie_tl_tx_creditscpl_o   (tl_tx_cpl_credits  ),
         .PCIE_Controller_Top_pcie_tl_cfg_busdev_o      (tl_cfg_busdev      ),   //bus number & Device Number
         .PCIE_Controller_Top_pcie_linkup_o             (pcie_linkup        ),
+        // NextTang: the PCIe core's DRP port, used by nt_serdes_reinit
+        .PCIE_Controller_Top_pcie_tl_drp_addr_i        (nt_drp_addr        ),
+        .PCIE_Controller_Top_pcie_tl_drp_wrdata_i      (nt_drp_wrdata      ),
+        .PCIE_Controller_Top_pcie_tl_drp_strb_i        (nt_drp_strb        ),
+        .PCIE_Controller_Top_pcie_tl_drp_wr_i          (nt_drp_wr          ),
+        .PCIE_Controller_Top_pcie_tl_drp_rd_i          (nt_drp_rd          ),
+        .PCIE_Controller_Top_pcie_tl_drp_clk_o         (nt_drp_clk         ),
+        .PCIE_Controller_Top_pcie_tl_drp_ready_o       (nt_drp_ready       ),
+        .PCIE_Controller_Top_pcie_tl_drp_rddata_o      (                   ),
+        .PCIE_Controller_Top_pcie_tl_drp_rd_valid_o    (                   ),
+        .PCIE_Controller_Top_pcie_tl_drp_resp_o        (                   ),
         .nt_probe                                      (nt_probe           ),
         .nt_probe2                                     (nt_probe2          ),
         .nt_clk                                        (nt_clk             )
