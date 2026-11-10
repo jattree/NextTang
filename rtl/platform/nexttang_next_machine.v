@@ -56,6 +56,11 @@
 //   pixel, and two toggles before the board takes the first lose a read.
 //   A board that serves Layer 2 from a mirror may instead answer
 //   layer2_address combinationally or one cycle later and ignore the toggle.
+//   layer2_prefetch_toggle and layer2_prefetch_address announce each of those
+//   reads a fixed number of pixels earlier (eight; the core's lookahead copy of
+//   its Layer 2 address path), in the same order, so a board whose memory
+//   cannot meet the four-cycle deadline can fetch ahead. A setting changed
+//   within that distance can make an announcement wrong; compare addresses.
 //   LAYER2_UNITS has bit u set for each SRAM unit u the board can serve on
 //   this port; the core shows Layer 2 kept in any other unit as transparent
 //   (g_layer2_units). A board that serves none sets it to zero.
@@ -152,6 +157,8 @@ module nexttang_next_machine #(
     // memory port B
     output wire [20:0] layer2_address,
     output wire        layer2_request_toggle,
+    output wire [20:0] layer2_prefetch_address,   // o_RAM_B_PF_*: the read a few pixels ahead
+    output wire        layer2_prefetch_toggle,
     input  wire [7:0]  layer2_data,
 
     // memory port C
@@ -403,6 +410,8 @@ module nexttang_next_machine #(
 
         .o_RAM_B_ADDR(layer2_address),
         .o_RAM_B_REQ_T(layer2_request_toggle),
+        .o_RAM_B_PF_ADDR(layer2_prefetch_address),
+        .o_RAM_B_PF_REQ_T(layer2_prefetch_toggle),
         .i_RAM_B_DI(layer2_data),
 
         .o_RAM_C_ADDR(ram_c_address),

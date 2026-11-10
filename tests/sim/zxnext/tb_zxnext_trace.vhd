@@ -67,6 +67,11 @@ entity tb_zxnext_trace is
         -- so it holds whether that write is combinational from the CPU's
         -- strobe (official) or registered a clock later (NextNano issue #14).
         CHECK_VRAM : boolean := false;
+        -- Check the core's Layer 2 lookahead (o_RAM_B_PF_*): every Layer 2
+        -- read it makes (o_RAM_B_REQ_T) must have been announced, in the same
+        -- order and with the same address, by the lookahead toggle. Counts
+        -- matches, mismatches and reads with nothing announced.
+        CHECK_LAYER2_PF : boolean := false;
         -- The core's build options (g_option). With PI_DEBUG, an FPGA-side SPI
         -- master drives the official Pi debug slave through a script of
         -- commands, port C reaches the same memory as port A after
@@ -98,6 +103,9 @@ architecture sim of tb_zxnext_trace is
     signal ram_a_do    : std_logic_vector(7 downto 0);
     signal ram_a_di    : std_logic_vector(7 downto 0) := (others => '0');
     signal ram_b_addr  : std_logic_vector(20 downto 0);
+    signal ram_b_req_t : std_logic;
+    signal ram_b_pf_addr : std_logic_vector(20 downto 0);
+    signal ram_b_pf_req_t : std_logic;
     signal cpu_wait    : std_logic;
     signal memory_done : std_logic := '0';
 
@@ -387,6 +395,70 @@ begin
         end if;
     end process;
 
+    -- The core's own request condition is watched, not o_RAM_B_REQ_T: the
+    -- official layer2.vhd declares that toggle without an initial value, so in
+    -- simulation it stays 'U' (on the FPGA it starts at 0 and toggles).
+    layer2_pf_check : block
+    begin
+        process (clock_28)
+            alias l2_sc is << signal .tb_zxnext_trace.core.layer2_mod.i_sc : std_logic_vector(1 downto 0) >>;
+            alias l2_en is << signal .tb_zxnext_trace.core.layer2_mod.layer2_en : std_logic >>;
+            alias l2_addr is << signal .tb_zxnext_trace.core.layer2_mod.layer2_addr_eff : std_logic_vector(21 downto 0) >>;
+            alias l2_en_la is << signal .tb_zxnext_trace.core.layer2_mod.layer2_en_la : std_logic >>;
+            alias l2_addr_la is << signal .tb_zxnext_trace.core.layer2_mod.layer2_addr_eff_la : std_logic_vector(21 downto 0) >>;
+            type queue_t is array (0 to 63) of std_logic_vector(20 downto 0);
+            variable queue : queue_t;
+            variable head, tail : natural := 0;
+            variable matches, mismatches, unannounced, announced, ticks, late : natural := 0;
+            variable resync : boolean := false;
+            variable l : line;
+        begin
+            if rising_edge(clock_28) and CHECK_LAYER2_PF then
+                ticks := ticks + 1;
+                if l2_sc = "00" and l2_en_la = '1' then
+                    queue(tail mod 64) := l2_addr_la(20 downto 0);
+                    tail := tail + 1;
+                    announced := announced + 1;
+                end if;
+                -- The board's rule (nexttang_sdr_sdram_service port B): on a
+                -- mismatch flush once, then reads are late and leave the queue
+                -- alone until one matches the head.
+                if l2_sc = "00" and l2_en = '1' then
+                    if head = tail then
+                        unannounced := unannounced + 1;
+                    elsif queue(head mod 64) = l2_addr(20 downto 0) then
+                        matches := matches + 1;
+                        head := head + 1;
+                        resync := false;
+                    elsif not resync then
+                        mismatches := mismatches + 1;
+                        if mismatches <= 8 then
+                            write(l, string'("L2PF MISMATCH cycle=") & integer'image(ticks) &
+                                  string'(" read=") & to_hstring(l2_addr(20 downto 0)) &
+                                  string'(" announced=") & to_hstring(queue(head mod 64)));
+                            writeline(output, l);
+                        end if;
+                        head := tail;
+                        resync := true;
+                    else
+                        late := late + 1;
+                    end if;
+                end if;
+                if tail - head > 16 then head := tail - 16; end if;   -- the board's FIFO depth
+                if ticks = CYCLES - 8 then
+                    write(l, string'("L2PF announced=") & integer'image(announced) &
+                          string'(" reads=") & integer'image(matches + mismatches + unannounced) &
+                          string'(" matches=") & integer'image(matches) &
+                          string'(" mismatches=") & integer'image(mismatches) &
+                          string'(" unannounced=") & integer'image(unannounced) &
+                          string'(" late_in_resync=") & integer'image(late) &
+                          string'(" queued=") & integer'image(tail - head));
+                    writeline(output, l);
+                end if;
+            end if;
+        end process;
+    end block;
+
     nextreg_log : process (clock_28)
         variable l : line;
         variable cycle : natural := 0;
@@ -499,7 +571,9 @@ begin
             o_DEBUG_NR_DAT => debug_nr_dat,
             i_CPU_WAIT => cpu_wait,
             o_RAM_B_ADDR => ram_b_addr,
-            o_RAM_B_REQ_T => open,
+            o_RAM_B_REQ_T => ram_b_req_t,
+            o_RAM_B_PF_ADDR => ram_b_pf_addr,
+            o_RAM_B_PF_REQ_T => ram_b_pf_req_t,
             i_RAM_B_DI => (others => '0'),
             o_RAM_C_ADDR => ram_c_addr,
             o_RAM_C_REQ => ram_c_req,

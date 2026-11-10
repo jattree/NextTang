@@ -230,6 +230,11 @@ entity zxnext is
       
       o_RAM_B_ADDR         : out std_logic_vector(20 downto 0);   -- 2MB memory space
       o_RAM_B_REQ_T        : out std_logic;                       -- toggle indicates memory request
+      -- NextTang: the Layer 2 read the core will make a few pixels from now
+      -- (layer2.vhd o_layer2_pf_*), for boards whose memory is too slow to
+      -- answer o_RAM_B_REQ_T on demand. Boards that do not need it leave it open.
+      o_RAM_B_PF_ADDR      : out std_logic_vector(20 downto 0);
+      o_RAM_B_PF_REQ_T     : out std_logic;
       i_RAM_B_DI           : in std_logic_vector(7 downto 0);     -- data read from memory
 
       -- Port C is read/write and lowest priority (Pi SPI slave)
@@ -1549,6 +1554,10 @@ signal cpu_bank7_do_dly    : std_logic_vector(7 downto 0);  -- **** unexplainabl
    signal phc                    : unsigned(8 downto 0);
    signal whc                    : unsigned(8 downto 0);
    signal wvc                    : unsigned(8 downto 0);
+   -- NextTang: Layer 2 lookahead
+   signal phc_la                 : unsigned(8 downto 0);
+   signal whc_la                 : unsigned(8 downto 0);
+   signal wvc_la                 : unsigned(8 downto 0);
    signal cvc                    : unsigned(8 downto 0);
    signal rgb_hsync_n            : std_logic;
    signal rgb_vsync_n            : std_logic;
@@ -4826,6 +4835,10 @@ end generate;
       
       i_whc                => std_logic_vector(whc),
       i_wvc                => std_logic_vector(wvc),
+
+      i_phc_la             => std_logic_vector(phc_la),   -- NextTang
+      i_whc_la             => std_logic_vector(whc_la),   -- NextTang
+      i_wvc_la             => std_logic_vector(wvc_la),   -- NextTang
       
       i_layer2_en          => port_123b_layer2_en,
       i_resolution         => nr_70_layer2_resolution,
@@ -4843,6 +4856,8 @@ end generate;
       
       o_layer2_sram_addr   => layer2_addr_eff,
       o_layer2_req_t       => layer2_req_t,
+      o_layer2_pf_addr     => o_RAM_B_PF_ADDR,            -- NextTang
+      o_layer2_pf_req_t    => o_RAM_B_PF_REQ_T,           -- NextTang
       i_layer2_sram_di     => i_RAM_B_DI,
       
       o_layer2_en          => layer2_pixel_en,
@@ -7625,6 +7640,10 @@ end generate;
       o_wvc              => wvc,
       
       o_phc              => phc,
+
+      o_whc_la           => whc_la,                       -- NextTang
+      o_wvc_la           => wvc_la,                       -- NextTang
+      o_phc_la           => phc_la,                       -- NextTang
       
       -- 28 MHz domain
       

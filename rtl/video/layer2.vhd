@@ -43,6 +43,12 @@ entity layer2 is
       
       i_whc                   : in std_logic_vector(8 downto 0);     -- current wide x coordinate
       i_wvc                   : in std_logic_vector(8 downto 0);     -- current wide y coordinate
+
+      -- NextTang: the same coordinates a fixed number of pixels ahead
+      -- (zxula_timing's lookahead counters), for o_layer2_pf_*.
+      i_phc_la                : in std_logic_vector(8 downto 0) := (others => '0');
+      i_whc_la                : in std_logic_vector(8 downto 0) := (others => '0');
+      i_wvc_la                : in std_logic_vector(8 downto 0) := (others => '0');
       
       i_layer2_en             : in std_logic;
       i_resolution            : in std_logic_vector(1 downto 0);     -- 00 = 256x192, 01 = 320x256, 1X = 640x256x4
@@ -60,6 +66,12 @@ entity layer2 is
       
       o_layer2_sram_addr      : out std_logic_vector(20 downto 0);
       o_layer2_req_t          : out std_logic;
+      -- NextTang: the request the core will make that many pixels from now,
+      -- same address logic and enables from the lookahead coordinates; a board
+      -- with slow main memory fetches on this toggle and answers the real one
+      -- from what it fetched.
+      o_layer2_pf_addr        : out std_logic_vector(20 downto 0);
+      o_layer2_pf_req_t       : out std_logic;
       i_layer2_sram_di        : in std_logic_vector(7 downto 0);
       
       o_layer2_en             : out std_logic;
@@ -102,6 +114,23 @@ architecture rtl of layer2 is
    signal layer2_sram_addr       : std_logic_vector(20 downto 0);
    signal layer2_pixel_qq        : std_logic_vector(7 downto 0);
    
+   -- NextTang: lookahead copy of the address path
+   signal hc_la                  : std_logic_vector(8 downto 0);
+   signal hc_eff_la              : std_logic_vector(8 downto 0);
+   signal vc_eff_la              : std_logic_vector(8 downto 0);
+   signal x_pre_la               : std_logic_vector(9 downto 0);
+   signal x_la                   : std_logic_vector(8 downto 0);
+   signal y_pre_la               : std_logic_vector(8 downto 0);
+   signal y_la                   : std_logic_vector(7 downto 0);
+   signal layer2_addr_la         : std_logic_vector(16 downto 0);
+   signal hc_valid_la            : std_logic;
+   signal vc_valid_la            : std_logic;
+   signal layer2_clip_en_la      : std_logic;
+   signal layer2_addr_eff_la     : std_logic_vector(21 downto 0);
+   signal layer2_en_la           : std_logic;
+   signal layer2_pf_req_t        : std_logic := '0';
+   signal layer2_pf_addr         : std_logic_vector(20 downto 0) := (others => '0');
+
    signal layer2_en_qq           : std_logic;
    signal layer2_hires_qq        : std_logic;
    signal layer2_pixel_pre       : std_logic_vector(7 downto 0);
@@ -196,6 +225,51 @@ begin
 
    o_layer2_sram_addr <= layer2_sram_addr;
    o_layer2_req_t <= layer2_req_t;
+
+   -- NextTang: the same address path from the lookahead coordinates. Every
+   -- expression is the one above with the _la inputs; the settings (scroll,
+   -- clip, bank, resolution, enable) are the current ones, so a setting that
+   -- changes within the lookahead distance makes the prediction wrong for
+   -- those pixels, which the board must detect (it compares the addresses).
+
+   hc_la <= i_phc_la when layer2_wide_res = '0' else i_whc_la;
+   hc_eff_la <= hc_la + 1;
+
+   vc_eff_la <= i_pvc when layer2_wide_res = '0' else i_wvc_la;
+
+   x_pre_la <= ('0' & hc_eff_la) + ('0' & layer2_scroll_x_q);
+   x_la(8 downto 6) <= x_pre_la(8 downto 6) when (layer2_wide_res = '0' or (x_pre_la(9) = '0' and (x_pre_la(8) = '0' or x_pre_la(7 downto 6) = "00"))) else (x_pre_la(8 downto 6) + "011");
+   x_la(5 downto 0) <= x_pre_la(5 downto 0);
+
+   y_pre_la <= vc_eff_la + ('0' & layer2_scroll_y_q);
+   y_la(7 downto 6) <= y_pre_la(7 downto 6) when (layer2_wide_res = '1' or (y_pre_la(8) = '0' and y_pre_la(7 downto 6) /= "11")) else (y_pre_la(7 downto 6) + 1);
+   y_la(5 downto 0) <= y_pre_la(5 downto 0);
+
+   layer2_addr_la <= ('0' & y_la & x_la(7 downto 0)) when layer2_wide_res = '0' else (x_la & y_la);
+
+   hc_valid_la <= '1' when (layer2_wide_res = '0' and hc_eff_la(8) = '0') or (layer2_wide_res = '1' and (hc_eff_la(8) = '0' or hc_eff_la(7 downto 6) = "00")) else '0';
+   vc_valid_la <= '1' when (layer2_wide_res = '1' and vc_eff_la(8) = '0') or (layer2_wide_res = '0' and (vc_eff_la(8) = '0' and vc_eff_la(7 downto 6) /= "11")) else '0';
+
+   layer2_clip_en_la <= '1' when (hc_eff_la >= clip_x1_q) and (hc_eff_la <= clip_x2_q) and (vc_eff_la >= ('0' & clip_y1_q)) and (vc_eff_la <= ('0' & clip_y2_q)) and (hc_valid_la = '1') and (vc_valid_la = '1') else '0';
+
+   layer2_addr_eff_la <= (layer2_bank_eff + ("00000" & layer2_addr_la(16 downto 14))) & layer2_addr_la(13 downto 0);
+
+   layer2_en_la <= '1' when layer2_en_q = '1' and layer2_clip_en_la = '1' and layer2_addr_eff_la(21) = '0' and g_unit_visible(to_integer(unsigned(layer2_addr_eff_la(20 downto 14)))) = '1' else '0';
+
+   process (i_CLK_28)
+   begin
+      if rising_edge(i_CLK_28) then
+         if i_sc = "00" then
+            if layer2_en_la = '1' then
+               layer2_pf_req_t <= not layer2_pf_req_t;
+            end if;
+            layer2_pf_addr <= layer2_addr_eff_la(20 downto 0);
+         end if;
+      end if;
+   end process;
+
+   o_layer2_pf_addr <= layer2_pf_addr;
+   o_layer2_pf_req_t <= layer2_pf_req_t;
 
    -- generate pixels
    

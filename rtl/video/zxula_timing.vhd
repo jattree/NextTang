@@ -65,6 +65,11 @@ entity zxula_timing is
       o_wvc              : out unsigned(8 downto 0);          -- wide vertical count for 320x256
       
       o_phc              : out unsigned(8 downto 0);          -- practical horizontal count for 256x192
+      -- NextTang: the same three counters G_LAYER2_LEAD pixels ahead, so a board
+      -- that serves Layer 2 from slow memory can fetch before the core asks.
+      o_whc_la           : out unsigned(8 downto 0);
+      o_wvc_la           : out unsigned(8 downto 0);
+      o_phc_la           : out unsigned(8 downto 0);
       center			 : in std_logic;
       -- 28 MHz domain
       
@@ -134,6 +139,12 @@ architecture rtl of zxula_timing is
    signal wvc                  : unsigned(8 downto 0) := (others => '0');
    
    signal phc                  : unsigned(8 downto 0) := to_unsigned(256, 9);
+   -- NextTang: lookahead copies, reset G_LAYER2_LEAD pixels earlier in the line
+   constant G_LAYER2_LEAD      : natural := 8;
+   signal wide_hactive_la      : std_logic;
+   signal whc_la               : unsigned(8 downto 0) := to_unsigned(320, 9);
+   signal wvc_la               : unsigned(8 downto 0) := (others => '0');
+   signal phc_la               : unsigned(8 downto 0) := to_unsigned(256, 9);
    
    signal whc_0_d              : std_logic := '0';
    signal sc                   : std_logic_vector(1 downto 0) := (others => '0');
@@ -561,6 +572,37 @@ begin
    end process;
    
    o_phc <= phc;
+
+   -- NextTang: lookahead counters. Each resets G_LAYER2_LEAD pixels before its
+   -- original (wide_min_hactive is about 80 pixels into the line, so the reset
+   -- point stays in the same line) and then counts identically, so at every
+   -- 7 MHz edge whc_la, wvc_la and phc_la equal what whc, wvc and phc will be
+   -- G_LAYER2_LEAD pixels later. vc itself needs no copy: Layer 2 fetches never
+   -- come within G_LAYER2_LEAD pixels of the line end, where vc changes.
+
+   wide_hactive_la <= '1' when hc = wide_min_hactive - G_LAYER2_LEAD else '0';
+
+   process (i_CLK_7)
+   begin
+      if rising_edge(i_CLK_7) then
+         if wide_hactive_la = '1' then
+            whc_la <= "111110000";
+            phc_la <= "111010000";
+            if vc = wide_min_vactive then
+               wvc_la <= "111111110";
+            else
+               wvc_la <= wvc_la + 1;
+            end if;
+         else
+            whc_la <= whc_la + 1;
+            phc_la <= phc_la + 1;
+         end if;
+      end if;
+   end process;
+
+   o_whc_la <= whc_la;
+   o_wvc_la <= wvc_la;
+   o_phc_la <= phc_la;
 
    -- 28 MHz sub-pixel counter
 
