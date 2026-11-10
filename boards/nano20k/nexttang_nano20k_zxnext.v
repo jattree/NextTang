@@ -298,7 +298,10 @@ module nexttang_nano20k_zxnext (
     );
 
     // ------------------------------------------------------------ memory
-    nexttang_sdr_sdram_service sdram (
+    // SDRAM read capture: 1 falling edge (bring-up capture B), 0 rising edge
+    // half a cycle earlier (capture A). Set from what bringup2 shows.
+    localparam integer SDRAM_CAPTURE = 1;
+    nexttang_sdr_sdram_service #(.CAPTURE(SDRAM_CAPTURE)) sdram (
         .machine_clock(clock_28), .memory_clock(memory_clock), .reset(memory_reset), .ready(memory_ready),
         .a_request(ram_a_request), .a_cycle_request(ram_a_cycle_request), .a_read_n(ram_a_read_n),
         .a_address(ram_a_address), .a_write_data(ram_a_write_data),

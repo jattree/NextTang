@@ -54,7 +54,12 @@ module nexttang_sdr_sdram_service #(
     parameter integer TRCD         = 2,     // ACTIVE to READ/WRITE, cycles (23.7 ns)
     parameter integer OP_CYCLES    = 6,     // ACTIVE to next ACTIVE (tRC 60 ns; tWR + tRP after a write)
     parameter integer REFRESH_US10 = 78,    // refresh interval in 0.1 us (64 ms / 8192)
-    parameter integer TIMEOUT      = 4096   // port A memory cycles before fault_timeout
+    parameter integer TIMEOUT      = 4096,  // port A memory cycles before fault_timeout
+    // Read data capture: 1 (default) the pins at the falling edge CL + 1.5
+    // cycles after READ, the middle of the data window at these speeds; 0 the
+    // rising edge half a cycle earlier, at the window's leading edge. The
+    // bring-up self-test measures both (its captures B and A) on the board.
+    parameter integer CAPTURE      = 1
 ) (
     input  wire        machine_clock,
     input  wire        memory_clock,
@@ -236,8 +241,12 @@ module nexttang_sdr_sdram_service #(
     reg        dq_oe = 1'b0;
     reg [31:0] dq_out = 32'd0;
     assign sdram_dq = dq_oe ? dq_out : 32'bz;
-    reg [31:0] dq_fall = 32'd0;
+    reg [31:0] dq_fall = 32'd0, dq_rise = 32'd0;
     always @(negedge memory_clock) dq_fall <= sdram_dq;
+    always @(posedge memory_clock) dq_rise <= sdram_dq;
+    // at the capture edge (READ + CL + 2): dq_fall = pins at READ + CL + 1.5,
+    // dq_rise = pins at READ + CL + 1
+    wire [31:0] dq_read = CAPTURE != 0 ? dq_fall : dq_rise;
 
     localparam [3:0] C_NOP = 4'b0111, C_ACT = 4'b0011, C_READ = 4'b0101, C_WRITE = 4'b0100,
                      C_PRE = 4'b0010, C_REF = 4'b0001, C_MRS = 4'b0000;
@@ -303,10 +312,10 @@ module nexttang_sdr_sdram_service #(
         rd_port_b <= {rd_port_b[CL:0], 1'b0};
         if (rd_pipe[CL + 1]) begin
             if (rd_port_b[CL + 1]) begin
-                b_slot_word[b_fetch_slot] <= dq_fall; b_last_word_m <= dq_fall;
+                b_slot_word[b_fetch_slot] <= dq_read; b_last_word_m <= dq_read;
                 b_done_m <= b_done_m + 5'd1; b_busy <= 1'b0;
-            end else if (rd_port_c[CL + 1]) begin c_word_m <= dq_fall; c_done_m <= !c_done_m; end
-            else begin a_word_m <= dq_fall; a_done_m <= !a_done_m; end
+            end else if (rd_port_c[CL + 1]) begin c_word_m <= dq_read; c_done_m <= !c_done_m; end
+            else begin a_word_m <= dq_read; a_done_m <= !a_done_m; end
         end
         // port B bookkeeping: skip slots a flush dropped; an announcement that
         // repeats the previous word takes the last word fetched

@@ -12,6 +12,7 @@
 `timescale 1ns/1ps
 module tb;
     parameter integer ACCESSES = 40000;
+    parameter integer CAPTURE = 1;
     reg mclk = 0; always #5.926 mclk = ~mclk;               // 84.375 MHz
     reg clk28 = 0; always #17.778 clk28 = ~clk28;            // 28.125 MHz, rises with every third mclk
     reg reset = 1;
@@ -23,7 +24,7 @@ module tb;
     wire ready, fault;
     wire sclk, cke, cs_n, ras_n, cas_n, we_n; wire [10:0] sa; wire [1:0] sba; wire [3:0] dqm; wire [31:0] dq;
 
-    nexttang_sdr_sdram_service dut (
+    nexttang_sdr_sdram_service #(.CAPTURE(CAPTURE)) dut (
         .machine_clock(clk28), .memory_clock(mclk), .reset(reset), .ready(ready),
         .a_request(a_request), .a_cycle_request(a_cycle), .a_read_n(a_read_n), .a_address(a_addr),
         .a_write_data(a_wdata), .a_read_data(a_rdata), .a_wait(a_wait),
