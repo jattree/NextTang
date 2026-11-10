@@ -38,4 +38,4 @@ rtl/zxnext.vhd	cores/zxnext/src/zxnext.vhd	71dbe226ce4afd082419193b1b3090dd5a1c4
 rtl/device/pi_debug_control/pi_debug_control_param.vhd	cores/zxnext/src/device/pi_debug_control/pi_debug_control_param.vhd	aea7de1217b4b40a4712466135c04d05d40ed61a	-	official	imported from official 3.02.05 for the Pi debug interface
 rtl/device/arbiter_dma.vhd	cores/zxnext/src/device/arbiter_dma.vhd	b742dd76210f00164239dca4bc014ec961aa1769	-	official	imported from official 3.02.05 for the Pi debug interface
 rtl/serial/spi_slave.vhd	cores/zxnext/src/serial/spi_slave.vhd	902930d5f2d9ea4194d9f6bcf300b7324c0bcdce	-	official	imported from official 3.02.05 for the Pi debug interface
-rtl/video/hdmi_frame.vhd	cores/zxnext/src/video/hdmi/hdmi_frame.vhd	cffc6b376657430c22a52d113205bd43a2f3fae0	-	official	taken verbatim from 30205 for native 576p50/480p60 HDMI on the Nano 20K; no MiSTer counterpart
+rtl/video/hdmi_frame.vhd	cores/zxnext/src/video/hdmi/hdmi_frame.vhd	cffc6b376657430c22a52d113205bd43a2f3fae0	-	official	from 30205 for native 576p50/480p60 HDMI on the Nano 20K, with the NextTang G_RELOCK option (off by default); no MiSTer counterpart

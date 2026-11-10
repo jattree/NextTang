@@ -17,10 +17,10 @@
 //   video     the official hdmi_frame (576p50 / 480p60 from the core's own
 //             frame, through a line buffer) into nexttang_tmds_encoder and
 //             OSER10 / ELVDS_OBUF, as DVI (no audio yet). The pixel clock
-//             comes from the crystal, not from the machine clock, so it is
-//             not locked to the core's frame as on the official board; the
-//             line buffer absorbs the difference within a frame and
-//             hdmi_frame re-locks each frame.
+//             comes from the crystal, not locked to the core's frame as on
+//             the official board, so hdmi_frame re-locks every frame
+//             (G_RELOCK, a NextTang option): the counters jump a few lines
+//             within the vertical back porch.
 //   input     keys from the host over the debug UART (the machine's K and J
 //             commands). No physical keyboard yet (the BL616 companion is
 //             still planned).
@@ -319,7 +319,11 @@ module nexttang_nano20k_zxnext (
     wire        hdmi_blank, hdmi_hsync_n, hdmi_vsync_n;
     wire [8:0]  hdmi_rgb;
     wire        video_60 = core_video_60;
-    hdmi_frame frame (
+    // G_RELOCK: the pixel clock comes from the crystal, 24/25 of the machine
+    // clock, so it cannot match the core's frame; re-lock every frame
+    // (tests/sim/video/tb_hdmi_frame_relock.vhd: without it the picture drifts
+    // through the line buffer within a few frames).
+    hdmi_frame #(.G_RELOCK(1)) frame (
         .i_reset_async_n(video_pll_lock && !machine_reset),
         .i_scanlines(2'b00),
         .i_CLK_RGB(clock_14), .i_CLK_RGB_EN(core_hdmi_pixel),

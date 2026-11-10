@@ -25,6 +25,17 @@ use ieee.numeric_std.all;
 use IEEE.std_logic_unsigned.ALL;
 
 entity hdmi_frame is
+   generic
+   (
+      -- NextTang: re-lock to the core's frame at every i_rgb_sync, not just
+      -- once. For boards whose HDMI pixel clock cannot match the core's frame
+      -- exactly (the Nano 20K's comes from the same crystal as its machine
+      -- clock, 24/25 of it), so the line buffer would otherwise drift. Each
+      -- re-lock restarts the read side at the frame's first line (see
+      -- relock below); the counters jump a few lines within the vertical
+      -- back porch. Off by default: the official behaviour.
+      G_RELOCK         : boolean := false
+   );
    port
    (
       i_reset_async_n  : std_logic;
@@ -105,6 +116,10 @@ architecture rtl of hdmi_frame is
    signal rgb_b_12       : std_logic_vector(3 downto 0);
 
    signal rgb_scanline   : std_logic_vector(8 downto 0) := (others => '0');
+   -- NextTang: G_RELOCK
+   signal relock         : std_logic;
+   signal frame_waddr    : std_logic_vector(12 downto 0) := (others => '0');
+   signal rgb_gap        : unsigned(11 downto 0) := (others => '0');
 
 begin
 
@@ -122,7 +137,7 @@ begin
       if i_reset_async_n = '0' then
          rgb_sync <= '0';
       elsif rising_edge(i_CLK_HDMI) then
-         if state = S_RGB_SYNC then
+         if state = S_RGB_SYNC or (G_RELOCK and state = S_RUNNING) then   -- NextTang: G_RELOCK sees it while running too
             rgb_sync <= i_rgb_sync;
          else
             rgb_sync <= '0';
@@ -167,6 +182,28 @@ begin
    
    running <= '1' when state = S_RUNNING else '0';
 
+   -- NextTang: G_RELOCK. While running, each i_rgb_sync re-aligns the read
+   -- side as the first lock did: the counters go to the start of the first
+   -- active line (sync included, so raddr_lag is set for the line doubling)
+   -- and both read addresses to where this frame's first line was written.
+   -- The write side never restarts; frame_waddr is the write address of the
+   -- first pixel after a gap longer than a line (the vertical blanking).
+   relock <= '1' when G_RELOCK and state = S_RUNNING and rgb_sync = '1' else '0';
+
+   process (i_CLK_RGB)
+   begin
+      if rising_edge(i_CLK_RGB) then
+         if i_CLK_RGB_EN = '1' then
+            if rgb_gap(11) = '1' then
+               frame_waddr <= waddr;
+            end if;
+            rgb_gap <= (others => '0');
+         elsif rgb_gap(11) = '0' then
+            rgb_gap <= rgb_gap + 1;
+         end if;
+      end if;
+   end process;
+
    -- hdmi frame
    
    h_last <= '1' when hcnt = i_HLAST else '0';
@@ -175,7 +212,10 @@ begin
    process (i_CLK_HDMI)
    begin
       if rising_edge(i_CLK_HDMI) then
-         if rgb_sync = '1' then
+         if relock = '1' then                   -- NextTang: G_RELOCK, start of the first active line
+            hcnt <= (others => '0');
+            vcnt <= i_VACTIVE;
+         elsif rgb_sync = '1' then
             hcnt <= i_HACTIVE;
             vcnt <= i_VACTIVE;
          elsif h_last = '1' then
@@ -253,6 +293,8 @@ begin
       if rising_edge(i_CLK_HDMI) then
          if running = '0' then
             raddr <= (others => '0');
+         elsif relock = '1' then                -- NextTang: G_RELOCK
+            raddr <= frame_waddr;
          elsif hdmi_active = '1' then
             raddr <= raddr + 1;
          elsif (v_active = '1') and (hsync_n = '0') and (vcnt(0) /= i_VACTIVE(0)) then
@@ -264,7 +306,9 @@ begin
    process (i_CLK_HDMI)
    begin
       if rising_edge(i_CLK_HDMI) then
-         if (hsync_n = '0') and (vcnt(0) = i_VACTIVE(0)) then
+         if relock = '1' then                   -- NextTang: G_RELOCK
+            raddr_lag <= frame_waddr;
+         elsif (hsync_n = '0') and (vcnt(0) = i_VACTIVE(0)) then
             raddr_lag <= raddr;
          end if;
       end if;
