@@ -123,7 +123,12 @@ module nexttang_next_machine #(
     // 1: the M1 fetch trace (F/R), the NextREG log and the divMMC capture (D)
     // on the debug UART; seven block RAMs. 0 leaves them out (the Nano 20K,
     // which needs the block RAMs); the status line and the Pi debug link stay.
-    parameter integer DEBUG_TAPS = 1
+    parameter integer DEBUG_TAPS = 1,
+    // 0: the Pi debug slave's SPI is driven by the FPGA's own master from the
+    // debug UART (as above). 1: it is the board's pins pi_ce0_n, pi_sclk,
+    // pi_mosi and pi_miso, for a real Raspberry Pi (the Nano 20K's Pi Zero);
+    // the UART's Pi protocol is then unused.
+    parameter integer PI_SPI_PINS = 0
 ) (
     // clocks and resets
     input  wire        clock_28,
@@ -202,7 +207,13 @@ module nexttang_next_machine #(
     input  wire        debug_uart_rx,
     output wire        debug_uart_tx,
     output wire        board_command_valid,
-    output wire [7:0]  board_command_byte
+    output wire [7:0]  board_command_byte,
+
+    // Pi debug slave on pins (PI_SPI_PINS = 1; ignored otherwise)
+    input  wire        pi_ce0_n,
+    input  wire        pi_sclk,
+    input  wire        pi_mosi,
+    output wire        pi_miso
 );
     initial begin
         host_keys = 40'b0;
@@ -250,10 +261,20 @@ module nexttang_next_machine #(
         .core_boot(core_boot)
     );
 
-    // The Pi debug slave's SPI pins, driven by the FPGA's own master below.
-    wire        pi_spi_ce_n;
-    wire        pi_spi_sclk;
-    wire        pi_spi_mosi;
+    // The Pi debug slave's SPI: the FPGA's own master below, or (PI_SPI_PINS)
+    // a Raspberry Pi on the board's pins, synchronised to clock_28.
+    wire        master_spi_ce_n;
+    wire        master_spi_sclk;
+    wire        master_spi_mosi;
+    reg  [1:0]  pin_ce_n_sync = 2'b11, pin_sclk_sync = 2'b00, pin_mosi_sync = 2'b00;
+    always @(posedge clock_28) begin
+        pin_ce_n_sync <= {pin_ce_n_sync[0], pi_ce0_n};
+        pin_sclk_sync <= {pin_sclk_sync[0], pi_sclk};
+        pin_mosi_sync <= {pin_mosi_sync[0], pi_mosi};
+    end
+    wire        pi_spi_ce_n = PI_SPI_PINS != 0 ? pin_ce_n_sync[1] : master_spi_ce_n;
+    wire        pi_spi_sclk = PI_SPI_PINS != 0 ? pin_sclk_sync[1] : master_spi_sclk;
+    wire        pi_spi_mosi = PI_SPI_PINS != 0 ? pin_mosi_sync[1] : master_spi_mosi;
     wire [27:0] core_gpio;
     // Hardware breakpoints (rtl/debug/nexttang_breakpoints.vhd).
     wire [15:0] cpu_next_pc;
@@ -773,9 +794,9 @@ module nexttang_next_machine #(
         .byte_out(pi_reply),
         .idle(pi_spi_idle),
         .memory_busy(ram_c_request || ram_c_busy),
-        .spi_ce_n(pi_spi_ce_n),
-        .spi_sclk(pi_spi_sclk),
-        .spi_mosi(pi_spi_mosi),
+        .spi_ce_n(master_spi_ce_n),
+        .spi_sclk(master_spi_sclk),
+        .spi_mosi(master_spi_mosi),
         .spi_miso(core_gpio[9])
     );
 
@@ -898,6 +919,8 @@ module nexttang_next_machine #(
         assign capture_transmit = 1'b1;
     end
     endgenerate
+
+    assign pi_miso = core_gpio[9];
 
     assign debug_uart_tx = pi_session ? pi_link_tx
                          : capture_sending ? capture_transmit

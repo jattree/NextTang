@@ -312,7 +312,11 @@ module `NEXTTANG_ZXNEXT_TOP (
         .debug_uart_rx(debug_uart_rx),
         .debug_uart_tx(debug_uart_tx),
         .board_command_valid(board_command_valid),
-        .board_command_byte(command_byte)
+        .board_command_byte(command_byte),
+        .pi_ce0_n(1'b1),
+        .pi_sclk(1'b0),
+        .pi_mosi(1'b0),
+        .pi_miso()
     );
 
     // ------------------------------------------------------------ keyboard, SD

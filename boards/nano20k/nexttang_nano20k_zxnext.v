@@ -29,8 +29,11 @@
 //             is the companion IRQ under NextNano's firmware; a UART there is
 //             harmless to it.
 //
+//   Pi0       the official Pi debug slave on header pins 25 CE0, 26 MISO,
+//             27 MOSI, 28 SCLK (PI_SPI_PINS), for a Pi Zero.
+//
 // Still planned: Layer 2 (port B), audio (I2S amplifier and HDMI audio), the
-// BL616 companion keyboard, the Pi0 on the Pi debug slave's own SPI pins.
+// BL616 companion keyboard.
 // Capability limits on this part (2026-11-06 synthesis probe): no Spec256,
 // no Layer 2 block-RAM mirror, no DDR3 frame store or 720p scaler.
 
@@ -207,7 +210,8 @@ module nexttang_nano20k_zxnext (
         .LAYER2_UNITS(LAYER2_UNITS),
         .CORE_OPTION(CORE_OPTION),
         .SD_MONITOR(1),
-        .DEBUG_TAPS(0)                    // the block RAMs go to video and Layer 2
+        .DEBUG_TAPS(0),                   // the block RAMs go to video and Layer 2
+        .PI_SPI_PINS(1)                   // the Pi Zero on header pins 25-28
     ) machine (
         .clock_28(clock_28),
         .clock_28_n(clock_28_n),
@@ -277,7 +281,11 @@ module nexttang_nano20k_zxnext (
         .debug_uart_rx(debug_uart_rx && usb_uart_rx),
         .debug_uart_tx(uart_tx),
         .board_command_valid(board_command_valid),
-        .board_command_byte(board_command_byte)
+        .board_command_byte(board_command_byte),
+        .pi_ce0_n(pi_ce0_n),
+        .pi_sclk(pi_sclk),
+        .pi_mosi(pi_mosi),
+        .pi_miso(pi_miso)
     );
 
     // ------------------------------------------------------------ memory
@@ -364,7 +372,6 @@ module nexttang_nano20k_zxnext (
     assign amp_data = 1'b0;
     assign amp_lrck = 1'b0;
     assign amp_bclk = 1'b0;
-    assign pi_miso = 1'b1;
 
     // LEDs, lit when driven low (to be confirmed on the board with the
     // bring-up image): 0 machine PLL, 1 SDRAM ready, 2 machine running,
