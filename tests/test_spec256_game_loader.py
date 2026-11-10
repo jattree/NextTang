@@ -90,6 +90,7 @@ module testbench;
     wire [2:0] launch_key_count;
     wire [7:0] launch_key_0, launch_key_1, launch_key_2, launch_key_3;
     wire [15:0] launch_start_delay_ms, launch_hold_ms, launch_gap_ms;
+    wire [31:0] upper_main_crc;
 
     integer index;
     integer boot_count = 0;
@@ -124,7 +125,8 @@ module testbench;
         .launch_key_0(launch_key_0), .launch_key_1(launch_key_1),
         .launch_key_2(launch_key_2), .launch_key_3(launch_key_3),
         .launch_start_delay_ms(launch_start_delay_ms),
-        .launch_hold_ms(launch_hold_ms), .launch_gap_ms(launch_gap_ms)
+        .launch_hold_ms(launch_hold_ms), .launch_gap_ms(launch_gap_ms),
+        .upper_main_crc(upper_main_crc)
     );
 
     always @(posedge clock) begin
@@ -214,6 +216,8 @@ module testbench;
                 launch_start_delay_ms != 2000 || launch_hold_ms != 140 ||
                 launch_gap_ms != 300)
                 $fatal(1, "launch metadata mismatch");
+            if (upper_main_crc !== 32'h__UPPER_MAIN_CRC__)
+                $fatal(1, "upper-main CRC mismatch: %h", upper_main_crc);
         end else if (!hold_reset || ready || (__EXPECT_FAULT__ && !fault)) begin
             $fatal(1, "invalid pack escaped: ready=%b hold=%b fault=%b", ready, hold_reset, fault);
         end
@@ -222,12 +226,15 @@ module testbench;
 endmodule
 """
         stream = pack[: len(pack) - truncate if truncate else len(pack)]
+        payload = pack[HEADER.size:]
+        upper_main_crc = zlib.crc32(payload[32_768:65_536])
         testbench = (
             testbench.replace("__STREAM_BYTES__", str(len(stream)))
             .replace("__EXPECT_READY__", "1" if expected_loads else "0")
             .replace("__EXPECT_FAULT__", "1" if expect_fault else "0")
             .replace("__LOAD_COUNT__", str(expected_loads))
             .replace("__BACKGROUND_BYTES__", str(stored_background_bytes))
+            .replace("__UPPER_MAIN_CRC__", f"{upper_main_crc:08x}")
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

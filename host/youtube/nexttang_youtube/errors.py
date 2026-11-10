@@ -14,6 +14,7 @@ EXIT_AUTH_REQUIRED = 4
 EXIT_CHANNEL_MISMATCH = 5
 EXIT_QUOTA = 6
 EXIT_API = 7
+EXIT_INTERRUPTED = 130
 
 
 class CliError(Exception):
@@ -29,6 +30,16 @@ class CliError(Exception):
 
 class UsageError(CliError):
     exit_code = EXIT_USAGE
+
+
+class StoredFileError(CliError):
+    """A file in the credential store exists but cannot be read as a JSON object."""
+
+
+class InterruptedWriteError(CliError):
+    """The operator interrupted a command after it may have started a write."""
+
+    exit_code = EXIT_INTERRUPTED
 
 
 class MissingCredentialsError(CliError):

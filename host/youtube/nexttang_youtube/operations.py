@@ -263,6 +263,7 @@ def plan_video_upload(path: Path, privacy: str, *, title: str | None = None,
         raise UsageError(f"video file is empty: {path}")
 
     resolved_title = title or path.stem
+    digest = sha256_of(path)
     metadata = {
         "snippet": {"title": resolved_title, "description": description},
         "status": {"privacyStatus": privacy},
@@ -277,7 +278,7 @@ def plan_video_upload(path: Path, privacy: str, *, title: str | None = None,
             "This CLI never publishes. Change visibility in YouTube Studio after review.",
             "The made-for-kids declaration is not set by this CLI and must be made in "
             "YouTube Studio before any publishing.",
-            f"sha256: {sha256_of(path)}",
+            f"sha256: {digest}",
         ],
         request={
             "method": "POST then PUT",
@@ -286,7 +287,7 @@ def plan_video_upload(path: Path, privacy: str, *, title: str | None = None,
             "upload_type": "resumable",
             "quota_units": "1 call from the 100-per-day video upload bucket",
         },
-        payload={"path": str(path), "size": size, "metadata": metadata},
+        payload={"path": str(path), "size": size, "sha256": digest, "metadata": metadata},
     )
 
 

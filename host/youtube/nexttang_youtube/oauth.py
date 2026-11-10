@@ -13,7 +13,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import http.server
-import json
 import secrets
 import time
 import urllib.parse
@@ -361,7 +360,11 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - name fixed by BaseHTTPRequestHandler
         parsed = urllib.parse.urlsplit(self.path)
         query = dict(urllib.parse.parse_qsl(parsed.query))
-        self.server.captured = query  # type: ignore[attr-defined]
+        # Only a request carrying Google's answer ends the wait. A favicon fetch
+        # or a stray local probe is answered and ignored, so it cannot abort a
+        # login that is still in progress at the consent screen.
+        if "code" in query or "error" in query:
+            self.server.captured = query  # type: ignore[attr-defined]
         if query.get("error"):
             page = _CALLBACK_PAGE.format(
                 heading="Authorisation refused",
@@ -376,10 +379,10 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
             status = 200
         else:
             page = _CALLBACK_PAGE.format(
-                heading="Unexpected response",
-                message="No authorisation code was present in the redirect.",
+                heading="Not found",
+                message="This address only receives the Google authorisation redirect.",
             )
-            status = 400
+            status = 404
         body = page.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")

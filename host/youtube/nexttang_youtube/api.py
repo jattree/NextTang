@@ -37,7 +37,7 @@ DATA_PAGE_SIZE = 50
 COMMENT_PAGE_SIZE = 100
 UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 UPLOAD_TIMEOUT_SECONDS = 600.0
-UPLOAD_DEADLINE_SECONDS = 3600.0
+UPLOAD_STALL_SECONDS = 1800.0
 MAX_UPLOAD_ATTEMPTS = 5
 RETRYABLE_STATUSES = {408, 429, 500, 502, 503, 504}
 MAX_BACKOFF_SECONDS = 64.0
@@ -52,7 +52,9 @@ QUOTA_REASONS = {
     "userRateLimitExceeded",
     "servingLimitExceeded",
 }
-SCOPE_REASONS = {"insufficientPermissions", "forbidden", "insufficientScope"}
+# "forbidden" is deliberately absent: it means the account may not act on that
+# resource, which a wider scope does not fix.
+SCOPE_REASONS = {"insufficientPermissions", "insufficientScope"}
 
 ANALYTICS_SUMMARY_METRICS = (
     "views",
@@ -341,14 +343,23 @@ class YouTubeApi:
 
     def set_video_thumbnail(self, video_id: str, path: Path, mime_type: str) -> dict[str, Any]:
         """Upload and set one custom thumbnail, returning Google's video resource."""
-        response = self._multipart_upload(
-            f"{UPLOAD_API_ROOT}/thumbnails/set",
-            parameters={"uploadType": "multipart", "videoId": video_id},
-            metadata={},
-            path=path,
-            mime_type=mime_type,
-            max_bytes=MAX_THUMBNAIL_UPLOAD_BYTES,
-        )
+        try:
+            response = self._multipart_upload(
+                f"{UPLOAD_API_ROOT}/thumbnails/set",
+                parameters={"uploadType": "multipart", "videoId": video_id},
+                metadata={},
+                path=path,
+                mime_type=mime_type,
+                max_bytes=MAX_THUMBNAIL_UPLOAD_BYTES,
+            )
+        except ApiError as error:
+            if error.status == 403 and error.reason == "forbidden":
+                error.hint = (
+                    "YouTube refuses custom thumbnails until the channel is verified for "
+                    "intermediate features: https://www.youtube.com/verify. If it already is, "
+                    "Google's message above names the reason. No thumbnail was set."
+                )
+            raise
         try:
             payload = response.json()
         except ApiError as error:
@@ -458,9 +469,10 @@ class YouTubeApi:
         path: Path,
         mime_type: str = "video/*",
         *,
+        start_offset: int = 0,
         chunk_size: int = UPLOAD_CHUNK_BYTES,
         max_attempts: int = MAX_UPLOAD_ATTEMPTS,
-        deadline_seconds: float = UPLOAD_DEADLINE_SECONDS,
+        stall_seconds: float = UPLOAD_STALL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> dict[str, Any]:
@@ -471,23 +483,31 @@ class YouTubeApi:
         retried with bounded backoff, and each retry first asks the server how
         much it actually holds rather than assuming the last offset.
 
+        There is no overall deadline, because a large file on a slow uplink can
+        legitimately take many hours. The upload is abandoned only when the
+        server's committed offset has not advanced for stall_seconds.
+
         Protocol: https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol
         """
         total = path.stat().st_size
         if total == 0:
             raise ApiError(f"refusing to upload an empty file: {path}")
 
-        started = clock()
-        offset = 0
+        offset = start_offset
+        progress_offset = offset
+        last_progress = clock()
         attempts = 0
 
         with path.open("rb") as handle:
             while offset < total:
-                if clock() - started > deadline_seconds:
+                if offset > progress_offset:
+                    progress_offset = offset
+                    last_progress = clock()
+                elif clock() - last_progress > stall_seconds:
                     return self._abandon_upload(
                         session_url,
                         total,
-                        f"upload exceeded its {int(deadline_seconds)} second deadline at "
+                        f"upload made no progress for {int(stall_seconds)} seconds at "
                         f"{offset} of {total} bytes",
                     )
 
@@ -529,6 +549,39 @@ class YouTubeApi:
 
         return self._abandon_upload(
             session_url, total, "the upload sent every byte but no completion response was received"
+        )
+
+    def resume_upload(
+        self,
+        session_url: str,
+        path: Path,
+        mime_type: str = "video/*",
+        **upload_options: Any,
+    ) -> dict[str, Any]:
+        """Continue an earlier session from the offset the server reports.
+
+        Unlike the probe inside upload_file, a refusal here is raised rather
+        than swallowed: the caller needs to know the session has expired so it
+        can discard it instead of retrying forever.
+        """
+        total = path.stat().st_size
+        response = self._probe_upload(session_url, total)
+        if response.status in {200, 201}:
+            completed = _completed_video_resource(response)
+            if completed is None:
+                raise ApiError(
+                    "the upload session reports completion but returned no readable video resource",
+                    hint="The video very likely exists. Check 'videos list' and do not upload it again.",
+                )
+            return completed
+        if response.status != 308:
+            raise _map_error(response)
+        return self.upload_file(
+            session_url,
+            path,
+            mime_type,
+            start_offset=_resume_offset(response, fallback=0),
+            **upload_options,
         )
 
     def _accept_upload_completion(
@@ -604,15 +657,8 @@ class YouTubeApi:
         so it is returned rather than discarded: treating a finished upload as a
         failure would prompt a duplicate.
         """
-        headers = {
-            "Authorization": f"Bearer {self._token()}",
-            "Content-Length": "0",
-            "Content-Range": f"bytes */{total}",
-        }
         try:
-            response = self._transport.request(
-                "PUT", session_url, headers=headers, body=b"", timeout=UPLOAD_TIMEOUT_SECONDS
-            )
+            response = self._probe_upload(session_url, total)
         except ApiError:
             return None, None
         if response.status in {200, 201}:
@@ -620,6 +666,17 @@ class YouTubeApi:
         if response.status == 308:
             return _resume_offset(response, fallback=0), None
         return None, None
+
+    def _probe_upload(self, session_url: str, total: int) -> Response:
+        """Send the empty `bytes */TOTAL` request that asks a session what it holds."""
+        headers = {
+            "Authorization": f"Bearer {self._token()}",
+            "Content-Length": "0",
+            "Content-Range": f"bytes */{total}",
+        }
+        return self._transport.request(
+            "PUT", session_url, headers=headers, body=b"", timeout=UPLOAD_TIMEOUT_SECONDS
+        )
 
     # --------------------------------------------------------------- plumbing
 

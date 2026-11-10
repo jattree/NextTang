@@ -14,11 +14,14 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .errors import StoredFileError
+
 DIRECTORY_MODE = 0o700
 FILE_MODE = 0o600
 CONFIG_DIR_ENV = "NEXTTANG_YOUTUBE_CONFIG_DIR"
 CLIENT_SECRET_NAME = "client_secret.json"
 TOKEN_NAME = "token.json"
+UPLOAD_SESSION_NAME = "upload_session.json"
 
 
 def config_dir() -> Path:
@@ -48,6 +51,10 @@ def token_path() -> Path:
     return config_dir() / TOKEN_NAME
 
 
+def upload_session_path() -> Path:
+    return config_dir() / UPLOAD_SESSION_NAME
+
+
 def permissions(path: Path) -> int:
     """Return the permission bits of an existing path."""
     return stat.S_IMODE(path.stat().st_mode)
@@ -60,11 +67,24 @@ def describe_permissions(path: Path) -> str:
     return format(permissions(path), "04o")
 
 
-def read_json(path: Path) -> Any:
-    """Read a JSON document, returning None when the file does not exist."""
+def read_json(path: Path) -> dict[str, Any] | None:
+    """Read a JSON object, returning None when the file does not exist.
+
+    A file that exists but is unreadable, damaged, or not an object raises a
+    StoredFileError naming the file, so a truncated token is reported rather
+    than surfacing as a traceback.
+    """
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise _stored_file_error(path, exc.strerror or type(exc).__name__) from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _stored_file_error(path, f"not valid JSON ({exc})") from exc
+    if not isinstance(payload, dict):
+        raise _stored_file_error(path, "not a JSON object")
+    return payload
 
 
 def write_secret_json(path: Path, payload: Any) -> None:
@@ -101,6 +121,21 @@ def remove(path: Path) -> bool:
         return False
     path.unlink()
     return True
+
+
+def _stored_file_error(path: Path, reason: str) -> StoredFileError:
+    if path.name == TOKEN_NAME:
+        hint = "Remove it and run 'nexttang-youtube auth login' to authorise again."
+    elif path.name == CLIENT_SECRET_NAME:
+        hint = "Re-download the Desktop app client JSON and install it there again."
+    elif path.name == UPLOAD_SESSION_NAME:
+        hint = (
+            "Check 'videos list' for a partly finished upload, then remove the file and "
+            "start the upload again."
+        )
+    else:
+        hint = "Fix the file's permissions or replace it."
+    return StoredFileError(f"cannot read {path}: {reason}", hint=hint)
 
 
 def _sync_directory(directory: Path) -> None:

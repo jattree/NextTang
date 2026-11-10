@@ -250,6 +250,10 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     wire [15:0] loader_launch_start_delay_ms;
     wire [15:0] loader_launch_hold_ms;
     wire [15:0] loader_launch_gap_ms;
+    wire [31:0] loader_upper_main_crc;
+`ifdef NEXTTANG_SPEC256_DDR_READBACK
+    reg spec256_ddr_readback_release = 1'b0;
+`endif
 
 `ifdef NEXTTANG_SPEC256_SD_PACK
     wire [7:0] spec256_pack_byte;
@@ -304,12 +308,17 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .launch_key_3(loader_launch_key_3),
         .launch_start_delay_ms(loader_launch_start_delay_ms),
         .launch_hold_ms(loader_launch_hold_ms),
-        .launch_gap_ms(loader_launch_gap_ms)
+        .launch_gap_ms(loader_launch_gap_ms),
+        .upper_main_crc(loader_upper_main_crc)
     );
 
 `ifdef NEXTTANG_SPECTRUM48_USE_DDR3
     wire cpu_reset = !cpu_reset_shift[3] || !memory_available_cpu ||
-                     loader_hold_reset;
+                     loader_hold_reset
+`ifdef NEXTTANG_SPEC256_DDR_READBACK
+                     || !spec256_ddr_readback_release
+`endif
+                     ;
 `elsif NEXTTANG_SPEC256_ROM_LANE_VIEW
     // The pack still loads -- the loader does not run from cpu_reset -- but no
     // CPU is ever released, so the ROM lanes hold exactly what the loader
@@ -922,6 +931,123 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 
 `ifdef NEXTTANG_SPECTRUM48_USE_DDR3
     reg loader_ddr_write_busy = 1'b0;
+`ifdef NEXTTANG_SPEC256_DDR_READBACK
+    localparam [2:0] SPEC256_READBACK_IDLE = 3'd0;
+    localparam [2:0] SPEC256_READBACK_REQUEST = 3'd1;
+    localparam [2:0] SPEC256_READBACK_WAIT = 3'd2;
+    localparam [2:0] SPEC256_READBACK_CRC = 3'd3;
+    localparam [2:0] SPEC256_READBACK_GAP = 3'd4;
+    localparam [2:0] SPEC256_READBACK_DONE = 3'd5;
+    reg [2:0] spec256_readback_state = SPEC256_READBACK_IDLE;
+    reg [15:0] spec256_readback_address = 16'h8000;
+    reg [31:0] spec256_readback_crc = 32'hffffffff;
+    reg [31:0] spec256_readback_crc_final = 32'b0;
+    reg [2:0] spec256_readback_crc_bit = 3'b0;
+    reg spec256_readback_pass = 1'b0;
+    reg spec256_calibration_fell = 1'b0;
+    reg spec256_loader_was_ready = 1'b0;
+    reg spec256_memory_was_available = 1'b0;
+
+    wire spec256_readback_request =
+        spec256_readback_state == SPEC256_READBACK_REQUEST ||
+        spec256_readback_state == SPEC256_READBACK_WAIT;
+    wire [15:0] spec256_memory_cpu_address = spec256_readback_request ?
+        spec256_readback_address : cpu_address;
+    wire spec256_memory_cpu_mreq_n = spec256_readback_request ? 1'b0 : mreq_n;
+    wire spec256_memory_cpu_rd_n = spec256_readback_request ? 1'b0 : rd_n;
+    wire spec256_memory_cpu_wr_n = spec256_readback_request ? 1'b1 : wr_n;
+    wire spec256_memory_cpu_rfsh_n = spec256_readback_request ? 1'b1 : rfsh_n;
+
+    always @(posedge cpu_clock) begin
+        if (!cpu_reset_shift[3]) begin
+            spec256_readback_state <= SPEC256_READBACK_IDLE;
+            spec256_readback_address <= 16'h8000;
+            spec256_readback_crc <= 32'hffffffff;
+            spec256_readback_crc_final <= 32'b0;
+            spec256_readback_crc_bit <= 3'b0;
+            spec256_readback_pass <= 1'b0;
+            spec256_ddr_readback_release <= 1'b0;
+            spec256_loader_was_ready <= 1'b0;
+            spec256_memory_was_available <= 1'b0;
+            spec256_calibration_fell <= 1'b0;
+        end else if (!memory_available_cpu) begin
+            spec256_readback_state <= SPEC256_READBACK_IDLE;
+            spec256_readback_address <= 16'h8000;
+            spec256_readback_crc <= 32'hffffffff;
+            spec256_readback_crc_final <= 32'b0;
+            spec256_readback_crc_bit <= 3'b0;
+            spec256_readback_pass <= 1'b0;
+            spec256_ddr_readback_release <= 1'b0;
+            // A drop while the pack is still loading counts too: the DDR
+            // service ignores a request edge while uncalibrated, which would
+            // leave a loader write pending with no fault raised.
+            if (spec256_loader_was_ready || spec256_memory_was_available)
+                spec256_calibration_fell <= 1'b1;
+        end else begin
+            spec256_memory_was_available <= 1'b1;
+            if (loader_ready)
+                spec256_loader_was_ready <= 1'b1;
+            if (spec256_loader_was_ready && !calibration_complete)
+                spec256_calibration_fell <= 1'b1;
+
+            case (spec256_readback_state)
+                SPEC256_READBACK_IDLE: begin
+                    if (loader_ready && !loader_fault) begin
+                        spec256_readback_address <= 16'h8000;
+                        spec256_readback_crc <= 32'hffffffff;
+                        spec256_readback_state <= SPEC256_READBACK_REQUEST;
+                    end
+                end
+                SPEC256_READBACK_REQUEST:
+                    spec256_readback_state <= SPEC256_READBACK_WAIT;
+                SPEC256_READBACK_WAIT: begin
+                    if (upper_transaction_complete) begin
+                        spec256_readback_crc <= spec256_readback_crc ^ ram_data;
+                        spec256_readback_crc_bit <= 3'b0;
+                        spec256_readback_state <= SPEC256_READBACK_CRC;
+                    end
+                end
+                SPEC256_READBACK_CRC: begin
+                    spec256_readback_crc <= spec256_readback_crc[0] ?
+                        (spec256_readback_crc >> 1) ^ 32'hedb88320 :
+                        spec256_readback_crc >> 1;
+                    if (spec256_readback_crc_bit == 3'd7) begin
+                        if (spec256_readback_address == 16'hffff) begin
+                            spec256_readback_crc_final <=
+                                ~(spec256_readback_crc[0] ?
+                                  (spec256_readback_crc >> 1) ^ 32'hedb88320 :
+                                  spec256_readback_crc >> 1);
+                            spec256_readback_pass <=
+                                ~(spec256_readback_crc[0] ?
+                                  (spec256_readback_crc >> 1) ^ 32'hedb88320 :
+                                  spec256_readback_crc >> 1) ==
+                                loader_upper_main_crc;
+                            spec256_readback_state <= SPEC256_READBACK_DONE;
+                        end else begin
+                            spec256_readback_address <= spec256_readback_address + 1'b1;
+                            spec256_readback_state <= SPEC256_READBACK_GAP;
+                        end
+                    end else
+                        spec256_readback_crc_bit <= spec256_readback_crc_bit + 1'b1;
+                end
+                SPEC256_READBACK_GAP:
+                    spec256_readback_state <= SPEC256_READBACK_REQUEST;
+                SPEC256_READBACK_DONE: begin
+                    if (spec256_readback_pass)
+                        spec256_ddr_readback_release <= 1'b1;
+                end
+                default:
+                    spec256_readback_state <= SPEC256_READBACK_IDLE;
+            endcase
+        end
+    end
+`else
+    wire [15:0] spec256_memory_cpu_address = cpu_address;
+    wire spec256_memory_cpu_mreq_n = mreq_n;
+    wire spec256_memory_cpu_rd_n = rd_n;
+    wire spec256_memory_cpu_wr_n = wr_n;
+    wire spec256_memory_cpu_rfsh_n = rfsh_n;
+`endif
     wire combined_main_loader_write = loader_main_write || poke_memory_write;
     wire [15:0] combined_main_loader_address = poke_memory_write ?
         poke_write_address : loader_main_address;
@@ -945,9 +1071,13 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 `endif
     nexttang_spec256_main_ddr_memory machine_ram (
         .cpu_clock(cpu_clock), .path_reset(spec256_ddr_path_reset),
-        .memory_available(memory_available_cpu), .cpu_address(cpu_address),
-        .cpu_write_data(cpu_data_out), .cpu_mreq_n(mreq_n), .cpu_rd_n(rd_n),
-        .cpu_wr_n(wr_n), .cpu_rfsh_n(rfsh_n), .ram_read_data(ram_data),
+        .memory_available(memory_available_cpu),
+        .cpu_address(spec256_memory_cpu_address),
+        .cpu_write_data(cpu_data_out),
+        .cpu_mreq_n(spec256_memory_cpu_mreq_n),
+        .cpu_rd_n(spec256_memory_cpu_rd_n),
+        .cpu_wr_n(spec256_memory_cpu_wr_n),
+        .cpu_rfsh_n(spec256_memory_cpu_rfsh_n), .ram_read_data(ram_data),
         .cpu_wait_n(memory_cpu_wait_n), .loader_write(combined_main_loader_write),
         .loader_address(combined_main_loader_address),
         .loader_write_data(combined_main_loader_data),
@@ -2680,9 +2810,31 @@ module `NEXTTANG_SPECTRUM48_TOP #(
         .green(loader_overlay_green),.blue(loader_overlay_blue));
     reg[7:0]hdmi_red=0,hdmi_green=0,hdmi_blue=0;
     always@(posedge pixel_clock)begin
+`ifdef NEXTTANG_SPEC256_DDR_READBACK
+        if(loader_overlay_enable)begin
+            hdmi_red<=loader_overlay_red;
+            hdmi_green<=loader_overlay_green;
+            hdmi_blue<=loader_overlay_blue;
+        end else if(spec256_calibration_fell||fault_calibration_lost)begin
+            hdmi_red<=8'hff;hdmi_green<=8'h00;hdmi_blue<=8'hff;
+        end else if(fault_timeout)begin
+            hdmi_red<=8'hff;hdmi_green<=8'h60;hdmi_blue<=8'h00;
+        end else if(fault_overrun)begin
+            hdmi_red<=8'hff;hdmi_green<=8'hff;hdmi_blue<=8'h00;
+        end else if(spec256_readback_state!=SPEC256_READBACK_DONE)begin
+            hdmi_red<=8'h00;hdmi_green<=8'h20;hdmi_blue<=8'hff;
+        end else if(!spec256_readback_pass)begin
+            hdmi_red<=8'hff;hdmi_green<=8'h00;hdmi_blue<=8'h00;
+        end else if(hdmi_y<4)begin
+            hdmi_red<=8'h00;hdmi_green<=8'hff;hdmi_blue<=8'h00;
+        end else begin
+            hdmi_red<=red;hdmi_green<=green;hdmi_blue<=blue;
+        end
+`else
         hdmi_red<=loader_overlay_enable?loader_overlay_red:red;
         hdmi_green<=loader_overlay_enable?loader_overlay_green:green;
         hdmi_blue<=loader_overlay_enable?loader_overlay_blue:blue;
+`endif
     end
 `else
 `ifdef NEXTTANG_SPEC256_WRITE_TRACE
@@ -2858,6 +3010,21 @@ module `NEXTTANG_SPECTRUM48_TOP #(
 `endif
 
 `ifdef NEXTTANG_SPEC256_RUNTIME
+`ifdef NEXTTANG_SPEC256_DDR_READBACK
+    // V/M/R/C/P/Y: memory available, loader ready, loader fault, read-back
+    // done, loader DDR write pending, calibration dropped after first lock.
+    // Value: read-back state, CRC pass, read-back page (address[14:8]) and
+    // received pack bytes, so a stalled load and a stalled read-back differ.
+    wire [5:0] status_flags = {
+        spec256_calibration_fell, loader_ddr_write_busy,
+        spec256_readback_state == SPEC256_READBACK_DONE,
+        loader_fault, loader_ready, memory_available_cpu
+    };
+    wire [31:0] status_value = {
+        spec256_readback_state, spec256_readback_pass,
+        spec256_readback_address[14:8], loader_received_bytes
+    };
+`else
 `ifdef NEXTTANG_SPEC256_WRITE_TRACE
     // V/M/R/C/P/Y: video/machine lock, trace armed, all lanes captured,
     // any captured loader-owned write, and loader fault.  Value layout is
@@ -2884,6 +3051,7 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     };
     wire [31:0] status_value = {11'b0, loader_background_valid,
                                 loader_received_bytes};
+`endif
 `endif
 `elsif NEXTTANG_SPECTRUM48_KEYBOARD_DIAGNOSTIC
 `ifdef NEXTTANG_SPECTRUM48_USB_KEYBOARD
@@ -3024,8 +3192,14 @@ module `NEXTTANG_SPECTRUM48_TOP #(
     ) status_uart (
         .clock(cpu_clock),
 `ifdef NEXTTANG_SPEC256_RUNTIME
+`ifdef NEXTTANG_SPEC256_DDR_READBACK
+        // Keep reporting through pack loading: a stalled load holds
+        // hold_reset high, which would otherwise silence the progress count.
+        .reset(!cpu_reset_shift[3]),
+`else
         .reset(!cpu_reset_shift[3] ||
                (loader_hold_reset && !loader_fault)),
+`endif
 `else
         .reset(cpu_reset),
 `endif

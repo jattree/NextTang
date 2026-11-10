@@ -66,6 +66,7 @@ All credential material lives outside the repository:
 ~/.config/nexttang-youtube/           mode 0700
 ~/.config/nexttang-youtube/client_secret.json   mode 0600
 ~/.config/nexttang-youtube/token.json           mode 0600
+~/.config/nexttang-youtube/upload_session.json  mode 0600, only while an upload is unfinished
 ```
 
 Install the downloaded client and lock it down, without letting it pass through
@@ -91,7 +92,9 @@ account picker, choose the channel's own identity. Choosing a different account
 is not dangerous: the channel guard refuses the mismatch and exits non-zero.
 
 Token state is written atomically through a temporary file in the same
-directory, so an interrupted refresh cannot leave a truncated token behind.
+directory, so an interrupted refresh cannot leave a truncated token behind. A
+file in this directory that is damaged or unreadable anyway is reported by name
+with the fix (exit 1), not as a Python traceback.
 
 Never place credentials in the repository, in `llmwiki/`, in command arguments,
 in environment files, or in test fixtures. The repository check rejects files
@@ -122,14 +125,16 @@ Every command accepts `--json` for machine-readable output.
 
 ### Write commands
 
-All seven are dry runs unless `--apply` is given.
+All seven are dry runs unless `--apply` is given. Text read from `--file`,
+`--title-file`, `--description-file` and `--text-file` loses the trailing newline
+an editor adds, so a file holding the current text is recognised as unchanged.
 
 | Command | What it does |
 | --- | --- |
 | `channel set-description --file FILE` | Replaces the channel description from a UTF-8 file. |
 | `channel set-banner --file FILE` | Uploads 16:9 channel art (minimum 2048x1152) and sets it with a safe branding read-modify-write. |
 | `channel set-watermark --file FILE` | Sets a 150x150 channel-wide video watermark from the start of playback. |
-| `videos upload PATH --privacy private` | Uploads a video as private. `--privacy` is required and only `private` is accepted. |
+| `videos upload PATH --privacy private` | Uploads a video as private. `--privacy` is required and only `private` is accepted. `--resume` continues an unfinished upload; `--restart` abandons one and starts again. |
 | `videos set-thumbnail VIDEO_ID --file FILE` | Sets a 16:9 custom thumbnail after proving the video belongs to the pinned channel. The image must be at least 1280 pixels wide and no larger than 2 MiB. |
 | `videos update-metadata VIDEO_ID --title-file FILE --description-file FILE` | Replaces a channel video's title and description after proving ownership. It preserves the current category, tags and language fields. |
 | `comments reply COMMENT_ID --text-file FILE` | Posts one reply to one comment on the channel's own content. |
@@ -252,6 +257,9 @@ on a channel video once one exists.
 immediately before the write. It refuses a missing video or one owned by any
 channel other than the pinned channel. The 2 MiB limit is the Data API
 upload limit, which is lower than the browser upload limit in YouTube Studio.
+YouTube refuses custom thumbnails (403 `forbidden`) until the channel is verified
+for intermediate features at <https://www.youtube.com/verify>; the command says
+so rather than suggesting another login.
 
 `videos update-metadata` follows the same two ownership checks. YouTube's
 `videos.update` replaces the supplied snippet fields, so the command reads the
@@ -281,17 +289,18 @@ resolved video and the author being replied to.
 Chunks are read from disk one at a time, so file size does not become memory use.
 Each chunk request carries its own `Authorization` and `Content-Type` headers.
 Transient failures (network errors and HTTP 408, 429, 500, 502, 503, 504) are
-retried, capped at 5 attempts per chunk under an overall deadline of one hour. A
-server-supplied `Retry-After` header is honoured, in either seconds or HTTP-date
-form, bounded at 64 seconds; otherwise the delay is exponential backoff with
-jitter. Before each retry the tool asks the server how many bytes it actually
+retried, capped at 5 attempts per chunk. There is no overall time limit, because
+a long capture on a slow uplink can take hours; the upload is abandoned only when
+the bytes Google holds have not advanced for 30 minutes. A server-supplied
+`Retry-After` header is honoured, in either seconds or HTTP-date form, bounded at
+64 seconds; otherwise the delay is exponential backoff with jitter. Before each retry the tool asks the server how many bytes it actually
 holds, using a `Content-Range: bytes */TOTAL` query, and resumes from there
 rather than assuming. A permanent failure such as an expired session (404) fails
-immediately instead of burning the deadline.
+immediately instead of retrying.
 
 That status query is also how a completed upload is recovered. An interrupted
 request may still have been received, so **no exit path reports failure without
-asking the server first**: the retry limit, the deadline, and the end of the
+asking the server first**: the retry limit, the stall limit, and the end of the
 send loop all perform a status query before giving up. If the query returns 200
 or 201 the video resource is returned as a success, because reporting a
 completed upload as failed would invite a duplicate.
@@ -307,6 +316,31 @@ When the query shows the upload genuinely is not complete, the tool says the
 server may still hold part of the file and a video may exist, and tells you to
 check `videos list` before uploading again. It never claims nothing was
 published, because it cannot know that.
+
+### Resuming an upload
+
+The upload session is saved to `upload_session.json` (mode 0600) before the first
+byte is sent, and removed when the upload completes. The session URL is a
+credential for that upload, so it stays on disk and is never printed. If the
+upload fails or is interrupted (Ctrl-C exits 130), re-run the same command with
+`--resume`:
+
+```bash
+nexttang-youtube videos upload capture.mp4 --privacy private --resume          # dry run
+nexttang-youtube videos upload capture.mp4 --privacy private --resume --apply
+```
+
+The tool checks that the file has the same size and SHA-256 as the one the
+session was uploading and that the channel matches, asks Google how many bytes
+it holds, and sends only the rest. Title, description and privacy were fixed
+when the session started, so `--title` and `--description-file` have no effect
+on a resume. Google keeps a session for about a week; an expired one (404) is
+discarded with a reminder to check `videos list` before uploading again.
+
+While a session is saved, a new upload is refused until you choose: `--resume`
+to continue it, or `--restart` to abandon it and start over. Check
+`videos list` before `--restart`, because an interrupted attempt may already
+have produced a video.
 
 ### Replying to a reply
 
@@ -327,7 +361,9 @@ compares the returned ID.
   difference there is a warning and not a refusal. Only the immutable ID decides.
 - `auth login` verifies the channel before writing the token. A login that
   resolves to a different channel revokes the grant it just obtained and stores
-  nothing, so a mistaken account choice leaves no token behind.
+  nothing, so a mistaken account choice leaves no token behind. If Google does
+  not confirm the revocation, the tool says so and names the page where the
+  grant can be removed by hand.
 - Capability checks fail closed. A token that records no capabilities grants
   none, so an older or hand-edited token file cannot bypass the interlock.
 
@@ -336,13 +372,14 @@ compares the returned ID.
 | Code | Meaning |
 | --- | --- |
 | 0 | Success |
-| 1 | Unclassified error |
+| 1 | Unclassified error, or a damaged or unreadable file in the credential store |
 | 2 | Usage error |
 | 3 | No OAuth client credential installed |
 | 4 | Not authorised, authorisation expired, or capability not granted |
 | 5 | Authorised channel is not the pinned channel |
 | 6 | Quota or rate limit |
-| 7 | Other API error |
+| 7 | Other API error, including a 403 that a wider scope would not fix |
+| 130 | Interrupted. During `--apply` a write may already have reached YouTube |
 
 ## API limitations
 

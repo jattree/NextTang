@@ -47,7 +47,8 @@ module nexttang_spec256_game_loader (
     output reg  [7:0]  launch_key_3,
     output reg  [15:0] launch_start_delay_ms,
     output reg  [15:0] launch_hold_ms,
-    output reg  [15:0] launch_gap_ms
+    output reg  [15:0] launch_gap_ms,
+    output reg  [31:0] upper_main_crc
 );
     localparam [1:0] STATE_HEADER  = 2'd0;
     localparam [1:0] STATE_PAYLOAD = 2'd1;
@@ -78,6 +79,7 @@ module nexttang_spec256_game_loader (
     reg [3:0]  background_count;
     reg [20:0] expected_payload_bytes;
     reg [31:0] running_crc;
+    reg [31:0] upper_main_running_crc;
 
     reg [2:0]  graphics_ram_lane;
     reg [15:0] graphics_ram_next_address;
@@ -125,6 +127,8 @@ module nexttang_spec256_game_loader (
             expected_crc <= 0;
             payload_index <= 0;
             running_crc <= 32'hffffffff;
+            upper_main_running_crc <= 32'hffffffff;
+            upper_main_crc <= 0;
             graphics_ram_lane <= 0;
             graphics_ram_next_address <= 16'h4000;
             graphics_rom_lane <= 0;
@@ -219,6 +223,15 @@ module nexttang_spec256_game_loader (
             received_bytes <= payload_index + 1'b1;
             running_crc <= crc32_byte(running_crc, byte_data);
 
+            if (payload_index >= BOOT_BYTES + 16384 &&
+                payload_index < BOOT_BYTES + MAIN_BYTES) begin
+                upper_main_running_crc <=
+                    crc32_byte(upper_main_running_crc, byte_data);
+                if (payload_index == BOOT_BYTES + MAIN_BYTES - 1)
+                    upper_main_crc <=
+                        ~crc32_byte(upper_main_running_crc, byte_data);
+            end
+
             if (payload_index < BOOT_BYTES) begin
                 boot_write_enable <= 1'b1;
                 boot_write_address <= payload_index[13:0];
@@ -312,6 +325,8 @@ module nexttang_spec256_game_loader (
             payload_index <= 0;
             received_bytes <= 0;
             running_crc <= 32'hffffffff;
+            upper_main_running_crc <= 32'hffffffff;
+            upper_main_crc <= 0;
             graphics_ram_lane <= 0;
             graphics_ram_next_address <= 16'h4000;
             graphics_rom_lane <= 0;
