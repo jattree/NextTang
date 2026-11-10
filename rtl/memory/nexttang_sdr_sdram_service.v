@@ -5,10 +5,17 @@
 // in-package 2M x 32 die). Serves the machine's memory ports A and C
 // (rtl/platform/nexttang_next_machine.v, "memory contract") and refreshes.
 //
-// Status: first version. Port B (Layer 2) is not served here yet; a board
-// using this sets LAYER2_UNITS to zero, so the core shows Layer 2 as
-// transparent. Layer 2 needs its own design (column-ordered modes read with
-// a 256-byte stride; the deadline is four machine cycles), which comes next.
+// Port B (Layer 2). The core takes each Layer 2 byte four machine cycles
+// after asking, too soon for an SDRAM read that may wait behind another
+// access. So port B works from the core's announcements (b_pf_*: the same
+// read eight pixels ahead): each goes into a 16-entry FIFO in order and is
+// fetched ahead, with priority over ports A and C; a real request (b_*) takes
+// the head entry, and its byte is registered at once. An announcement for the
+// word the previous one fetched shares that read. If the head's address does
+// not match the request (a Layer 2 setting changed within the lookahead), the
+// FIFO is flushed and refills within eight pixels; a request with nothing
+// ready counts as late. A CPU write to a Layer 2 word already fetched shows
+// eight pixels later than on the official board.
 //
 // Clocking. memory_clock runs at three times machine_clock and both come from
 // one PLL (the Nano: 84.375 and 28.125 MHz, the PLL's divide-by-3 output), so
@@ -73,6 +80,15 @@ module nexttang_sdr_sdram_service #(
     output wire        c_busy,
 
     output reg         fault_timeout = 1'b0,
+
+    // port B, Layer 2 (machine_clock): announcements and real reads
+    input  wire        b_pf_toggle,
+    input  wire [20:0] b_pf_address,
+    input  wire        b_toggle,
+    input  wire [20:0] b_address,
+    output reg  [7:0]  b_data = 8'd0,
+    output reg  [15:0] b_late = 16'd0,      // reads with nothing ready (saturating)
+    output reg  [15:0] b_mismatch = 16'd0,  // reads whose announcement differed (saturating)
 
     // SDRAM
     output wire        sdram_clk,
@@ -157,6 +173,57 @@ module nexttang_sdr_sdram_service #(
         end
     end
 
+    // Port B, machine side: the announcement FIFO and the real reads.
+    // Pointers are 5 bits over 16 slots; b_done (memory domain) counts the
+    // slots whose word has arrived, in order.
+    (* syn_ramstyle = "distributed_ram" *) reg [20:0] b_slot_address [0:15];
+    reg [15:0] b_slot_dup = 16'd0;
+    reg [4:0]  b_tail = 5'd0, b_head = 5'd0;
+    reg        b_pf_prev = 1'b0, b_prev = 1'b0;
+    reg [18:0] b_last_word = 19'd0;
+    reg        b_have_last = 1'b0;
+    reg        b_resync = 1'b0;
+    wire [4:0] b_done;                       // memory domain
+    wire [31:0] b_head_word;                 // memory domain slot data, read here
+    wire       b_pf_event = b_pf_toggle != b_pf_prev;
+    wire       b_event = b_toggle != b_prev;
+    wire       b_empty = b_head == b_tail;
+    wire       b_head_ready = (b_done - b_head) != 5'd0 && (b_done - b_head) <= (b_tail - b_head);
+    always @(posedge machine_clock) begin
+        b_pf_prev <= b_pf_toggle;
+        b_prev <= b_toggle;
+        if (b_pf_event) begin
+            b_slot_address[b_tail[3:0]] <= b_pf_address;
+            b_slot_dup[b_tail[3:0]] <= b_have_last && b_pf_address[20:2] == b_last_word;
+            b_last_word <= b_pf_address[20:2];
+            b_have_last <= 1'b1;
+            b_tail <= b_tail + 5'd1;
+        end
+        if (b_event) begin
+            if (b_empty) begin
+                if (b_late != 16'hFFFF) b_late <= b_late + 16'd1;
+            end else if (b_slot_address[b_head[3:0]] != b_address) begin
+                // Out of step. Flush once: everything queued was announced
+                // before the change, and the new announcements run eight
+                // pixels ahead, so until a read reaches the first of them it
+                // is late and leaves the queue alone (b_resync).
+                if (!b_resync) begin
+                    if (b_mismatch != 16'hFFFF) b_mismatch <= b_mismatch + 16'd1;
+                    b_head <= b_tail;                // an entry pushed now stays
+                    b_have_last <= 1'b0;
+                    b_resync <= 1'b1;
+                end else if (b_late != 16'hFFFF) b_late <= b_late + 16'd1;
+            end else begin
+                b_resync <= 1'b0;
+                if (b_head_ready) b_data <= b_head_word[8 * b_address[1:0] +: 8];
+                else if (b_late != 16'hFFFF) b_late <= b_late + 16'd1;
+                b_head <= b_head + 5'd1;
+            end
+        end else if (b_pf_event && (b_tail - b_head) == 5'd16) begin
+            b_head <= b_head + 5'd1;                 // full: drop the oldest
+        end
+    end
+
     // ------------------------------------------------- memory-domain side
     reg        a_seen_m = 1'b0, c_seen_m = 1'b0;
     reg        a_done_m = 1'b0, c_done_m = 1'b0;
@@ -185,7 +252,7 @@ module nexttang_sdr_sdram_service #(
     reg [15:0] refresh_count = 16'd0;
     reg        refresh_tick = 1'b0;
     reg [1:0]  refresh_owed = 2'd0;
-    reg        op_refresh = 1'b0, op_port_c = 1'b0, op_read = 1'b0;
+    reg        op_refresh = 1'b0, op_port_c = 1'b0, op_port_b = 1'b0, op_read = 1'b0;
     reg [20:0] op_address = 21'd0;
     reg [7:0]  op_data = 8'd0;
     reg [15:0] a_age = 16'd0;
@@ -193,6 +260,21 @@ module nexttang_sdr_sdram_service #(
     // carried alongside
     reg [CL + 1:0] rd_pipe = 0;
     reg [CL + 1:0] rd_port_c = 0;
+    reg [CL + 1:0] rd_port_b = 0;
+    // port B, memory side
+    (* syn_ramstyle = "distributed_ram" *) reg [31:0] b_slot_word [0:15];
+    reg [4:0]  b_fetch = 5'd0;       // next slot to fetch
+    reg [4:0]  b_done_m = 5'd0;      // slots whose word is in b_slot_word
+    reg        b_busy = 1'b0;        // a port B read in flight
+    reg [3:0]  b_fetch_slot = 4'd0;
+    reg [31:0] b_last_word_m = 32'd0;
+    assign b_done = b_done_m;
+    assign b_head_word = b_slot_word[b_head[3:0]];
+    // the machine side's pointers, read here (related clocks)
+    wire [4:0] b_window = b_tail - b_head;
+    wire       b_fetch_stale = (b_fetch - b_head) > b_window;   // flushed past
+    wire       b_want = !b_fetch_stale && b_fetch != b_tail && !b_busy;
+    wire       b_want_read = b_want && !b_slot_dup[b_fetch[3:0]];
 
     wire a_new = a_toggle != a_seen_m;
     wire c_new = c_toggle != c_seen_m;
@@ -218,9 +300,21 @@ module nexttang_sdr_sdram_service #(
         // read data: the pins at the falling edge CL + 1.5 cycles after READ
         rd_pipe <= {rd_pipe[CL:0], 1'b0};
         rd_port_c <= {rd_port_c[CL:0], 1'b0};
+        rd_port_b <= {rd_port_b[CL:0], 1'b0};
         if (rd_pipe[CL + 1]) begin
-            if (rd_port_c[CL + 1]) begin c_word_m <= dq_fall; c_done_m <= !c_done_m; end
+            if (rd_port_b[CL + 1]) begin
+                b_slot_word[b_fetch_slot] <= dq_fall; b_last_word_m <= dq_fall;
+                b_done_m <= b_done_m + 5'd1; b_busy <= 1'b0;
+            end else if (rd_port_c[CL + 1]) begin c_word_m <= dq_fall; c_done_m <= !c_done_m; end
             else begin a_word_m <= dq_fall; a_done_m <= !a_done_m; end
+        end
+        // port B bookkeeping: skip slots a flush dropped; an announcement that
+        // repeats the previous word takes the last word fetched
+        if (b_fetch_stale && !b_busy) begin
+            b_fetch <= b_head; b_done_m <= b_head;
+        end else if (b_want && b_slot_dup[b_fetch[3:0]] && b_done_m == b_fetch) begin
+            b_slot_word[b_fetch[3:0]] <= b_last_word_m;
+            b_fetch <= b_fetch + 5'd1; b_done_m <= b_done_m + 5'd1;
         end
 
         if (reset) begin
@@ -229,6 +323,7 @@ module nexttang_sdr_sdram_service #(
             sdram_dqm <= 4'hF; refresh_owed <= 2'd0; refresh_count <= REFRESH_CYCLES[15:0];
             a_seen_m <= a_toggle; a_done_m <= a_toggle; c_seen_m <= c_toggle; c_done_m <= c_toggle;
             fault_timeout <= 1'b0; a_age <= 16'd0; rd_pipe <= 0;
+            b_busy <= 1'b0; b_fetch <= b_head; b_done_m <= b_head;
         end else case (state)
             S_INIT: begin
                 sdram_cke <= 1'b1;
@@ -252,18 +347,26 @@ module nexttang_sdr_sdram_service #(
             S_IDLE: begin
                 ready <= 1'b1;
                 step <= 3'd0;
-                if (refresh_now) begin
+                if (refresh_owed[1] || (refresh_now && !b_want_read)) begin
                     command(C_REF); refresh_take = 1'b1;
                     op_refresh <= 1'b1; state <= S_OP;
+                end else if (b_want_read && b_done_m == b_fetch) begin
+                    // Layer 2 ahead of the CPU (one port B read in flight)
+                    op_refresh <= 1'b0; op_port_c <= 1'b0; op_port_b <= 1'b1; op_read <= 1'b1;
+                    op_address <= b_slot_address[b_fetch[3:0]];
+                    b_fetch_slot <= b_fetch[3:0]; b_fetch <= b_fetch + 5'd1; b_busy <= 1'b1;
+                    command(C_ACT); sdram_ba <= b_slot_address[b_fetch[3:0]][11:10];
+                    sdram_addr <= {2'b00, b_slot_address[b_fetch[3:0]][20:12]};
+                    state <= S_OP;
                 end else if (a_new) begin
                     a_seen_m <= a_toggle; a_age <= 16'd0;
-                    op_refresh <= 1'b0; op_port_c <= 1'b0;
+                    op_refresh <= 1'b0; op_port_c <= 1'b0; op_port_b <= 1'b0;
                     op_read <= !a_op_read_n; op_address <= a_op_address; op_data <= a_op_data;
                     command(C_ACT); sdram_ba <= a_op_address[11:10]; sdram_addr <= {2'b00, a_op_address[20:12]};
                     state <= S_OP;
                 end else if (c_new) begin
                     c_seen_m <= c_toggle;
-                    op_refresh <= 1'b0; op_port_c <= 1'b1;
+                    op_refresh <= 1'b0; op_port_c <= 1'b1; op_port_b <= 1'b0;
                     op_read <= !c_op_read_n; op_address <= c_op_address; op_data <= c_op_data;
                     command(C_ACT); sdram_ba <= c_op_address[11:10]; sdram_addr <= {2'b00, c_op_address[20:12]};
                     state <= S_OP;
@@ -276,7 +379,7 @@ module nexttang_sdr_sdram_service #(
                     sdram_addr <= {3'b100, op_address[9:2]};      // A10: auto-precharge
                     if (op_read) begin
                         command(C_READ); sdram_dqm <= 4'h0;
-                        rd_pipe[0] <= 1'b1; rd_port_c[0] <= op_port_c;
+                        rd_pipe[0] <= 1'b1; rd_port_c[0] <= op_port_c; rd_port_b[0] <= op_port_b;
                     end else begin
                         command(C_WRITE); dq_oe <= 1'b1;
                         dq_out <= {4{op_data}};

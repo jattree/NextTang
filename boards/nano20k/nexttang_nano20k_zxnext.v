@@ -11,8 +11,9 @@
 //             CLKDIVs make 14 and 7 MHz from it. rPLL 2: 27 MHz x 5 for the
 //             HDMI serializer, CLKDIV /5 for the 27 MHz pixel clock.
 //   memory    nexttang_sdr_sdram_service: ports A and C from the in-package
-//             SDRAM. Port B (Layer 2) is not served yet, so LAYER2_UNITS is
-//             zero and the core shows Layer 2 as transparent.
+//             SDRAM, and port B (Layer 2) prefetched from the core's
+//             lookahead announcements (o_RAM_B_PF_*). Late Layer 2 bytes
+//             set the status line's overrun flag.
 //   video     the official hdmi_frame (576p50 / 480p60 from the core's own
 //             frame, through a line buffer) into nexttang_tmds_encoder and
 //             OSER10 / ELVDS_OBUF, as DVI (no audio yet). The pixel clock
@@ -32,8 +33,8 @@
 //   Pi0       the official Pi debug slave on header pins 25 CE0, 26 MISO,
 //             27 MOSI, 28 SCLK (PI_SPI_PINS), for a Pi Zero.
 //
-// Still planned: Layer 2 (port B), audio (I2S amplifier and HDMI audio), the
-// BL616 companion keyboard.
+// Still planned: audio (I2S amplifier and HDMI audio), the BL616 companion
+// keyboard.
 // Capability limits on this part (2026-11-06 synthesis probe): no Spec256,
 // no Layer 2 block-RAM mirror, no DDR3 frame store or 720p scaler.
 
@@ -160,6 +161,10 @@ module nexttang_nano20k_zxnext (
     wire [7:0]  ram_a_write_data;
     wire [20:0] layer2_address;
     wire        layer2_request_toggle;
+    wire [20:0] layer2_prefetch_address;
+    wire        layer2_prefetch_toggle;
+    wire [7:0]  layer2_data;
+    wire [15:0] layer2_late, layer2_mismatch;
     wire [20:0] ram_c_address;
     wire        ram_c_request;
     wire        ram_c_read_n;
@@ -189,9 +194,9 @@ module nexttang_nano20k_zxnext (
     wire        board_command_valid;
     wire [7:0]  board_command_byte;
 
-    // Layer 2 is not served yet (port B of the SDRAM service is still to
-    // come), so the core shows it as transparent.
-    localparam [127:0] LAYER2_UNITS = 128'd0;
+    // Layer 2 from the SDRAM through port B (prefetched from the core's
+    // lookahead), in every unit.
+    localparam [127:0] LAYER2_UNITS = {128{1'b1}};
     // CPU with the debug interface, every Pi slave command, port C.
     localparam [15:0]  CORE_OPTION = 16'hFFF2;
 
@@ -232,7 +237,9 @@ module nexttang_nano20k_zxnext (
 
         .layer2_address(layer2_address),
         .layer2_request_toggle(layer2_request_toggle),
-        .layer2_data(8'h00),              // port B not served (LAYER2_UNITS = 0)
+        .layer2_prefetch_address(layer2_prefetch_address),
+        .layer2_prefetch_toggle(layer2_prefetch_toggle),
+        .layer2_data(layer2_data),
 
         .ram_c_address(ram_c_address),
         .ram_c_request(ram_c_request),
@@ -241,7 +248,7 @@ module nexttang_nano20k_zxnext (
         .ram_c_read_data(ram_c_read_data),
         .ram_c_ack(ram_c_ack),
         .ram_c_busy(ram_c_busy),
-        .memory_faults({memory_timeout, 2'b00}),
+        .memory_faults({memory_timeout, layer2_late != 16'd0, 1'b0}),
 
         .core_rgb(core_rgb),
         .core_hsync_n(core_hsync_n),
@@ -297,6 +304,9 @@ module nexttang_nano20k_zxnext (
         .c_request(ram_c_request), .c_read_n(ram_c_read_n), .c_address(ram_c_address),
         .c_write_data(ram_c_write_data), .c_read_data(ram_c_read_data), .c_ack(ram_c_ack), .c_busy(ram_c_busy),
         .fault_timeout(memory_timeout),
+        .b_pf_toggle(layer2_prefetch_toggle), .b_pf_address(layer2_prefetch_address),
+        .b_toggle(layer2_request_toggle), .b_address(layer2_address),
+        .b_data(layer2_data), .b_late(layer2_late), .b_mismatch(layer2_mismatch),
         .sdram_clk(O_sdram_clk), .sdram_cke(O_sdram_cke), .sdram_cs_n(O_sdram_cs_n),
         .sdram_ras_n(O_sdram_ras_n), .sdram_cas_n(O_sdram_cas_n), .sdram_we_n(O_sdram_wen_n),
         .sdram_addr(O_sdram_addr), .sdram_ba(O_sdram_ba), .sdram_dqm(O_sdram_dqm), .sdram_dq(IO_sdram_dq)

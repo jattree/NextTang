@@ -17,7 +17,7 @@ profile=
 output_dir=
 boot_image=
 place_option=1   # closes 28.125 MHz (worst slack +0.008 ns, 2026-11-11); 0 misses by 0.75 ns
-route_option=0
+route_option=1   # with Layer 2 (port B) served: place 1 / route 1 closes at +0.815 ns; route 0 misses by 0.66 ns
 print_sources=0
 while (($#)); do
     case "$1" in
@@ -98,7 +98,7 @@ if [[ -n "$boot_image" ]]; then
     python3 "$repo_root/scripts/build_diagnostic_boot.py" --binary "$boot_image" \
         --notice-file "$boot_image.notice" --output "$output_dir/bootrom.vhd" || exit 1
     for i in "${!source_files[@]}"; do
-        [[ "${source_files[$i]}" == */rtl/core/nexttang_diagnostic_bootrom.vhd ]] && source_files[$i]="$output_dir/bootrom.vhd"
+        [[ "${source_files[$i]}" == */rtl/core/nexttang_diagnostic_bootrom.vhd ]] && source_files[i]="$output_dir/bootrom.vhd"
     done
 fi
 sha256sum "${source_files[@]}" >"$output_dir/source-sha256.txt"
