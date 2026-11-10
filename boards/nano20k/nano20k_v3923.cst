@@ -96,3 +96,8 @@ IO_LOC "debug_uart_tx" 29;
 IO_PORT "debug_uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
 IO_LOC "debug_uart_rx" 30;
 IO_PORT "debug_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// BL616 USB serial: FPGA pin 70 is the BL616's TX (our debug UART RX) with
+// Sipeed's stock firmware; pin 69 (companion_irq_n above) is its RX.
+IO_LOC "usb_uart_rx" 70;
+IO_PORT "usb_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;

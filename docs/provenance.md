@@ -143,7 +143,9 @@ release moves the same way: `scripts/merge_official_core.py --upstream DIR
 
 - **Taken verbatim from 30205** (GPL-3.0-or-later, notices kept):
   `rtl/device/pi_debug_control/pi_debug_control_param.vhd` (David Saphier),
-  `rtl/device/arbiter_dma.vhd` (Alvin Albrecht) and `rtl/serial/spi_slave.vhd`.
+  `rtl/device/arbiter_dma.vhd` (Alvin Albrecht), `rtl/serial/spi_slave.vhd`,
+  and `rtl/video/hdmi_frame.vhd` (Alvin Albrecht; the Nano 20K's native
+  576p50/480p60 output).
 - **The T80 family** stays Sorgelig's. It now follows the official
   debug-interface CPU (`cpu/t80n-debug/`): David Saphier's debug wedge merged
   onto it without conflicts, under NextTang's own entity names.

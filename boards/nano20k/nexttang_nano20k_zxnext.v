@@ -3,31 +3,36 @@
 //
 // ZX Spectrum Next for the Tang Nano 20K (v3923): the board shell.
 //
-// Status: PLANNED SKELETON. This file fixes the shell's pins and how it
-// meets the shared machine (rtl/platform/nexttang_next_machine.v); it does
-// not yet make a working image and has never been built for or run on a
-// Nano. What is missing, each a block of its own (port plan 2026-11-06,
-// sections 2.3 to 2.5):
+// Status: FIRST BUILD, never run on a Nano. What it has:
 //
-//   clocks    two rPLLs: 27 MHz x 5 for the HDMI serializer and its 27 MHz
-//             pixel clock, and the machine and SDRAM clocks (candidate
-//             settings in the plan, unverified against UG286 limits).
-//   memory    nexttang_sdr_sdram_service, our own SDR controller (NextNano's
-//             is GPL and descends from MiSTer; we write our own): port A with
-//             cpu_wait, port B with a reserved Layer 2 slot (NextNano #13),
-//             port C in the background, refresh outside the Layer 2 window.
-//   video     the official hdmi_frame (576p50/480p60 locked to the core's
-//             frame) into hdl-util TMDS and a GW2A OSER10/ELVDS serializer.
-//   input     the BL616 FPGA-Companion SPI into keyboard rows and joysticks.
-//   audio     PCM to the I2S amplifier and HDMI audio packets.
-//   debug     the Pi0 on the official Pi debug slave's SPI pins; the machine
-//             today drives that slave from its own UART-fed master, so a
-//             PI_SPI_PINS option on the machine is part of this work.
+//   clocks    rPLL 1: 27 MHz -> 84.375 MHz (SDRAM) and, through its
+//             divide-by-3 output, 28.125 MHz for the machine (0.45 percent
+//             fast, as NextNano);
+//             CLKDIVs make 14 and 7 MHz from it. rPLL 2: 27 MHz x 5 for the
+//             HDMI serializer, CLKDIV /5 for the 27 MHz pixel clock.
+//   memory    nexttang_sdr_sdram_service: ports A and C from the in-package
+//             SDRAM. Port B (Layer 2) is not served yet, so LAYER2_UNITS is
+//             zero and the core shows Layer 2 as transparent.
+//   video     the official hdmi_frame (576p50 / 480p60 from the core's own
+//             frame, through a line buffer) into nexttang_tmds_encoder and
+//             OSER10 / ELVDS_OBUF, as DVI (no audio yet). The pixel clock
+//             comes from the crystal, not from the machine clock, so it is
+//             not locked to the core's frame as on the official board; the
+//             line buffer absorbs the difference within a frame and
+//             hdmi_frame re-locks each frame.
+//   input     keys from the host over the debug UART (the machine's K and J
+//             commands). No physical keyboard yet (the BL616 companion is
+//             still planned).
+//   debug     the debug UART on header pins 29 (TX) / 30 (RX) and on the
+//             BL616's USB serial (FPGA pins 69 TX / 70 RX with Sipeed's stock
+//             firmware); the two RX lines are ANDed, TX goes to both. Pin 69
+//             is the companion IRQ under NextNano's firmware; a UART there is
+//             harmless to it.
 //
-// Until those exist every output below is held in a safe idle state, and
-// the build driver refuses to build this board. Capability limits on this
-// part (inferred from the 2026-11-06 synthesis probe): no Spec256, no Layer 2
-// block-RAM mirror, no DDR3 frame store or 720p scaler.
+// Still planned: Layer 2 (port B), audio (I2S amplifier and HDMI audio), the
+// BL616 companion keyboard, the Pi0 on the Pi debug slave's own SPI pins.
+// Capability limits on this part (2026-11-06 synthesis probe): no Spec256,
+// no Layer 2 block-RAM mirror, no DDR3 frame store or 720p scaler.
 
 `default_nettype none
 
@@ -77,17 +82,72 @@ module nexttang_nano20k_zxnext (
     input  wire        pi_mosi,
     input  wire        pi_sclk,
     input  wire        debug_uart_rx,
-    output wire        debug_uart_tx
+    output wire        debug_uart_tx,
+    input  wire        usb_uart_rx       // BL616 USB serial, FPGA pin 70
 );
     // ----------------------------------------------------------------- clocks
-    // PLANNED: rPLL-derived clocks. Tied low, the machine never leaves reset.
-    wire clock_28 = 1'b0;
-    wire clock_28_n = 1'b1;
-    wire clock_14 = 1'b0;
-    wire clock_7 = 1'b0;
-    wire psg_enable = 1'b0;
-    wire machine_locked = 1'b0;
-    wire machine_reset = 1'b1;
+    wire memory_clock;      // 84.375 MHz
+    wire clock_28;          // 28.125 MHz
+    wire machine_pll_lock;
+    rPLL #(
+        .FCLKIN("27"), .DEVICE("GW2AR-18C"),
+        .IDIV_SEL(7),        // 27 / 8 = 3.375 MHz
+        .FBDIV_SEL(24),      // x 25 = 84.375 MHz
+        .ODIV_SEL(8),        // VCO 675 MHz
+        .DYN_SDIV_SEL(2),
+        .CLKOUTD_SRC("CLKOUT"), .CLKOUTD3_SRC("CLKOUT"),   // CLKOUTD3 = 84.375 / 3 = 28.125 MHz
+        .DYN_IDIV_SEL("false"), .DYN_FBDIV_SEL("false"), .DYN_ODIV_SEL("false"),
+        .PSDA_SEL("0000"), .DYN_DA_EN("true"), .DUTYDA_SEL("1000"),
+        .CLKOUT_FT_DIR(1'b1), .CLKOUTP_FT_DIR(1'b1),
+        .CLKOUT_DLY_STEP(0), .CLKOUTP_DLY_STEP(0), .CLKFB_SEL("internal"),
+        .CLKOUT_BYPASS("false"), .CLKOUTP_BYPASS("false"), .CLKOUTD_BYPASS("false")
+    ) machine_pll (
+        .CLKIN(clock_27), .CLKFB(1'b0), .RESET(1'b0), .RESET_P(1'b0),
+        .FBDSEL(6'd0), .IDSEL(6'd0), .ODSEL(6'd0), .PSDA(4'd0), .DUTYDA(4'd0), .FDLY(4'd0),
+        .CLKOUT(memory_clock), .LOCK(machine_pll_lock),
+        .CLKOUTP(), .CLKOUTD(), .CLKOUTD3(clock_28)
+    );
+    wire clock_14, clock_7;
+    CLKDIV #(.DIV_MODE("2"), .GSREN("false")) divide_14 (
+        .HCLKIN(clock_28), .RESETN(machine_pll_lock), .CALIB(1'b0), .CLKOUT(clock_14));
+    CLKDIV #(.DIV_MODE("4"), .GSREN("false")) divide_7 (
+        .HCLKIN(clock_28), .RESETN(machine_pll_lock), .CALIB(1'b0), .CLKOUT(clock_7));
+    wire clock_28_n = ~clock_28;
+
+    wire serial_clock;      // 135 MHz
+    wire pixel_clock;       // 27 MHz
+    wire video_pll_lock;
+    rPLL #(
+        .FCLKIN("27"), .DEVICE("GW2AR-18C"),
+        .IDIV_SEL(0), .FBDIV_SEL(4), .ODIV_SEL(4),   // 135 MHz, VCO 540 MHz
+        .DYN_SDIV_SEL(2), .CLKOUTD_SRC("CLKOUT"), .CLKOUTD3_SRC("CLKOUT"),
+        .DYN_IDIV_SEL("false"), .DYN_FBDIV_SEL("false"), .DYN_ODIV_SEL("false"),
+        .PSDA_SEL("0000"), .DYN_DA_EN("true"), .DUTYDA_SEL("1000"),
+        .CLKOUT_FT_DIR(1'b1), .CLKOUTP_FT_DIR(1'b1),
+        .CLKOUT_DLY_STEP(0), .CLKOUTP_DLY_STEP(0), .CLKFB_SEL("internal"),
+        .CLKOUT_BYPASS("false"), .CLKOUTP_BYPASS("false"), .CLKOUTD_BYPASS("false")
+    ) video_pll (
+        .CLKIN(clock_27), .CLKFB(1'b0), .RESET(1'b0), .RESET_P(1'b0),
+        .FBDSEL(6'd0), .IDSEL(6'd0), .ODSEL(6'd0), .PSDA(4'd0), .DUTYDA(4'd0), .FDLY(4'd0),
+        .CLKOUT(serial_clock), .LOCK(video_pll_lock),
+        .CLKOUTP(), .CLKOUTD(), .CLKOUTD3()
+    );
+    CLKDIV #(.DIV_MODE("5"), .GSREN("false")) divide_pixel (
+        .HCLKIN(serial_clock), .RESETN(video_pll_lock), .CALIB(1'b0), .CLKOUT(pixel_clock));
+
+    // memory first, then the machine
+    wire memory_reset;
+    nexttang_reset_release memory_reset_release (
+        .clock(memory_clock), .asynchronous_reset(!machine_pll_lock), .reset(memory_reset));
+    wire memory_ready;
+    wire memory_timeout;
+    wire machine_locked = machine_pll_lock;
+    wire machine_reset;
+    nexttang_reset_release machine_reset_release (
+        .clock(clock_28), .asynchronous_reset(!machine_pll_lock || !memory_ready), .reset(machine_reset));
+    wire psg_enable;
+    nexttang_machine_clock_enables machine_enables (
+        .clock_28(clock_28), .reset(machine_reset), .psg_enable(psg_enable));
 
     // ---------------------------------------------------------------- machine
     wire [20:0] ram_a_address;
@@ -112,6 +172,12 @@ module nexttang_nano20k_zxnext (
     wire [12:0] core_audio_left;
     wire [12:0] core_audio_right;
     wire [7:0]  keyboard_rows;
+    wire [4:0]  keyboard_columns;
+    wire [7:0]  ram_a_read_data;
+    wire        cpu_wait;
+    wire [7:0]  ram_c_read_data;
+    wire        ram_c_ack;
+    wire        ram_c_busy;
     wire [39:0] host_keys;
     wire [10:1] host_functions;
     wire        spi_clock;
@@ -120,11 +186,22 @@ module nexttang_nano20k_zxnext (
     wire        board_command_valid;
     wire [7:0]  board_command_byte;
 
-    // Layer 2 comes straight from SDRAM through a reserved slot, so every
-    // unit can be served once the SDR service exists; until then none is.
+    // Layer 2 is not served yet (port B of the SDRAM service is still to
+    // come), so the core shows it as transparent.
     localparam [127:0] LAYER2_UNITS = 128'd0;
     // CPU with the debug interface, every Pi slave command, port C.
     localparam [15:0]  CORE_OPTION = 16'hFFF2;
+
+    // keys and F1-F10 held from the host over the debug UART
+    reg [39:0] keys_meta = 40'd0, keys_sync = 40'd0;
+    reg [10:1] functions_meta = 10'd0, functions_sync = 10'd0;
+    always @(posedge clock_28) begin
+        keys_meta <= host_keys; keys_sync <= keys_meta;
+        functions_meta <= host_functions; functions_sync <= functions_meta;
+    end
+    nexttang_keyboard_matrix keyboard_scan (
+        .row_select(keyboard_rows), .keys(keys_sync), .columns(keyboard_columns));
+    wire uart_tx;
 
     nexttang_next_machine #(
         .LAYER2_UNITS(LAYER2_UNITS),
@@ -145,21 +222,21 @@ module nexttang_nano20k_zxnext (
         .ram_a_cycle_request(ram_a_cycle_request),
         .ram_a_read_n(ram_a_read_n),
         .ram_a_write_data(ram_a_write_data),
-        .ram_a_read_data(8'hff),          // PLANNED: SDR service port A
-        .cpu_wait(1'b0),
+        .ram_a_read_data(ram_a_read_data),
+        .cpu_wait(cpu_wait),
 
         .layer2_address(layer2_address),
         .layer2_request_toggle(layer2_request_toggle),
-        .layer2_data(8'h00),              // PLANNED: SDR service port B
+        .layer2_data(8'h00),              // port B not served (LAYER2_UNITS = 0)
 
         .ram_c_address(ram_c_address),
         .ram_c_request(ram_c_request),
         .ram_c_read_n(ram_c_read_n),
         .ram_c_write_data(ram_c_write_data),
-        .ram_c_read_data(8'h00),          // PLANNED: SDR service port C
-        .ram_c_ack(1'b0),
-        .ram_c_busy(1'b0),
-        .memory_faults(3'b000),
+        .ram_c_read_data(ram_c_read_data),
+        .ram_c_ack(ram_c_ack),
+        .ram_c_busy(ram_c_busy),
+        .memory_faults({memory_timeout, 2'b00}),
 
         .core_rgb(core_rgb),
         .core_hsync_n(core_hsync_n),
@@ -169,7 +246,7 @@ module nexttang_nano20k_zxnext (
         .core_hdmi_pixel(core_hdmi_pixel),
         .core_hdmi_lock(core_hdmi_lock),
         .core_hdmi_reset(core_hdmi_reset),
-        .video_clock_locked(1'b0),
+        .video_clock_locked(video_pll_lock),
         .capture_frame_start(1'b0),
         .capture_pixel_valid(1'b0),
         .capture_x(9'd0),
@@ -182,12 +259,12 @@ module nexttang_nano20k_zxnext (
         .core_audio_right(core_audio_right),
 
         .keyboard_rows(keyboard_rows),
-        .keyboard_columns(5'b11111),      // PLANNED: BL616 companion
-        .function_keys(10'b0),
+        .keyboard_columns(keyboard_columns),
+        .function_keys(functions_sync),
         .left_joystick(12'b0),
         .right_joystick(12'b0),
         .keyboard_connected(1'b0),
-        .input_active(1'b0),
+        .input_active(|keys_sync),
         .host_keys(host_keys),
         .host_functions(host_functions),
 
@@ -196,14 +273,81 @@ module nexttang_nano20k_zxnext (
         .spi_sd0_select_n(spi_sd0_select_n),
         .spi_sd_miso(sd_miso),
 
-        .debug_uart_rx(debug_uart_rx),
-        .debug_uart_tx(debug_uart_tx),
+        .debug_uart_rx(debug_uart_rx && usb_uart_rx),
+        .debug_uart_tx(uart_tx),
         .board_command_valid(board_command_valid),
         .board_command_byte(board_command_byte)
     );
 
-    // ------------------------------------------------------- idle outputs
-    // SD on the core's SPI. PLANNED: register SCK, MOSI and MISO at the pins,
+    // ------------------------------------------------------------ memory
+    nexttang_sdr_sdram_service sdram (
+        .machine_clock(clock_28), .memory_clock(memory_clock), .reset(memory_reset), .ready(memory_ready),
+        .a_request(ram_a_request), .a_cycle_request(ram_a_cycle_request), .a_read_n(ram_a_read_n),
+        .a_address(ram_a_address), .a_write_data(ram_a_write_data),
+        .a_read_data(ram_a_read_data), .a_wait(cpu_wait),
+        .c_request(ram_c_request), .c_read_n(ram_c_read_n), .c_address(ram_c_address),
+        .c_write_data(ram_c_write_data), .c_read_data(ram_c_read_data), .c_ack(ram_c_ack), .c_busy(ram_c_busy),
+        .fault_timeout(memory_timeout),
+        .sdram_clk(O_sdram_clk), .sdram_cke(O_sdram_cke), .sdram_cs_n(O_sdram_cs_n),
+        .sdram_ras_n(O_sdram_ras_n), .sdram_cas_n(O_sdram_cas_n), .sdram_we_n(O_sdram_wen_n),
+        .sdram_addr(O_sdram_addr), .sdram_ba(O_sdram_ba), .sdram_dqm(O_sdram_dqm), .sdram_dq(IO_sdram_dq)
+    );
+
+    // ------------------------------------------------------------- video
+    // The official hdmi_frame: the core's 14 MHz pixels into a line buffer,
+    // out at 27 MHz with CEA 576p50 or 480p60 timing (the official top's
+    // numbers).
+    wire        hdmi_blank, hdmi_hsync_n, hdmi_vsync_n;
+    wire [8:0]  hdmi_rgb;
+    wire        video_60 = core_video_60;
+    hdmi_frame frame (
+        .i_reset_async_n(video_pll_lock && !machine_reset),
+        .i_scanlines(2'b00),
+        .i_CLK_RGB(clock_14), .i_CLK_RGB_EN(core_hdmi_pixel),
+        .i_rgb_sync(core_hdmi_lock), .i_rgb(core_rgb),
+        .i_CLK_HDMI(pixel_clock),
+        .o_blank(hdmi_blank), .o_vsync_n(hdmi_vsync_n), .o_hsync_n(hdmi_hsync_n), .o_rgb(hdmi_rgb),
+        .i_HACTIVE(video_60 ? 10'd138 : 10'd144),
+        .i_HSYNC_BEG(video_60 ? 10'd16 : 10'd12),
+        .i_HSYNC_END(video_60 ? 10'd77 : 10'd75),
+        .i_HLAST(video_60 ? 10'd857 : 10'd863),
+        .i_VACTIVE(video_60 ? 10'd45 : 10'd49),
+        .i_VSYNC_BEG(video_60 ? 10'd9 : 10'd5),
+        .i_VSYNC_END(video_60 ? 10'd14 : 10'd9),
+        .i_VLAST(video_60 ? 10'd524 : 10'd624)
+    );
+    reg [2:0] pixel_reset_sync = 3'b111;
+    always @(posedge pixel_clock or negedge video_pll_lock)
+        if (!video_pll_lock) pixel_reset_sync <= 3'b111;
+        else pixel_reset_sync <= {pixel_reset_sync[1:0], 1'b0};
+    wire pixel_reset = pixel_reset_sync[2];
+    wire [9:0] symbol_blue, symbol_green, symbol_red;
+    nexttang_tmds_encoder encode_blue (.pixel_clk(pixel_clock), .reset(pixel_reset),
+        .video_data({hdmi_rgb[2:0], hdmi_rgb[2:0], hdmi_rgb[2:1]}),
+        .control_zero(hdmi_hsync_n), .control_one(hdmi_vsync_n), .data_enable(!hdmi_blank), .symbol(symbol_blue));
+    nexttang_tmds_encoder encode_green (.pixel_clk(pixel_clock), .reset(pixel_reset),
+        .video_data({hdmi_rgb[5:3], hdmi_rgb[5:3], hdmi_rgb[5:4]}),
+        .control_zero(1'b0), .control_one(1'b0), .data_enable(!hdmi_blank), .symbol(symbol_green));
+    nexttang_tmds_encoder encode_red (.pixel_clk(pixel_clock), .reset(pixel_reset),
+        .video_data({hdmi_rgb[8:6], hdmi_rgb[8:6], hdmi_rgb[8:7]}),
+        .control_zero(1'b0), .control_one(1'b0), .data_enable(!hdmi_blank), .symbol(symbol_red));
+    wire [2:0] serial_data;
+    OSER10 serialize_blue (.D0(symbol_blue[0]), .D1(symbol_blue[1]), .D2(symbol_blue[2]), .D3(symbol_blue[3]),
+        .D4(symbol_blue[4]), .D5(symbol_blue[5]), .D6(symbol_blue[6]), .D7(symbol_blue[7]), .D8(symbol_blue[8]),
+        .D9(symbol_blue[9]), .PCLK(pixel_clock), .FCLK(serial_clock), .RESET(pixel_reset), .Q(serial_data[0]));
+    OSER10 serialize_green (.D0(symbol_green[0]), .D1(symbol_green[1]), .D2(symbol_green[2]), .D3(symbol_green[3]),
+        .D4(symbol_green[4]), .D5(symbol_green[5]), .D6(symbol_green[6]), .D7(symbol_green[7]), .D8(symbol_green[8]),
+        .D9(symbol_green[9]), .PCLK(pixel_clock), .FCLK(serial_clock), .RESET(pixel_reset), .Q(serial_data[1]));
+    OSER10 serialize_red (.D0(symbol_red[0]), .D1(symbol_red[1]), .D2(symbol_red[2]), .D3(symbol_red[3]),
+        .D4(symbol_red[4]), .D5(symbol_red[5]), .D6(symbol_red[6]), .D7(symbol_red[7]), .D8(symbol_red[8]),
+        .D9(symbol_red[9]), .PCLK(pixel_clock), .FCLK(serial_clock), .RESET(pixel_reset), .Q(serial_data[2]));
+    ELVDS_OBUF tmds_clock_out (.I(pixel_clock), .O(tmds_clk_p), .OB(tmds_clk_n));
+    ELVDS_OBUF tmds_out_0 (.I(serial_data[0]), .O(tmds_d_p[0]), .OB(tmds_d_n[0]));
+    ELVDS_OBUF tmds_out_1 (.I(serial_data[1]), .O(tmds_d_p[1]), .OB(tmds_d_n[1]));
+    ELVDS_OBUF tmds_out_2 (.I(serial_data[2]), .O(tmds_d_p[2]), .OB(tmds_d_n[2]));
+
+    // ------------------------------------------------------- other pins
+    // SD on the core's SPI. To do: register SCK, MOSI and MISO at the pins,
     // as spi_master expects (NextNano drives them combinationally, the
     // strongest lead for its card corruption, issue #3).
     assign sd_clk = spi_clock;
@@ -212,33 +356,21 @@ module nexttang_nano20k_zxnext (
     assign sd_dat1 = 1'b1;
     assign sd_dat2 = 1'b1;
 
-    // SDRAM deselected.
-    assign O_sdram_clk = 1'b0;
-    assign O_sdram_cke = 1'b0;
-    assign O_sdram_cs_n = 1'b1;
-    assign O_sdram_cas_n = 1'b1;
-    assign O_sdram_ras_n = 1'b1;
-    assign O_sdram_wen_n = 1'b1;
-    assign O_sdram_addr = 11'd0;
-    assign O_sdram_ba = 2'd0;
-    assign O_sdram_dqm = 4'hf;
-    assign IO_sdram_dq = 32'bz;
-
-    // HDMI idle. PLANNED: GW2A serializer through ELVDS_OBUF.
-    assign tmds_clk_p = 1'b0;
-    assign tmds_clk_n = 1'b1;
-    assign tmds_d_p = 3'b000;
-    assign tmds_d_n = 3'b111;
-
+    assign debug_uart_tx = uart_tx;
+    assign companion_irq_n = uart_tx;     // BL616 USB serial RX (stock firmware)
     assign companion_miso = 1'b1;
-    assign companion_irq_n = 1'b1;
     assign amp_enable = 1'b0;
     assign amp_data = 1'b0;
     assign amp_lrck = 1'b0;
     assign amp_bclk = 1'b0;
     assign pi_miso = 1'b1;
-    // LED polarity is unverified on this board; held high for now.
-    assign led = 6'b111111;
+
+    // LEDs, lit when driven low (to be confirmed on the board with the
+    // bring-up image): 0 machine PLL, 1 SDRAM ready, 2 machine running,
+    // 3 video PLL, 4 heartbeat, 5 SDRAM timeout.
+    reg [24:0] heartbeat = 25'd0;
+    always @(posedge clock_28) heartbeat <= heartbeat + 25'd1;
+    assign led = ~{memory_timeout, heartbeat[24], video_pll_lock, !machine_reset, memory_ready, machine_pll_lock};
 endmodule
 
 `default_nettype wire
