@@ -44,10 +44,9 @@ board, within the stated limits.
 | Next core, official 3.02.03 | Console 138K | Hardware | NextZXOS 2.09 boots from the card (10 of 10 repeat boots); 28, 14, 7 and 3.5 MHz; Next games at full speed; 48K and 128K games from tape files; 50 or 60 Hz HDMI; USB keyboard and joystick |
 | Next core, official 3.02.05 | Console 138K | Hardware | NextZXOS welcome screen with the debugger builds below. With the debugger off the merged core matches 3.02.03 cycle for cycle over 2,000,000 cycles in simulation. Broad game testing was done on 3.02.03 |
 | Spec256 inside the Next core | Console 138K | Hardware (on 3.02.03) | One `.256` per game, started from the NextZXOS browser by the `.SPEC256` dot command. In a recorded survey all 38 conversions tried loaded, showed colour and reached gameplay; that is a gameplay survey, not full-game compatibility |
-| ZX-Poly video modes 4, 6 and 7 | Console 138K | Hardware for modes 4 and 6; simulation for 7 | Modes 4 and 6 drew titles, menus and first rooms or levels in colour. A mode 7 game showed a correct title but did not start, so mode 7 is verified in simulation only |
 | Pi debug interface and host debugger | Console 138K | Hardware | Over the debug UART: pause, registers, memory, single steps and breakpoints on jump, call, return and relative-jump targets, optionally page-qualified; 17 of 19 checks in dezogif_ng's DZRP conformance subset (the two sprite commands are not reachable). DeZog itself in VS Code not yet tried |
 | Combined 3.02.05 + Spec256 + debugger | Console 138K | Build | This tree. Hardware check pending |
-| Pi 5 over PCIe | Console 138K + Pi 5 | Hardware (link and test design) | 5 GT/s x1 link; the Pi read and wrote FPGA memory through a small test design, 1,500,000 rounds of 16 words with no mismatches. The Next core over PCIe is not built yet; the Tang must be loaded after the Pi has booted |
+| Pi 5 over PCIe | Console 138K + Pi 5 | Hardware (test design) | 5 GT/s x1 link up at boot with no steps on the Pi, including from flash (a cold start of both boards linked once with the same fix); the Pi reads and writes FPGA memory, and the Tang writes into the Pi's RAM at 475 MB/s with every byte checked. The Next core over PCIe is not built yet. See [boards/console138k/pcie-pi5](boards/console138k/pcie-pi5/) |
 | Next core | Tang Nano 20K | Planned | Parallel development target with Pi0 support through the official Pi debug interface. No NextTang build or hardware result |
 | Next core | Console 60K | Planned | Build-only until a board is available. No build yet |
 | Official core 3.03.00 (System/Next 26.11) | — | Planned | Released as a binary only; its VHDL is not yet public. NextTang will follow when it is |
@@ -95,9 +94,8 @@ DDR3 too, chosen once a frame by each game's own rules. An optional per-game
 setting (OPT1 byte 8, bit 0) makes FLASH cells blink, as some menus need; it
 is hardware-verified, and files without it behave as before.
 
-ZX-Poly's video modes 4, 6 and 7 (from Igor Maznitsa's
-[ZX-Poly](https://github.com/raydac/zxpoly)) are supported for `.256` files
-that ask for them, with the evidence levels in the table above.
+`.256` files that use [ZX-Poly](https://github.com/raydac/zxpoly)'s video
+modes 4, 6 and 7 are supported too.
 
 [`tools/spec256/patch256.py`](tools/spec256/) applies English text patches
 to the user's own copy of a Spanish conversion; the patches change only
@@ -122,11 +120,13 @@ in simulation; a register the debugger writes changes only the main CPU. See
 
 The Console 138K with a Raspberry Pi 5 is NextTang's flagship pairing, with
 the Pi as debug host over PCIe. On the bench the
-Pi 5 links to the Console at 5 GT/s, x1, and reads and writes FPGA memory
-through a small test design with no errors over 1.5 million rounds. The link
-comes up when the Tang is configured after the Pi's boot clock has started.
-Not yet shown: the Next core or the debugger over PCIe, and the link across
-Pi reboots or a cold start.
+Pi 5 links to the Console at 5 GT/s, x1, at boot, with no steps on the Pi:
+the Tang replays its SerDes boot registers once the Pi's reference clock is a
+steady 100 MHz, which clears the stuck state the Pi's 54 MHz boot clock left.
+The Pi reads and writes FPGA memory, and the Tang writes into the Pi's RAM at
+475 MB/s. Details and results are in
+[boards/console138k/pcie-pi5](boards/console138k/pcie-pi5/). Not yet shown:
+the Next core or the debugger over PCIe.
 
 ### Standalone platform profiles
 
