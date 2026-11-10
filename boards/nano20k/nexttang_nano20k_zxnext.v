@@ -356,11 +356,18 @@ module nexttang_nano20k_zxnext (
     ELVDS_OBUF tmds_out_2 (.I(serial_data[2]), .O(tmds_d_p[2]), .OB(tmds_d_n[2]));
 
     // ------------------------------------------------------- other pins
-    // SD on the core's SPI. To do: register SCK, MOSI and MISO at the pins,
-    // as spi_master expects (NextNano drives them combinationally, the
-    // strongest lead for its card corruption, issue #3).
-    assign sd_clk = spi_clock;
-    assign sd_mosi = spi_mosi;
+    // SD on the core's SPI, as the official board drives it (zxnext_top_issue4):
+    // SCK and MOSI registered on the rising edge of the CPU clock, chip select
+    // and MISO direct (MISO unregistered leaves the card more time to answer).
+    // NextNano drives SCK and MOSI combinationally, the strongest lead for its
+    // card corruption (issue #3).
+    reg sd_clk_q = 1'b0, sd_mosi_q = 1'b0;
+    always @(posedge clock_28) begin
+        sd_clk_q <= spi_clock;
+        sd_mosi_q <= spi_mosi;
+    end
+    assign sd_clk = sd_clk_q;
+    assign sd_mosi = sd_mosi_q;
     assign sd_cs = spi_sd0_select_n;
     assign sd_dat1 = 1'b1;
     assign sd_dat2 = 1'b1;
