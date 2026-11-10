@@ -119,7 +119,11 @@
 module nexttang_next_machine #(
     parameter [127:0] LAYER2_UNITS = 128'd0,
     parameter [15:0]  CORE_OPTION = 16'hDEF2,
-    parameter integer SD_MONITOR = 0
+    parameter integer SD_MONITOR = 0,
+    // 1: the M1 fetch trace (F/R), the NextREG log and the divMMC capture (D)
+    // on the debug UART; seven block RAMs. 0 leaves them out (the Nano 20K,
+    // which needs the block RAMs); the status line and the Pi debug link stay.
+    parameter integer DEBUG_TAPS = 1
 ) (
     // clocks and resets
     input  wire        clock_28,
@@ -834,55 +838,66 @@ module nexttang_next_machine #(
         end
     end
 
-    nexttang_m1_trace fetch_trace (
-        .clock(clock_28),
-        .reset(!machine_locked),
-        .m1_n(core_m1_n),
-        .address(core_bus_address),
-        .freeze_request(board_command_valid && command_byte == "F"),
-        .rearm_request(board_command_valid && command_byte == "R"),
-        .set_trigger(trigger_command_done),
-        .new_trigger(trigger_command_address),
-        .frozen(trace_frozen),
-        .transmit(trace_transmit)
-    );
-
-    // Every couple of seconds, between status lines, the NextREGs and the
-    // video and paging ports as software last wrote them.
     wire log_sending;
     wire log_transmit;
-
-    nexttang_nextreg_log nextreg_log (
-        .clock(clock_28),
-        .reset(!machine_locked),
-        .nr_write(core_nr_write),
-        .nr_register(core_nr_register),
-        .nr_data(core_nr_data),
-        .iorq_n(core_iorq_n),
-        .wr_n(core_wr_n),
-        .m1_n(core_m1_n),
-        .address(core_bus_address),
-        .data(core_bus_data),
-        .other_transmit(status_transmit),
-        .sending(log_sending),
-        .transmit(log_transmit)
-    );
-
-    // The bytes last read from divMMC RAM bank 1 (SRAM page 0x11), which holds
-    // code NextZXOS calls during boot; D on the command wire dumps them.
     wire capture_sending;
     wire capture_transmit;
+    generate
+    if (DEBUG_TAPS != 0) begin : debug_taps
+        nexttang_m1_trace fetch_trace (
+            .clock(clock_28),
+            .reset(!machine_locked),
+            .m1_n(core_m1_n),
+            .address(core_bus_address),
+            .freeze_request(board_command_valid && command_byte == "F"),
+            .rearm_request(board_command_valid && command_byte == "R"),
+            .set_trigger(trigger_command_done),
+            .new_trigger(trigger_command_address),
+            .frozen(trace_frozen),
+            .transmit(trace_transmit)
+        );
 
-    nexttang_memory_capture divmmc_capture (
-        .clock(clock_28),
-        .reset(!machine_locked),
-        .read_done(ram_a_cycle_request && !ram_a_read_n && !cpu_wait),
-        .read_address(ram_a_address),
-        .read_data(ram_a_read_data),
-        .dump_request(board_command_valid && command_byte == "D"),
-        .sending(capture_sending),
-        .transmit(capture_transmit)
-    );
+        // Every couple of seconds, between status lines, the NextREGs and the
+        // video and paging ports as software last wrote them.
+
+        nexttang_nextreg_log nextreg_log (
+            .clock(clock_28),
+            .reset(!machine_locked),
+            .nr_write(core_nr_write),
+            .nr_register(core_nr_register),
+            .nr_data(core_nr_data),
+            .iorq_n(core_iorq_n),
+            .wr_n(core_wr_n),
+            .m1_n(core_m1_n),
+            .address(core_bus_address),
+            .data(core_bus_data),
+            .other_transmit(status_transmit),
+            .sending(log_sending),
+            .transmit(log_transmit)
+        );
+
+        // The bytes last read from divMMC RAM bank 1 (SRAM page 0x11), which holds
+        // code NextZXOS calls during boot; D on the command wire dumps them.
+
+        nexttang_memory_capture divmmc_capture (
+            .clock(clock_28),
+            .reset(!machine_locked),
+            .read_done(ram_a_cycle_request && !ram_a_read_n && !cpu_wait),
+            .read_address(ram_a_address),
+            .read_data(ram_a_read_data),
+            .dump_request(board_command_valid && command_byte == "D"),
+            .sending(capture_sending),
+            .transmit(capture_transmit)
+        );
+    end else begin : no_debug_taps
+        assign trace_frozen = 1'b0;
+        assign trace_transmit = 1'b1;
+        assign log_sending = 1'b0;
+        assign log_transmit = 1'b1;
+        assign capture_sending = 1'b0;
+        assign capture_transmit = 1'b1;
+    end
+    endgenerate
 
     assign debug_uart_tx = pi_session ? pi_link_tx
                          : capture_sending ? capture_transmit

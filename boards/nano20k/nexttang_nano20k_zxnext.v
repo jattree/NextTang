@@ -206,7 +206,8 @@ module nexttang_nano20k_zxnext (
     nexttang_next_machine #(
         .LAYER2_UNITS(LAYER2_UNITS),
         .CORE_OPTION(CORE_OPTION),
-        .SD_MONITOR(1)
+        .SD_MONITOR(1),
+        .DEBUG_TAPS(0)                    // the block RAMs go to video and Layer 2
     ) machine (
         .clock_28(clock_28),
         .clock_28_n(clock_28_n),
