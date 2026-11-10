@@ -1,19 +1,18 @@
 // nexttang_sdr_sdram_service against a behavioural SDR SDRAM.
 //
-// Memory clock 112.5 MHz, machine clock a quarter of it (as on the Nano).
+// Memory clock 84.375 MHz, machine clock a third of it (as on the Nano).
 // The model takes commands on the rising edge of sdram_clk (the inverted
 // memory clock), honours DQM byte lanes, and drives read data from tAC
 // (5.4 ns) after the CL-th edge until tOH (2.5 ns) after the next.
 // Random port A (core-like: request pulse, cycle held while wait is high,
 // then released) and port C (held until ack) traffic against a shadow copy.
-// Checks: every read returns the shadow byte; ACTIVE-to-ACTIVE >= 8 cycles;
+// Checks: every read returns the shadow byte; ACTIVE-to-ACTIVE >= 6 cycles;
 // ACTIVE-to-READ/WRITE >= 2; READ/WRITE always auto-precharge; refreshes no
 // further apart than 2 x 7.8 us; wait raised in the request's own cycle.
 `timescale 1ns/1ps
 module tb;
-    reg mclk = 0; always #4.444 mclk = ~mclk;               // 112.5 MHz
-    reg [1:0] div = 0; always @(posedge mclk) div <= div + 2'd1;
-    wire clk28 = div[1];                                     // 28.125 MHz, rises with mclk
+    reg mclk = 0; always #5.926 mclk = ~mclk;               // 84.375 MHz
+    reg clk28 = 0; always #17.778 clk28 = ~clk28;            // 28.125 MHz, rises with every third mclk
     reg reset = 1;
 
     reg a_request = 0, a_cycle = 0, a_read_n = 1; reg [20:0] a_addr = 0; reg [7:0] a_wdata = 0;
@@ -46,11 +45,11 @@ module tb;
         if (rpipe[1]) begin dout <= #5.4 mem[raddr]; drive <= #5.4 1'b1; end
         if (!cs_n) case ({ras_n, cas_n, we_n})
             3'b011: begin
-                if ($realtime - last_act[sba] < 8 * 8.888 - 0.1) begin $display("FAIL tRC bank %0d %0.1f ns", sba, $realtime - last_act[sba]); $finish; end
+                if ($realtime - last_act[sba] < 6 * 11.852 - 0.1) begin $display("FAIL tRC bank %0d %0.1f ns", sba, $realtime - last_act[sba]); $finish; end
                 row[sba] <= sa; last_act[sba] = $realtime;
             end
             3'b101, 3'b100: begin
-                if ($realtime - last_act[sba] < 2 * 8.888 - 0.1) begin $display("FAIL tRCD"); $finish; end
+                if ($realtime - last_act[sba] < 2 * 11.852 - 0.1) begin $display("FAIL tRCD"); $finish; end
                 if (!sa[10]) begin $display("FAIL no auto-precharge"); $finish; end
                 if ({ras_n, cas_n, we_n} == 3'b101) begin raddr <= {sba, row[sba], sa[7:0]}; rpipe[0] <= 1'b1; end
                 else begin : wr

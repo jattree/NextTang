@@ -10,18 +10,22 @@
 // transparent. Layer 2 needs its own design (column-ordered modes read with
 // a 256-byte stride; the deadline is four machine cycles), which comes next.
 //
-// Clocking. memory_clock runs at four times machine_clock and both come from
-// one PLL (the Nano: 112.5 and 28.125 MHz), so a machine cycle is four memory
-// cycles and the clocks are related: requests cross by toggles that the
-// static timer checks, with no synchroniser latency. The SDRAM gets the
-// inverted memory clock, so commands and write data sit mid-eye at its pins.
+// Clocking. memory_clock runs at three times machine_clock and both come from
+// one PLL (the Nano: 84.375 and 28.125 MHz, the PLL's divide-by-3 output), so
+// the clocks are related: requests cross by toggles and every crossing is a
+// register-to-register path the static timer checks. Completion is taken
+// into the machine domain by a register, so read data and the end of wait
+// arrive together on a machine edge. The SDRAM gets the inverted memory
+// clock, so commands and write data sit mid-eye at its pins.
 //
 // Accesses. One 32-bit word per ACTIVE, READ or WRITE with auto-precharge,
 // CAS latency 2, burst length 1; a byte write uses the DQM lanes. Each
 // access occupies the bank for OP_CYCLES (tRC), refresh likewise. Read data
 // is taken from the pins on the falling memory-clock edge CL + 1.5 cycles
 // after READ, the middle of the data window at these speeds (the bring-up
-// self-test's capture B checks exactly this point on the board).
+// self-test's capture B checks exactly this point on the board, at 81 MHz).
+// The capture runs in its own pipeline, so the next access can start while
+// a read's data is still on its way.
 //
 // Ordering. One access at a time, in this order of priority: an overdue
 // refresh, port A, port C, a due refresh. Port A is the CPU and DMA: wait is
@@ -39,9 +43,9 @@
 `default_nettype none
 
 module nexttang_sdr_sdram_service #(
-    parameter integer MEMORY_HZ    = 112_500_000,
-    parameter integer TRCD         = 2,     // ACTIVE to READ/WRITE, cycles
-    parameter integer OP_CYCLES    = 8,     // ACTIVE to next ACTIVE (tRC, tWR + tRP)
+    parameter integer MEMORY_HZ    = 84_375_000,
+    parameter integer TRCD         = 2,     // ACTIVE to READ/WRITE, cycles (23.7 ns)
+    parameter integer OP_CYCLES    = 6,     // ACTIVE to next ACTIVE (tRC 60 ns; tWR + tRP after a write)
     parameter integer REFRESH_US10 = 78,    // refresh interval in 0.1 us (64 ms / 8192)
     parameter integer TIMEOUT      = 4096   // port A memory cycles before fault_timeout
 ) (
@@ -97,7 +101,13 @@ module nexttang_sdr_sdram_service #(
     wire       a_done_toggle;           // memory domain
     wire [31:0] a_word;                 // memory domain, stable once done
     reg  [1:0] a_lane = 2'd0;
-    wire       a_pending = a_toggle != a_done_toggle;
+    reg        a_done_sync = 1'b0;      // completion, taken into the machine domain
+    reg [31:0] a_word_sync = 32'd0;
+    always @(posedge machine_clock) begin
+        a_done_sync <= a_done_toggle;
+        a_word_sync <= a_word;
+    end
+    wire       a_pending = a_toggle != a_done_sync;
     // Raised in the request's own cycle, before the core can sample it, and
     // held while the access is outstanding.
     assign a_wait = a_cycle_request && (a_request || a_pending);
@@ -110,9 +120,9 @@ module nexttang_sdr_sdram_service #(
             a_lane <= a_address[1:0];
         end
     end
-    // Valid as soon as wait drops: a_word is a memory-domain register loaded
-    // on the same edge that completes the access, and a_lane is held.
-    assign a_read_data = a_word[8 * a_lane +: 8];
+    // a_word_sync is taken on the same machine edge as a_done_sync, so the
+    // byte is valid from the cycle wait drops; a_lane is held.
+    assign a_read_data = a_word_sync[8 * a_lane +: 8];
     // Port C: same handshake, acknowledged with a one-cycle pulse.
     reg        c_toggle = 1'b0;
     reg        c_op_read_n = 1'b0;
@@ -123,7 +133,13 @@ module nexttang_sdr_sdram_service #(
     wire [31:0] c_word;
     reg        c_seen = 1'b0;
     reg        c_armed = 1'b1;          // the request has been low since the last ack
-    wire       c_pending = c_toggle != c_done_toggle;
+    reg        c_done_sync = 1'b0;
+    reg [31:0] c_word_sync = 32'd0;
+    always @(posedge machine_clock) begin
+        c_done_sync <= c_done_toggle;
+        c_word_sync <= c_word;
+    end
+    wire       c_pending = c_toggle != c_done_sync;
     assign c_busy = c_request || c_pending;
     always @(posedge machine_clock) begin
         c_ack <= 1'b0;
@@ -137,7 +153,7 @@ module nexttang_sdr_sdram_service #(
             c_lane <= c_address[1:0];
         end else if (c_seen && !c_pending) begin
             c_ack <= 1'b1; c_seen <= 1'b0;
-            c_read_data <= c_word[8 * c_lane +: 8];
+            c_read_data <= c_word_sync[8 * c_lane +: 8];
         end
     end
 
@@ -163,84 +179,104 @@ module nexttang_sdr_sdram_service #(
                S_IDLE = 3'd5, S_OP = 3'd6;
 
     reg [2:0]  state = S_INIT;
-    reg [15:0] count = 16'd0;
-    reg [4:0]  step = 5'd0;           // cycles since ACTIVE (or REFRESH)
+    reg [15:0] init_count = 16'd0;     // power-up and initialisation waits only
+    reg        init_wait = 1'b0;       // init_count still running
+    reg [2:0]  step = 3'd0;            // cycles since ACTIVE (or REFRESH)
     reg [15:0] refresh_count = 16'd0;
+    reg        refresh_tick = 1'b0;
     reg [1:0]  refresh_owed = 2'd0;
     reg        op_refresh = 1'b0, op_port_c = 1'b0, op_read = 1'b0;
     reg [20:0] op_address = 21'd0;
     reg [7:0]  op_data = 8'd0;
     reg [15:0] a_age = 16'd0;
+    // read capture pipeline: bit k set k + 1 edges after READ; the port is
+    // carried alongside
+    reg [CL + 1:0] rd_pipe = 0;
+    reg [CL + 1:0] rd_port_c = 0;
 
     wire a_new = a_toggle != a_seen_m;
     wire c_new = c_toggle != c_seen_m;
+    wire refresh_now = refresh_owed[1] || (refresh_owed != 2'd0 && !a_new && !c_new);
 
     task automatic command(input [3:0] c);
         {sdram_cs_n, sdram_ras_n, sdram_cas_n, sdram_we_n} <= c;
     endtask
 
+    reg refresh_take;
     always @(posedge memory_clock) begin
+        refresh_take = 1'b0;
         command(C_NOP);
         dq_oe <= 1'b0;
-        if (refresh_count != 16'd0) refresh_count <= refresh_count - 16'd1;
-        else begin
-            refresh_count <= REFRESH_CYCLES[15:0];
-            if (refresh_owed != 2'd3) refresh_owed <= refresh_owed + 2'd1;
-        end
+        // refresh timer, its compare registered
+        refresh_tick <= refresh_count == 16'd1;
+        refresh_count <= (refresh_count == 16'd0) ? REFRESH_CYCLES[15:0] : refresh_count - 16'd1;
         if (a_new && a_age != 16'hFFFF) a_age <= a_age + 16'd1;
-        if (a_age == TIMEOUT[15:0] * 16'd4) fault_timeout <= 1'b1;
+        if (a_age == TIMEOUT[15:0] * 16'd3) fault_timeout <= 1'b1;
+        init_wait <= init_count > 16'd1;
+        if (init_count != 16'd0) init_count <= init_count - 16'd1;
+
+        // read data: the pins at the falling edge CL + 1.5 cycles after READ
+        rd_pipe <= {rd_pipe[CL:0], 1'b0};
+        rd_port_c <= {rd_port_c[CL:0], 1'b0};
+        if (rd_pipe[CL + 1]) begin
+            if (rd_port_c[CL + 1]) begin c_word_m <= dq_fall; c_done_m <= !c_done_m; end
+            else begin a_word_m <= dq_fall; a_done_m <= !a_done_m; end
+        end
 
         if (reset) begin
-            state <= S_INIT; count <= INIT_CYCLES[15:0]; sdram_cke <= 1'b0; ready <= 1'b0;
+            state <= S_INIT; init_count <= INIT_CYCLES[15:0]; init_wait <= 1'b1;
+            sdram_cke <= 1'b0; ready <= 1'b0;
             sdram_dqm <= 4'hF; refresh_owed <= 2'd0; refresh_count <= REFRESH_CYCLES[15:0];
             a_seen_m <= a_toggle; a_done_m <= a_toggle; c_seen_m <= c_toggle; c_done_m <= c_toggle;
-            fault_timeout <= 1'b0; a_age <= 16'd0;
+            fault_timeout <= 1'b0; a_age <= 16'd0; rd_pipe <= 0;
         end else case (state)
             S_INIT: begin
                 sdram_cke <= 1'b1;
-                if (count != 16'd0) count <= count - 16'd1; else state <= S_PRE;
+                if (!init_wait) state <= S_PRE;
             end
-            S_PRE: begin command(C_PRE); sdram_addr <= 11'h400; count <= 16'd4; state <= S_REF1; end
-            S_REF1: if (count != 16'd0) count <= count - 16'd1;
-                    else begin command(C_REF); count <= OP_CYCLES[15:0]; state <= S_REF2; end
-            S_REF2: if (count != 16'd0) count <= count - 16'd1;
-                    else begin command(C_REF); count <= OP_CYCLES[15:0]; state <= S_MRS; end
-            S_MRS: if (count != 16'd0) count <= count - 16'd1;
-                   else begin
+            S_PRE: begin
+                command(C_PRE); sdram_addr <= 11'h400;
+                init_count <= OP_CYCLES[15:0]; init_wait <= 1'b1; state <= S_REF1;
+            end
+            S_REF1: if (!init_wait) begin
+                        command(C_REF); init_count <= 2 * OP_CYCLES; init_wait <= 1'b1; state <= S_REF2;
+                    end
+            S_REF2: if (!init_wait) begin
+                        command(C_REF); init_count <= 2 * OP_CYCLES; init_wait <= 1'b1; state <= S_MRS;
+                    end
+            S_MRS: if (!init_wait) begin
                        command(C_MRS); sdram_ba <= 2'b00;
                        sdram_addr <= 11'b0000_010_0_000;    // burst write, CL 2, sequential, BL 1
-                       count <= 16'd4; state <= S_IDLE;
+                       step <= 3'd0; op_refresh <= 1'b1; state <= S_OP;   // tMRD, then idle
                    end
             S_IDLE: begin
-                if (count != 16'd0) count <= count - 16'd1;
-                else begin
-                    ready <= 1'b1;
-                    step <= 5'd0;
-                    if (refresh_owed >= 2'd2 || (refresh_owed != 2'd0 && !a_new && !c_new)) begin
-                        command(C_REF); refresh_owed <= refresh_owed - 2'd1;
-                        op_refresh <= 1'b1; state <= S_OP;
-                    end else if (a_new) begin
-                        a_seen_m <= a_toggle; a_age <= 16'd0;
-                        op_refresh <= 1'b0; op_port_c <= 1'b0;
-                        op_read <= !a_op_read_n; op_address <= a_op_address; op_data <= a_op_data;
-                        command(C_ACT); sdram_ba <= a_op_address[11:10]; sdram_addr <= a_op_address[20:12] & 11'h1FF;
-                        state <= S_OP;
-                    end else if (c_new) begin
-                        c_seen_m <= c_toggle;
-                        op_refresh <= 1'b0; op_port_c <= 1'b1;
-                        op_read <= !c_op_read_n; op_address <= c_op_address; op_data <= c_op_data;
-                        command(C_ACT); sdram_ba <= c_op_address[11:10]; sdram_addr <= c_op_address[20:12] & 11'h1FF;
-                        state <= S_OP;
-                    end
+                ready <= 1'b1;
+                step <= 3'd0;
+                if (refresh_now) begin
+                    command(C_REF); refresh_take = 1'b1;
+                    op_refresh <= 1'b1; state <= S_OP;
+                end else if (a_new) begin
+                    a_seen_m <= a_toggle; a_age <= 16'd0;
+                    op_refresh <= 1'b0; op_port_c <= 1'b0;
+                    op_read <= !a_op_read_n; op_address <= a_op_address; op_data <= a_op_data;
+                    command(C_ACT); sdram_ba <= a_op_address[11:10]; sdram_addr <= {2'b00, a_op_address[20:12]};
+                    state <= S_OP;
+                end else if (c_new) begin
+                    c_seen_m <= c_toggle;
+                    op_refresh <= 1'b0; op_port_c <= 1'b1;
+                    op_read <= !c_op_read_n; op_address <= c_op_address; op_data <= c_op_data;
+                    command(C_ACT); sdram_ba <= c_op_address[11:10]; sdram_addr <= {2'b00, c_op_address[20:12]};
+                    state <= S_OP;
                 end
             end
             S_OP: begin
-                step <= step + 5'd1;
-                if (!op_refresh && step == TRCD[4:0] - 5'd1) begin
+                step <= step + 3'd1;
+                if (!op_refresh && step == TRCD[2:0] - 3'd1) begin
                     sdram_ba <= op_address[11:10];
                     sdram_addr <= {3'b100, op_address[9:2]};      // A10: auto-precharge
                     if (op_read) begin
                         command(C_READ); sdram_dqm <= 4'h0;
+                        rd_pipe[0] <= 1'b1; rd_port_c[0] <= op_port_c;
                     end else begin
                         command(C_WRITE); dq_oe <= 1'b1;
                         dq_out <= {4{op_data}};
@@ -249,16 +285,14 @@ module nexttang_sdr_sdram_service #(
                         if (op_port_c) c_done_m <= !c_done_m; else a_done_m <= !a_done_m;
                     end
                 end
-                // READ issued when step was TRCD-1; dq_fall holds the pins at
-                // the falling edge CL + 1.5 cycles later, usable one edge after
-                if (!op_refresh && op_read && step == TRCD[4:0] - 5'd1 + CL[4:0] + 5'd2) begin
-                    if (op_port_c) begin c_word_m <= dq_fall; c_done_m <= !c_done_m; end
-                    else begin a_word_m <= dq_fall; a_done_m <= !a_done_m; end
-                end
-                if (step == OP_CYCLES[4:0] - 5'd2) state <= S_IDLE;   // next ACTIVE OP_CYCLES after this one
+                if (step == OP_CYCLES[2:0] - 3'd2) state <= S_IDLE;   // next ACTIVE OP_CYCLES after this one
             end
             default: state <= S_INIT;
         endcase
+        // owed refreshes: +1 per tick, -1 per refresh issued, in one place
+        if (!reset)
+            refresh_owed <= refresh_owed + ((refresh_tick && refresh_owed != 2'd3) ? 2'd1 : 2'd0)
+                                         - (refresh_take ? 2'd1 : 2'd0);
     end
 endmodule
 
