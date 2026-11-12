@@ -129,6 +129,14 @@ module nexttang_next_machine #(
     // on the debug UART; seven block RAMs. 0 leaves them out (the Nano 20K,
     // which needs the block RAMs); the status line and the Pi debug link stay.
     parameter integer DEBUG_TAPS = 1,
+    // 1: the status line every quarter second on the debug UART (flags, PC,
+    // wait and SD counters). 0 leaves it and its counters out (about 1,000
+    // logic cells on the Nano 20K, which needs them for sound); the Pi debug
+    // link, the keys (K, J) and the breakpoints stay.
+    parameter integer STATUS_LINE = 1,
+    // Hardware breakpoint slots (each about 80 ALU and 27 registers); writes
+    // to a slot at or above this are ignored.
+    parameter integer BREAKPOINT_SLOTS = 10,
     // 0: the Pi debug slave's SPI is driven by the FPGA's own master from the
     // debug UART (as above). 1: it is the board's pins pi_ce0_n, pi_sclk,
     // pi_mosi and pi_miso, for a real Raspberry Pi (the Nano 20K's Pi Zero);
@@ -683,6 +691,10 @@ module nexttang_next_machine #(
             divider_phase <= divider_phase | (clock_14 ? 4'b1000 : 4'b0100);
     end
 
+    // With STATUS_LINE 0 the status UART's inputs are constant and its output
+    // is unused, so synthesis removes it with the counters that feed it; it
+    // stays instantiated because the boards' SDCs name its registers.
+    wire status_line_transmit;
     nexttang_debug_status_uart #(
         .CLOCK_HZ(7000000),
         .GAP_CLOCKS(1750000),
@@ -690,17 +702,18 @@ module nexttang_next_machine #(
     ) status_uart (
         .clock(clock_7),
         .reset(!machine_locked),
-        .flags(status_flags),
-        .value(status_value),
-        .extra({
+        .flags(STATUS_LINE != 0 ? status_flags : 6'd0),
+        .value(STATUS_LINE != 0 ? status_value : 32'd0),
+        .extra(STATUS_LINE == 0 ? 160'd0 : {
             wait_holds_reported, wait_longest_reported,
             8'h00, wait_cycles_reported,
             last_io_write_data, sd_byte_count,
             sd_checksum,
             cpu_wait, cpu_contend, 2'b00, double_interrupts, cpu_enable_count
         }),
-        .transmit(status_transmit)
+        .transmit(status_line_transmit)
     );
+    assign status_transmit = STATUS_LINE != 0 ? status_line_transmit : 1'b1;
 
     // Instruction-fetch history. It freezes after the CPU's first NMI, which is
     // how NextZXOS reports access to missing hardware, and then takes over the
@@ -775,7 +788,7 @@ module nexttang_next_machine #(
     );
 
     nexttang_breakpoints #(
-        .SLOTS(10)
+        .SLOTS(BREAKPOINT_SLOTS)
     ) breakpoints (
         .clock(clock_28),
         .reset(!machine_locked),

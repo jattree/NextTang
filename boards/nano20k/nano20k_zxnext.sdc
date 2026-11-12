@@ -24,3 +24,4 @@ set_clock_groups -asynchronous -group [get_clocks {clock_27}] -group [get_clocks
 // the status UART's flag synchronisers the same way.)
 set_false_path -to [get_regs {machine/status_uart/shift_message*}]
 set_false_path -to [get_regs {machine/status_uart/flags_meta*}]
+

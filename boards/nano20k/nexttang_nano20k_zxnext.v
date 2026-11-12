@@ -33,10 +33,12 @@
 //   Pi0       the official Pi debug slave on header pins 25 CE0, 26 MISO,
 //             27 MOSI, 28 SCLK (PI_SPI_PINS), for a Pi Zero.
 //
-//   audio     written but off (AUDIO): the core's stereo to the on-board
-//             MAX98357A amplifier over I2S; it does not fit yet (see below).
+//   audio     build option AUDIO (build_zxnext.sh --audio, with
+//             --status-line 0 to make room): the core's stereo to the
+//             on-board MAX98357A amplifier over I2S (2) and/or in the HDMI
+//             stream (1). Off by default: see the audio section.
 //
-// Still planned: HDMI audio, the BL616 companion keyboard.
+// Still planned: the BL616 companion keyboard.
 // Capability limits on this part (2026-11-06 synthesis probe): no Spec256,
 // no Layer 2 block-RAM mirror, no DDR3 frame store or 720p scaler.
 
@@ -201,6 +203,16 @@ module nexttang_nano20k_zxnext (
     localparam [127:0] LAYER2_UNITS = {128{1'b1}};
     // CPU with the debug interface, every Pi slave command, port C.
     localparam [15:0]  CORE_OPTION = 16'hFFF2;
+    // Build options (build_zxnext.sh --audio, --status-line, --pi-pins sets
+    // these lines in its copy of this file).
+    // AUDIO: the core's sound, bit 0 in the HDMI stream, bit 1 to the
+    // on-board amplifier (see the audio section); 0 none.
+    localparam integer AUDIO = 0;
+    // STATUS_LINE: the machine's status line on the debug UART.
+    localparam integer STATUS_LINE = 0;
+    // PI_SPI_PINS: 1 the Pi Zero on header pins 25-28; 0 the debugger over the
+    // debug UART (FT232R on 29/30, or the BL616's USB serial).
+    localparam integer PI_SPI_PINS = 0;
 
     // keys and F1-F10 held from the host over the debug UART
     reg [39:0] keys_meta = 40'd0, keys_sync = 40'd0;
@@ -216,9 +228,14 @@ module nexttang_nano20k_zxnext (
     nexttang_next_machine #(
         .LAYER2_UNITS(LAYER2_UNITS),
         .CORE_OPTION(CORE_OPTION),
-        .SD_MONITOR(1),
+        .SD_MONITOR(STATUS_LINE),         // reported on the status line
         .DEBUG_TAPS(0),                   // the block RAMs go to video and Layer 2
-        .PI_SPI_PINS(1)                   // the Pi Zero on header pins 25-28
+        .STATUS_LINE(STATUS_LINE),
+        // Two breakpoint slots, not ten: about 700 logic cells back. Builds
+        // above about 86 percent full met timing on paper and failed on the
+        // board (2026-11-12); builds at 82-83 percent booted every time.
+        .BREAKPOINT_SLOTS(2),
+        .PI_SPI_PINS(PI_SPI_PINS)
     ) machine (
         .clock_28(clock_28),
         .clock_28_n(clock_28_n),
@@ -361,15 +378,46 @@ module nexttang_nano20k_zxnext (
         else pixel_reset_sync <= {pixel_reset_sync[1:0], 1'b0};
     wire pixel_reset = pixel_reset_sync[2];
     wire [9:0] symbol_blue, symbol_green, symbol_red;
-    nexttang_tmds_encoder encode_blue (.pixel_clk(pixel_clock), .reset(pixel_reset),
-        .video_data({hdmi_rgb[2:0], hdmi_rgb[2:0], hdmi_rgb[2:1]}),
-        .control_zero(hdmi_hsync_n), .control_one(hdmi_vsync_n), .data_enable(!hdmi_blank), .symbol(symbol_blue));
-    nexttang_tmds_encoder encode_green (.pixel_clk(pixel_clock), .reset(pixel_reset),
-        .video_data({hdmi_rgb[5:3], hdmi_rgb[5:3], hdmi_rgb[5:4]}),
-        .control_zero(1'b0), .control_one(1'b0), .data_enable(!hdmi_blank), .symbol(symbol_green));
-    nexttang_tmds_encoder encode_red (.pixel_clk(pixel_clock), .reset(pixel_reset),
-        .video_data({hdmi_rgb[8:6], hdmi_rgb[8:6], hdmi_rgb[8:7]}),
-        .control_zero(1'b0), .control_one(1'b0), .data_enable(!hdmi_blank), .symbol(symbol_red));
+    generate
+    if (AUDIO % 2 == 1) begin : hdmi_with_sound
+        // HDMI with the core's sound in a data island on every line
+        // (nexttang_hdmi_audio_out), the picture and its timing still
+        // hdmi_frame's. 48 kHz samples against the 27 MHz pixel clock,
+        // 48000 / 27e6 * 2^32, which the audio clock regeneration packets
+        // announce (N 6144, CTS 27000).
+        // EXPERIMENTAL (2026-11-12): sound reached the Elgato at the right
+        // pitches when a build booted (BEEP 1,0 at 264 Hz). See the audio
+        // section for why sound is off by default.
+        wire hdmi_audio_ce;
+        wire signed [15:0] hdmi_left, hdmi_right;
+        nexttang_zxnext_audio_pcm #(.PHASE_INCREMENT(32'd7635497)) hdmi_audio_pcm (
+            .core_clock(clock_28), .core_left(core_audio_left), .core_right(core_audio_right),
+            .clock(pixel_clock), .reset(pixel_reset), .audio_ce(hdmi_audio_ce),
+            .left(hdmi_left), .right(hdmi_right));
+        nexttang_hdmi_audio_out #(.VIDEO_RATE(27.0E6), .AUDIO_RATE(48000)) hdmi_out (
+            .clock(pixel_clock), .reset(pixel_reset), .video_60(video_60),
+            .hactive(video_60 ? 10'd138 : 10'd144),
+            .hsync_beg(video_60 ? 10'd16 : 10'd12),
+            .hlast(video_60 ? 10'd857 : 10'd863),
+            .vactive(video_60 ? 10'd45 : 10'd49),
+            .vsync_end(video_60 ? 10'd14 : 10'd9),
+            .vlast(video_60 ? 10'd524 : 10'd624),
+            .blank(hdmi_blank), .hsync_n(hdmi_hsync_n), .vsync_n(hdmi_vsync_n), .rgb(hdmi_rgb),
+            .audio_ce(hdmi_audio_ce), .audio_left(hdmi_left), .audio_right(hdmi_right),
+            .symbol_blue(symbol_blue), .symbol_green(symbol_green), .symbol_red(symbol_red),
+            .islands_locked());
+    end else begin : dvi
+        nexttang_tmds_encoder encode_blue (.pixel_clk(pixel_clock), .reset(pixel_reset),
+            .video_data({hdmi_rgb[2:0], hdmi_rgb[2:0], hdmi_rgb[2:1]}),
+            .control_zero(hdmi_hsync_n), .control_one(hdmi_vsync_n), .data_enable(!hdmi_blank), .symbol(symbol_blue));
+        nexttang_tmds_encoder encode_green (.pixel_clk(pixel_clock), .reset(pixel_reset),
+            .video_data({hdmi_rgb[5:3], hdmi_rgb[5:3], hdmi_rgb[5:4]}),
+            .control_zero(1'b0), .control_one(1'b0), .data_enable(!hdmi_blank), .symbol(symbol_green));
+        nexttang_tmds_encoder encode_red (.pixel_clk(pixel_clock), .reset(pixel_reset),
+            .video_data({hdmi_rgb[8:6], hdmi_rgb[8:6], hdmi_rgb[8:7]}),
+            .control_zero(1'b0), .control_one(1'b0), .data_enable(!hdmi_blank), .symbol(symbol_red));
+    end
+    endgenerate
     wire [2:0] serial_data;
     OSER10 serialize_blue (.D0(symbol_blue[0]), .D1(symbol_blue[1]), .D2(symbol_blue[2]), .D3(symbol_blue[3]),
         .D4(symbol_blue[4]), .D5(symbol_blue[5]), .D6(symbol_blue[6]), .D7(symbol_blue[7]), .D8(symbol_blue[8]),
@@ -389,8 +437,13 @@ module nexttang_nano20k_zxnext (
     // SD on the core's SPI, as the official board drives it (zxnext_top_issue4):
     // SCK and MOSI registered on the rising edge of the CPU clock, chip select
     // and MISO direct (MISO unregistered leaves the card more time to answer).
-    // NextNano drives SCK and MOSI combinationally, the strongest lead for its
-    // card corruption (issue #3).
+    // On paper this leaves the card only 5 to 6 ns here (the core samples MISO
+    // one 28 MHz cycle after it drops SCK, and the Nano's pin paths are
+    // slower than the Spartan-6's), and driving SCK and MOSI straight from the
+    // core's registers would leave about 20 ns. On the board it went the other
+    // way (2026-11-11/12): builds with the direct drive failed to boot or booted
+    // only sometimes, builds with this one booted every time on Jon's card. Kept
+    // as the official board has it until the SD timing is measured on the pins.
     reg sd_clk_q = 1'b0, sd_mosi_q = 1'b0;
     always @(posedge clock_28) begin
         sd_clk_q <= spi_clock;
@@ -406,16 +459,23 @@ module nexttang_nano20k_zxnext (
     assign companion_irq_n = uart_tx;     // BL616 USB serial RX (stock firmware)
     assign companion_miso = 1'b1;
     // ------------------------------------------------------------- audio
-    // The core's mixed stereo to the on-board MAX98357A over I2S: signed,
+    // AUDIO bit 1: the core's mixed stereo to the on-board MAX98357A over I2S: signed,
     // DC removed (nexttang_zxnext_audio_pcm, one sample per I2S frame:
     // 2^32 / 576), 48.828 kHz frames from a 28.125 MHz / 18 bit clock.
-    // AUDIO is off for now: using the core's audio output keeps its whole
-    // sound hardware (TurboSound's three AYs, DACs, mixer), about 1,700 logic
-    // cells, which takes the Nano to 89 percent and misses 28 MHz by 8 ns
-    // (2026-11-11). Room has to be made first.
-    localparam integer AUDIO = 0;
+    // Using the core's audio output keeps its whole sound hardware
+    // (TurboSound's three AYs, DACs, mixer), about 1,700 logic cells; with the
+    // status line as well the Nano reached 89 percent and missed 28 MHz by
+    // 8 ns (2026-11-11), so AUDIO goes with STATUS_LINE 0. HDMI and the
+    // amplifier share that sound hardware.
+    // OFF BY DEFAULT (2026-11-12): builds with the sound hardware met timing
+    // (80 to 88 percent full) and mostly failed to boot NextZXOS on the board
+    // (SD initialisation errors, garbled boot loader text, the CPU in error
+    // loops); one HDMI build and one amplifier build booted, and the HDMI one
+    // played NextBASIC BEEPs at the right pitches. The same source without
+    // the sound hardware (71 percent) booted every time. Cause not found; the
+    // next step is to watch the SD and SDRAM pins with a logic analyser.
     generate
-    if (AUDIO != 0) begin : amplifier
+    if (AUDIO / 2 % 2 == 1) begin : amplifier
         wire signed [15:0] pcm_left, pcm_right;
         nexttang_zxnext_audio_pcm #(.PHASE_INCREMENT(32'd7456540)) audio_pcm (
             .core_clock(clock_28), .core_left(core_audio_left), .core_right(core_audio_right),
