@@ -9,7 +9,16 @@
 -- HDMI active line must show one core line, and the same core line in every
 -- frame (counted from the frame's first active line), or the picture is
 -- drifting through the line buffer. Run with G_RELOCK false to see the drift
--- and true to see it held.
+-- and true to see it held. Every line must also keep the full CEA length
+-- (864 HDMI clocks between hsyncs): the first re-lock cut one line per frame
+-- to 196 clocks, which receivers reject (no signal on the Nano, 2026-11-11),
+-- and the lines from vsync to the first active line must not change from
+-- frame to frame: receivers that place the picture by vsync show a change as
+-- a bounce (the second re-lock moved lines in the back porch).
+-- CORE_CYC and CORE_LINES set the core's line length (14 MHz cycles) and
+-- lines per frame: 896/312 is 48K timing, 912/311 128K, 896/320 Pentagon.
+-- LOCK_LINE is the window line after which the lock pulse comes (0 in 48K
+-- timing, 4 in 128K/+3, as zxula_timing's c_hdmi_ysync).
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -18,7 +27,10 @@ use std.textio.all;
 entity tb_hdmi_frame_relock is
    generic (
       RELOCK : boolean := true;
-      FRAMES : natural := 12
+      FRAMES : natural := 12;
+      CORE_CYC : natural := 896;
+      CORE_LINES : natural := 312;
+      LOCK_LINE : natural := 0
    );
 end entity;
 
@@ -33,6 +45,8 @@ architecture sim of tb_hdmi_frame_relock is
    signal blank, hsync_n, vsync_n : std_logic;
    signal orgb : std_logic_vector(8 downto 0);
    signal done : boolean := false;
+   signal short_lines : natural := 0;
+   signal porch_changes : natural := 0;
    constant T14 : time := 1 sec / 14062500;
    constant T27 : time := 1 sec / 27000000;
 begin
@@ -72,9 +86,9 @@ begin
             en <= '0';
          end if;
          -- the core's o_hdmi_frame_lock: end of the first HDMI-window line (48K)
-         if line = 12 and (cyc = 894 or cyc = 895) then sync <= '1'; else sync <= '0'; end if;
+         if line = 12 + LOCK_LINE and (cyc = CORE_CYC - 2 or cyc = CORE_CYC - 1) then sync <= '1'; else sync <= '0'; end if;
          cyc := cyc + 1;
-         if cyc = 896 then cyc := 0; line := (line + 1) mod 312; end if;
+         if cyc = CORE_CYC then cyc := 0; line := (line + 1) mod CORE_LINES; end if;
       end loop;
    end process;
 
@@ -106,10 +120,12 @@ begin
             mixed := 0;
             if frame = FRAMES then
                write(l, string'("RESULT relock=") & boolean'image(RELOCK) & string'(" frames whose first line moved: ") &
-                     integer'image(drift_frames) & string'(", mixed lines after settling: ") & integer'image(bad_lines));
+                     integer'image(drift_frames) & string'(", mixed lines after settling: ") & integer'image(bad_lines) &
+                     string'(", lines not 864 clocks: ") & integer'image(short_lines) &
+                     string'(", vsync-to-picture changes: ") & integer'image(porch_changes));
                writeline(output, l);
-               if drift_frames = 0 and bad_lines = 0 then
-                  write(l, string'("PASS")); else write(l, string'("FAIL (expected without relock)"));
+               if drift_frames = 0 and bad_lines = 0 and short_lines = 0 and porch_changes = 0 then
+                  write(l, string'("PASS")); else write(l, string'("FAIL (the drift is expected without relock)"));
                end if;
                writeline(output, l);
                done <= true;
@@ -126,6 +142,52 @@ begin
          else
             in_line := false;
          end if;
+      end if;
+   end process;
+   -- every line from the second frame on: 864 HDMI clocks between hsyncs
+   line_length : process (clk27)
+      variable count : natural := 0;
+      variable frame_count : natural := 0;
+      variable h_prev, v_prev : std_logic := '1';
+   begin
+      if rising_edge(clk27) then
+         count := count + 1;
+         if vsync_n = '0' and v_prev = '1' then
+            frame_count := frame_count + 1;
+         end if;
+         if hsync_n = '0' and h_prev = '1' then
+            if frame_count >= 2 and count /= 864 then
+               short_lines <= short_lines + 1;
+            end if;
+            count := 0;
+         end if;
+         h_prev := hsync_n; v_prev := vsync_n;
+      end if;
+   end process;
+   -- lines from vsync to the first active line: the same in every frame after settling
+   sync_to_picture : process (clk27)
+      variable lines, first, frame_count : natural := 0;
+      variable counting : boolean := false;
+      variable h_prev, v_prev, b_prev : std_logic := '1';
+   begin
+      if rising_edge(clk27) then
+         if vsync_n = '0' and v_prev = '1' then
+            frame_count := frame_count + 1;
+            counting := true;
+            lines := 0;
+         end if;
+         if hsync_n = '0' and h_prev = '1' and counting then
+            lines := lines + 1;
+         end if;
+         if blank = '0' and b_prev = '1' and counting then
+            counting := false;
+            if frame_count = FRAMES / 2 then
+               first := lines;
+            elsif frame_count > FRAMES / 2 and lines /= first then
+               porch_changes <= porch_changes + 1;
+            end if;
+         end if;
+         h_prev := hsync_n; v_prev := vsync_n; b_prev := blank;
       end if;
    end process;
 end architecture;

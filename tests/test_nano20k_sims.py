@@ -63,9 +63,12 @@ class HdmiFrameRelockTest(unittest.TestCase):
                  str(REPO_ROOT / "rtl" / "video" / "hdmi_frame.vhd"),
                  str(SIM / "video" / "tb_hdmi_frame_relock.vhd")], REPO_ROOT)
             run(["ghdl", "-e", *flags, "tb_hdmi_frame_relock"], Path(directory))
-            output = run(["ghdl", "-r", *flags, "tb_hdmi_frame_relock", "-gRELOCK=true", "-gFRAMES=7",
-                          "--ieee-asserts=disable"], Path(directory))
-            self.assertIn("PASS", output, output)
+            # 48K, 128K and Pentagon frame lengths: shorter and longer than the HDMI frame
+            for cycles, lines, lock in ((896, 312, 0), (912, 311, 4), (896, 320, 0)):
+                output = run(["ghdl", "-r", *flags, "tb_hdmi_frame_relock", "-gRELOCK=true", "-gFRAMES=12",
+                              f"-gCORE_CYC={cycles}", f"-gCORE_LINES={lines}", f"-gLOCK_LINE={lock}",
+                              "--ieee-asserts=disable"], Path(directory))
+                self.assertIn("PASS", output, output)
 
 
 if __name__ == "__main__":
