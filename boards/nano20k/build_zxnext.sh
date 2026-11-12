@@ -16,16 +16,16 @@ repo_root=$(cd -- "$script_dir/../.." && pwd -P)
 profile=
 output_dir=
 boot_image=
-place_option=1   # closes 28.125 MHz (worst slack +0.008 ns, 2026-11-11); 0 misses by 0.75 ns
-route_option=2   # 2026-11-12, default image: place 1 / route 2 meets timing and boots NextZXOS
-                 # every time. Timing met is not enough on this board: check a new build
-                 # boots (the SD and SDRAM pins are not in the SDC; see the shell).
+place_option=1
+route_option=1   # 2026-11-12: place 1 / route 1 meets timing with nothing violated (HDMI sound
+                 # +0.025 ns, 10 of 10 boots; no sound +0.284 ns, 15 of 15). Gowin's result
+                 # moves with any change: check the report and boot-test every new build.
 print_sources=0
-# Defaults: the Nano image that boots every time (2026-11-12): HDMI picture, SD,
+# Defaults: the complete Nano image (2026-11-12): HDMI picture with sound, SD,
 # keys and the debugger on the debug UART (which also reaches the BL616's USB
-# serial), no sound. Builds with the core's sound hardware (--audio 1-3) met
-# timing and mostly failed to boot NextZXOS on the board; see the shell.
-audio=0          # --audio 0 none, 1 HDMI, 2 the on-board amplifier, 3 both (needs --status-line 0)
+# serial). Booted NextZXOS 10 of 10 with a clean timing report.
+audio=1          # --audio 0 none, 1 HDMI, 2 the on-board amplifier, 3 both (needs --status-line 0;
+                 # 3 did not meet timing in any placement tried, 2026-11-12)
 status_line=0    # --status-line 1: the debug status line (about 1,000 cells; use with --audio 0)
 pi_pins=0        # --pi-pins 1: the Pi debug slave on a Pi Zero's SPI (header 25-28) instead
 while (($#)); do

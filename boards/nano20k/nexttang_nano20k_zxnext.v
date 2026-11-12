@@ -35,8 +35,8 @@
 //
 //   audio     build option AUDIO (build_zxnext.sh --audio, with
 //             --status-line 0 to make room): the core's stereo to the
-//             on-board MAX98357A amplifier over I2S (2) and/or in the HDMI
-//             stream (1). Off by default: see the audio section.
+//             HDMI stream (1, the default) and/or to the on-board MAX98357A
+//             amplifier over I2S (2, built and booting, not yet listened to).
 //
 // Still planned: the BL616 companion keyboard.
 // Capability limits on this part (2026-11-06 synthesis probe): no Spec256,
@@ -207,7 +207,7 @@ module nexttang_nano20k_zxnext (
     // these lines in its copy of this file).
     // AUDIO: the core's sound, bit 0 in the HDMI stream, bit 1 to the
     // on-board amplifier (see the audio section); 0 none.
-    localparam integer AUDIO = 0;
+    localparam integer AUDIO = 1;
     // STATUS_LINE: the machine's status line on the debug UART.
     localparam integer STATUS_LINE = 0;
     // PI_SPI_PINS: 1 the Pi Zero on header pins 25-28; 0 the debugger over the
@@ -385,9 +385,8 @@ module nexttang_nano20k_zxnext (
         // hdmi_frame's. 48 kHz samples against the 27 MHz pixel clock,
         // 48000 / 27e6 * 2^32, which the audio clock regeneration packets
         // announce (N 6144, CTS 27000).
-        // EXPERIMENTAL (2026-11-12): sound reached the Elgato at the right
-        // pitches when a build booted (BEEP 1,0 at 264 Hz). See the audio
-        // section for why sound is off by default.
+        // Hardware (2026-11-12): NextBASIC BEEP 1,0 recorded by the Elgato at
+        // 264 Hz, scales clean; 10 of 10 boots.
         wire hdmi_audio_ce;
         wire signed [15:0] hdmi_left, hdmi_right;
         nexttang_zxnext_audio_pcm #(.PHASE_INCREMENT(32'd7635497)) hdmi_audio_pcm (
@@ -418,16 +417,22 @@ module nexttang_nano20k_zxnext (
             .control_zero(1'b0), .control_one(1'b0), .data_enable(!hdmi_blank), .symbol(symbol_red));
     end
     endgenerate
+    // The serializers are not reset: released from pixel_reset they missed
+    // recovery against the 135 MHz clock by about 0.5 ns in every build (the
+    // "3 endpoints violated" in Gowin's summary), and some loads came up with
+    // a black HDMI picture while NextZXOS ran (2026-11-12). They settle within
+    // a few pixel clocks of the PLL locking.
+    wire serializer_reset = 1'b0;
     wire [2:0] serial_data;
     OSER10 serialize_blue (.D0(symbol_blue[0]), .D1(symbol_blue[1]), .D2(symbol_blue[2]), .D3(symbol_blue[3]),
         .D4(symbol_blue[4]), .D5(symbol_blue[5]), .D6(symbol_blue[6]), .D7(symbol_blue[7]), .D8(symbol_blue[8]),
-        .D9(symbol_blue[9]), .PCLK(pixel_clock), .FCLK(serial_clock), .RESET(pixel_reset), .Q(serial_data[0]));
+        .D9(symbol_blue[9]), .PCLK(pixel_clock), .FCLK(serial_clock), .RESET(serializer_reset), .Q(serial_data[0]));
     OSER10 serialize_green (.D0(symbol_green[0]), .D1(symbol_green[1]), .D2(symbol_green[2]), .D3(symbol_green[3]),
         .D4(symbol_green[4]), .D5(symbol_green[5]), .D6(symbol_green[6]), .D7(symbol_green[7]), .D8(symbol_green[8]),
-        .D9(symbol_green[9]), .PCLK(pixel_clock), .FCLK(serial_clock), .RESET(pixel_reset), .Q(serial_data[1]));
+        .D9(symbol_green[9]), .PCLK(pixel_clock), .FCLK(serial_clock), .RESET(serializer_reset), .Q(serial_data[1]));
     OSER10 serialize_red (.D0(symbol_red[0]), .D1(symbol_red[1]), .D2(symbol_red[2]), .D3(symbol_red[3]),
         .D4(symbol_red[4]), .D5(symbol_red[5]), .D6(symbol_red[6]), .D7(symbol_red[7]), .D8(symbol_red[8]),
-        .D9(symbol_red[9]), .PCLK(pixel_clock), .FCLK(serial_clock), .RESET(pixel_reset), .Q(serial_data[2]));
+        .D9(symbol_red[9]), .PCLK(pixel_clock), .FCLK(serial_clock), .RESET(serializer_reset), .Q(serial_data[2]));
     ELVDS_OBUF tmds_clock_out (.I(pixel_clock), .O(tmds_clk_p), .OB(tmds_clk_n));
     ELVDS_OBUF tmds_out_0 (.I(serial_data[0]), .O(tmds_d_p[0]), .OB(tmds_d_n[0]));
     ELVDS_OBUF tmds_out_1 (.I(serial_data[1]), .O(tmds_d_p[1]), .OB(tmds_d_n[1]));
@@ -438,12 +443,13 @@ module nexttang_nano20k_zxnext (
     // SCK and MOSI registered on the rising edge of the CPU clock, chip select
     // and MISO direct (MISO unregistered leaves the card more time to answer).
     // On paper this leaves the card only 5 to 6 ns here (the core samples MISO
-    // one 28 MHz cycle after it drops SCK, and the Nano's pin paths are
-    // slower than the Spartan-6's), and driving SCK and MOSI straight from the
-    // core's registers would leave about 20 ns. On the board it went the other
-    // way (2026-11-11/12): builds with the direct drive failed to boot or booted
-    // only sometimes, builds with this one booted every time on Jon's card. Kept
-    // as the official board has it until the SD timing is measured on the pins.
+    // one 28 MHz cycle after it drops SCK, and the Nano's pin paths are slower
+    // than the Spartan-6's); driving SCK and MOSI straight from the core's
+    // registers would leave about 20 ns. Tried on 2026-11-11/12, the direct
+    // drive booted worse, but those builds also had the SDRAM clock-crossing
+    // fault fixed later that night, so the comparison is not conclusive. With
+    // the crossings fixed, this official drive booted 10 of 10 and 15 of 15 on
+    // Jon's card. Worth measuring on the pins before changing.
     reg sd_clk_q = 1'b0, sd_mosi_q = 1'b0;
     always @(posedge clock_28) begin
         sd_clk_q <= spi_clock;
@@ -467,13 +473,10 @@ module nexttang_nano20k_zxnext (
     // status line as well the Nano reached 89 percent and missed 28 MHz by
     // 8 ns (2026-11-11), so AUDIO goes with STATUS_LINE 0. HDMI and the
     // amplifier share that sound hardware.
-    // OFF BY DEFAULT (2026-11-12): builds with the sound hardware met timing
-    // (80 to 88 percent full) and mostly failed to boot NextZXOS on the board
-    // (SD initialisation errors, garbled boot loader text, the CPU in error
-    // loops); one HDMI build and one amplifier build booted, and the HDMI one
-    // played NextBASIC BEEPs at the right pitches. The same source without
-    // the sound hardware (71 percent) booted every time. Cause not found; the
-    // next step is to watch the SD and SDRAM pins with a logic analyser.
+    // (2026-11-12) Sound builds that met timing still failed to boot until
+    // the SDRAM clock crossings were timed against the real clock phase
+    // (nexttang_sdr_sdram_service.v, nano20k_zxnext.sdc); with that, the
+    // amplifier build and the HDMI build each booted 10 of 10.
     generate
     if (AUDIO / 2 % 2 == 1) begin : amplifier
         wire signed [15:0] pcm_left, pcm_right;
