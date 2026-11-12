@@ -1,6 +1,6 @@
 """Simulations behind the Tang Nano 20K board: the SDR SDRAM service (ports A
-and C, and Layer 2 on port B), the I2S transmitter and hdmi_frame's G_RELOCK
-option."""
+and C, and Layer 2 on port B), the I2S transmitter, hdmi_frame's G_RELOCK
+option and where HDMI data islands go in hdmi_frame's output."""
 
 from pathlib import Path
 import shutil
@@ -68,6 +68,20 @@ class HdmiFrameRelockTest(unittest.TestCase):
                 output = run(["ghdl", "-r", *flags, "tb_hdmi_frame_relock", "-gRELOCK=true", "-gFRAMES=12",
                               f"-gCORE_CYC={cycles}", f"-gCORE_LINES={lines}", f"-gLOCK_LINE={lock}",
                               "--ieee-asserts=disable"], Path(directory))
+                self.assertIn("PASS", output, output)
+
+
+@unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "iverilog not installed")
+class HdmiIslandTimingTest(unittest.TestCase):
+    def test_islands_and_guard_bands(self) -> None:
+        # 576p50 and 480p60, the front porch changing every frame as G_RELOCK does
+        for video_60 in (0, 1):
+            with tempfile.TemporaryDirectory() as directory:
+                image = Path(directory) / "sim.vvp"
+                run(["iverilog", "-g2005", f"-Ptb_hdmi_island_timing.VIDEO_60={video_60}", "-o", str(image),
+                     str(SIM / "video" / "tb_hdmi_island_timing.v"),
+                     str(REPO_ROOT / "rtl" / "video" / "nexttang_hdmi_island_timing.v")], REPO_ROOT)
+                output = run(["vvp", "-n", str(image)], REPO_ROOT)
                 self.assertIn("PASS", output, output)
 
 
