@@ -23,7 +23,11 @@
 // register-to-register path the static timer checks. Completion is taken
 // into the machine domain by a register, so read data and the end of wait
 // arrive together on a machine edge. The SDRAM gets the inverted memory
-// clock, so commands and write data sit mid-eye at its pins.
+// clock (sdram_clk; a board may instead send it through an output DDR
+// register in its I/O cell, as the Nano 20K does), so commands and write data
+// sit mid-eye at its pins. Command, address and read capture are one register
+// per pin, so a board can put them in the I/O cells; write data is driven a
+// cycle early instead (below), so its routing has a cycle and a half.
 //
 // Accesses. One 32-bit word per ACTIVE, READ or WRITE with auto-precharge,
 // CAS latency 2, burst length 1; a byte write uses the DQM lanes. Each
@@ -51,7 +55,7 @@
 
 module nexttang_sdr_sdram_service #(
     parameter integer MEMORY_HZ    = 84_375_000,
-    parameter integer TRCD         = 2,     // ACTIVE to READ/WRITE, cycles (23.7 ns)
+    parameter integer TRCD         = 2,     // ACTIVE to READ/WRITE, cycles (23.7 ns); at least 2
     parameter integer OP_CYCLES    = 6,     // ACTIVE to next ACTIVE (tRC 60 ns; tWR + tRP after a write)
     parameter integer REFRESH_US10 = 78,    // refresh interval in 0.1 us (64 ms / 8192)
     parameter integer TIMEOUT      = 4096,  // port A memory cycles before fault_timeout
@@ -238,6 +242,14 @@ module nexttang_sdr_sdram_service #(
     assign c_done_toggle = c_done_m;
     assign c_word = c_word_m;
 
+    // Write data and its output enable go out one memory cycle before the
+    // WRITE command and stay through it (the bus is idle then: the previous
+    // access's read data has finished). They reach the pins through fabric
+    // routing (the four byte lanes carry one byte, one enable serves all 32
+    // pins), whose delay moves with placement; launched with the WRITE, they
+    // had only the half cycle (5.9 ns) before the SDRAM samples, and builds
+    // that met timing corrupted memory and failed to boot while their
+    // neighbours booted (2026-11-11). Now they have a cycle and a half.
     reg        dq_oe = 1'b0;
     reg [31:0] dq_out = 32'd0;
     assign sdram_dq = dq_oe ? dq_out : 32'bz;
@@ -399,6 +411,11 @@ module nexttang_sdr_sdram_service #(
             end
             S_OP: begin
                 step <= step + 3'd1;
+                // write data on the bus from the cycle before WRITE
+                if (!op_refresh && !op_read && step == TRCD[2:0] - 3'd2) begin
+                    dq_oe <= 1'b1;
+                    dq_out <= {4{op_data}};
+                end
                 if (!op_refresh && step == TRCD[2:0] - 3'd1) begin
                     sdram_ba <= op_address[11:10];
                     sdram_addr <= {3'b100, op_address[9:2]};      // A10: auto-precharge
@@ -406,8 +423,7 @@ module nexttang_sdr_sdram_service #(
                         command(C_READ); sdram_dqm <= 4'h0;
                         rd_pipe[0] <= 1'b1; rd_port_c[0] <= op_port_c; rd_port_b[0] <= op_port_b;
                     end else begin
-                        command(C_WRITE); dq_oe <= 1'b1;
-                        dq_out <= {4{op_data}};
+                        command(C_WRITE); dq_oe <= 1'b1;    // dq_out set the cycle before
                         sdram_dqm <= ~(4'b0001 << op_address[1:0]);
                         // a write is complete once the SDRAM has it
                         if (op_port_c) c_done_m <= !c_done_m; else a_done_m <= !a_done_m;
