@@ -312,10 +312,21 @@ module nexttang_nano20k_zxnext (
         .b_pf_toggle(layer2_prefetch_toggle), .b_pf_address(layer2_prefetch_address),
         .b_toggle(layer2_request_toggle), .b_address(layer2_address),
         .b_data(layer2_data), .b_late(layer2_late), .b_mismatch(layer2_mismatch),
-        .sdram_clk(O_sdram_clk), .sdram_cke(O_sdram_cke), .sdram_cs_n(O_sdram_cs_n),
+        .sdram_clk(), .sdram_cke(O_sdram_cke), .sdram_cs_n(O_sdram_cs_n),
         .sdram_ras_n(O_sdram_ras_n), .sdram_cas_n(O_sdram_cas_n), .sdram_we_n(O_sdram_wen_n),
         .sdram_addr(O_sdram_addr), .sdram_ba(O_sdram_ba), .sdram_dqm(O_sdram_dqm), .sdram_dq(IO_sdram_dq)
     );
+    // The SDRAM clock leaves through an output DDR register in its I/O cell
+    // (low after the rising edge, high after the falling edge: memory_clock
+    // inverted, as the service's own sdram_clk), so its delay to the pin is the
+    // same in every build. Taken straight from the fabric (~memory_clock), it
+    // moved with placement, and so did the read capture point: a build that
+    // met timing failed to boot NextZXOS while its neighbour booted
+    // (2026-11-11). The build also puts the command, address and data
+    // registers in their I/O cells (ireg/oreg/ioreg_in_iob).
+    ODDR #(.TXCLK_POL(1'b0), .INIT(1'b0)) sdram_clock_out (
+        .D0(1'b0), .D1(1'b1), .TX(1'b0), .CLK(memory_clock), .Q0(O_sdram_clk), .Q1());
+
 
     // ------------------------------------------------------------- video
     // The official hdmi_frame: the core's 14 MHz pixels into a line buffer,

@@ -17,7 +17,10 @@ profile=
 output_dir=
 boot_image=
 place_option=1   # closes 28.125 MHz (worst slack +0.008 ns, 2026-11-11); 0 misses by 0.75 ns
-route_option=1   # with Layer 2 (port B) served: place 1 / route 1 closes at +0.815 ns; route 0 misses by 0.66 ns
+route_option=2   # 2026-11-11, with the HDMI re-lock and the SDRAM clock in its I/O cell: place 1 / route 2
+                 # +1.417 ns and boots NextZXOS on the board; route 1 +0.050 ns, also boots.
+                 # Place 0 / route 2 meets timing (+1.368 ns) but stops at the firmware: an
+                 # untimed I/O path (suspected: SD MISO), under investigation.
 print_sources=0
 while (($#)); do
     case "$1" in
@@ -114,6 +117,11 @@ sha256sum "${source_files[@]}" >"$output_dir/source-sha256.txt"
     printf 'set_option -use_sspi_as_gpio 1\n'
     printf 'set_option -place_option %s\n' "$place_option"
     printf 'set_option -route_option %s\n' "$route_option"
+    # SDRAM command, address and data registers in their I/O cells, so the
+    # interface timing does not move with placement (see the shell's ODDR).
+    printf 'set_option -ireg_in_iob 1\n'
+    printf 'set_option -oreg_in_iob 1\n'
+    printf 'set_option -ioreg_in_iob 1\n'
     for source_file in "${source_files[@]}"; do
         printf 'add_file {%s}\n' "$source_file"
     done

@@ -241,12 +241,18 @@ module nexttang_sdr_sdram_service #(
     reg        dq_oe = 1'b0;
     reg [31:0] dq_out = 32'd0;
     assign sdram_dq = dq_oe ? dq_out : 32'bz;
-    reg [31:0] dq_fall = 32'd0, dq_rise = 32'd0;
-    always @(negedge memory_clock) dq_fall <= sdram_dq;
-    always @(posedge memory_clock) dq_rise <= sdram_dq;
-    // at the capture edge (READ + CL + 2): dq_fall = pins at READ + CL + 1.5,
-    // dq_rise = pins at READ + CL + 1
-    wire [31:0] dq_read = CAPTURE != 0 ? dq_fall : dq_rise;
+    // at the capture edge (READ + CL + 2): CAPTURE 1 holds the pins at READ +
+    // CL + 1.5 (falling edge), CAPTURE 0 the pins at READ + CL + 1 (rising).
+    // Only the chosen register exists, so it can sit in the pin's I/O cell.
+    reg [31:0] dq_capture = 32'd0;
+    generate
+        if (CAPTURE != 0) begin : capture_fall
+            always @(negedge memory_clock) dq_capture <= sdram_dq;
+        end else begin : capture_rise
+            always @(posedge memory_clock) dq_capture <= sdram_dq;
+        end
+    endgenerate
+    wire [31:0] dq_read = dq_capture;
 
     localparam [3:0] C_NOP = 4'b0111, C_ACT = 4'b0011, C_READ = 4'b0101, C_WRITE = 4'b0100,
                      C_PRE = 4'b0010, C_REF = 4'b0001, C_MRS = 4'b0000;
@@ -279,10 +285,20 @@ module nexttang_sdr_sdram_service #(
     reg [31:0] b_last_word_m = 32'd0;
     assign b_done = b_done_m;
     assign b_head_word = b_slot_word[b_head[3:0]];
-    // the machine side's pointers, read here (related clocks)
-    wire [4:0] b_window = b_tail - b_head;
-    wire       b_fetch_stale = (b_fetch - b_head) > b_window;   // flushed past
-    wire       b_want = !b_fetch_stale && b_fetch != b_tail && !b_busy;
+    // the machine side's pointers, registered here first (related clocks):
+    // used straight from the machine domain, they fed this cycle's command
+    // decision combinationally and the path missed 84 MHz by up to 1.9 ns
+    // whenever placement moved (Nano 20K, 2026-11-11). A view one memory
+    // cycle old is safe: a fetch already in flight during a flush is handled
+    // the same way (b_fetch_stale waits for !b_busy).
+    reg  [4:0] b_head_m = 5'd0, b_tail_m = 5'd0;
+    always @(posedge memory_clock) begin
+        b_head_m <= b_head;
+        b_tail_m <= b_tail;
+    end
+    wire [4:0] b_window = b_tail_m - b_head_m;
+    wire       b_fetch_stale = (b_fetch - b_head_m) > b_window;   // flushed past
+    wire       b_want = !b_fetch_stale && b_fetch != b_tail_m && !b_busy;
     wire       b_want_read = b_want && !b_slot_dup[b_fetch[3:0]];
 
     wire a_new = a_toggle != a_seen_m;
@@ -320,7 +336,7 @@ module nexttang_sdr_sdram_service #(
         // port B bookkeeping: skip slots a flush dropped; an announcement that
         // repeats the previous word takes the last word fetched
         if (b_fetch_stale && !b_busy) begin
-            b_fetch <= b_head; b_done_m <= b_head;
+            b_fetch <= b_head_m; b_done_m <= b_head_m;
         end else if (b_want && b_slot_dup[b_fetch[3:0]] && b_done_m == b_fetch) begin
             b_slot_word[b_fetch[3:0]] <= b_last_word_m;
             b_fetch <= b_fetch + 5'd1; b_done_m <= b_done_m + 5'd1;
@@ -332,7 +348,7 @@ module nexttang_sdr_sdram_service #(
             sdram_dqm <= 4'hF; refresh_owed <= 2'd0; refresh_count <= REFRESH_CYCLES[15:0];
             a_seen_m <= a_toggle; a_done_m <= a_toggle; c_seen_m <= c_toggle; c_done_m <= c_toggle;
             fault_timeout <= 1'b0; a_age <= 16'd0; rd_pipe <= 0;
-            b_busy <= 1'b0; b_fetch <= b_head; b_done_m <= b_head;
+            b_busy <= 1'b0; b_fetch <= b_head_m; b_done_m <= b_head_m;
         end else case (state)
             S_INIT: begin
                 sdram_cke <= 1'b1;
