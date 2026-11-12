@@ -1,6 +1,7 @@
 """Simulations behind the Tang Nano 20K board: the SDR SDRAM service (ports A
 and C, and Layer 2 on port B), the I2S transmitter, hdmi_frame's G_RELOCK
-option and where HDMI data islands go in hdmi_frame's output."""
+option, where HDMI data islands go in hdmi_frame's output, and the BL616
+FPGA-Companion keyboard target."""
 
 from pathlib import Path
 import shutil
@@ -83,6 +84,19 @@ class HdmiIslandTimingTest(unittest.TestCase):
                      str(REPO_ROOT / "rtl" / "video" / "nexttang_hdmi_island_timing.v")], REPO_ROOT)
                 output = run(["vvp", "-n", str(image)], REPO_ROOT)
                 self.assertIn("PASS", output, output)
+
+
+@unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "iverilog not installed")
+class CompanionKeyboardTest(unittest.TestCase):
+    def test_status_reply_and_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sim.vvp"
+            run(["iverilog", "-g2005", "-o", str(image),
+                 str(SIM / "input" / "tb_companion_keyboard.v"),
+                 str(REPO_ROOT / "rtl" / "input" / "nexttang_companion_keyboard.v"),
+                 str(REPO_ROOT / "rtl" / "input" / "nexttang_ps2_matrix.v")], REPO_ROOT)
+            output = run(["vvp", "-n", str(image)], REPO_ROOT)
+            self.assertIn("PASS", output, output)
 
 
 if __name__ == "__main__":

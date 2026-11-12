@@ -28,3 +28,9 @@ set_clock_groups -asynchronous -group [get_clocks {clock_27}] -group [get_clocks
 set_false_path -to [get_regs {machine/status_uart/shift_message*}]
 set_false_path -to [get_regs {machine/status_uart/flags_meta*}]
 
+
+// The BL616's FPGA-Companion SPI clock (about 20 MHz; 25 MHz allowed here), the
+// clock of nexttang_companion_keyboard's SPI side. It crosses to the machine
+// only through that module's toggle synchroniser.
+create_clock -name companion_sclk -period 40 [get_ports {companion_sclk}]
+set_clock_groups -asynchronous -group [get_clocks {companion_sclk}] -group [get_clocks {clock_27 serial_clock pixel_clock memory_clock clock_28 clock_14 clock_7}]

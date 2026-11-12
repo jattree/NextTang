@@ -22,8 +22,7 @@
 //             (G_RELOCK, a NextTang option): the counters jump a few lines
 //             within the vertical back porch.
 //   input     keys from the host over the debug UART (the machine's K and J
-//             commands). No physical keyboard yet (the BL616 companion is
-//             still planned).
+//             commands), plus a USB keyboard through the BL616 (below).
 //   debug     the debug UART on header pins 29 (TX) / 30 (RX) and on the
 //             BL616's USB serial (FPGA pins 69 TX / 70 RX with Sipeed's stock
 //             firmware); the two RX lines are ANDed, TX goes to both. Pin 69
@@ -38,7 +37,10 @@
 //             HDMI stream (1, the default) and/or to the on-board MAX98357A
 //             amplifier over I2S (2, built and booting, not yet listened to).
 //
-// Still planned: the BL616 companion keyboard.
+//   keyboard  also a USB keyboard on the Nano's USB-C port through an OTG
+//             splitter, read by the BL616 running FPGA-Companion firmware
+//             (nexttang_companion_keyboard, build option COMPANION, off by
+//             default); simulated; on the board the Companion accepted it.
 // Capability limits on this part (2026-11-06 synthesis probe): no Spec256,
 // no Layer 2 block-RAM mirror, no DDR3 frame store or 720p scaler.
 
@@ -213,6 +215,12 @@ module nexttang_nano20k_zxnext (
     // PI_SPI_PINS: 1 the Pi Zero on header pins 25-28; 0 the debugger over the
     // debug UART (FT232R on 29/30, or the BL616's USB serial).
     localparam integer PI_SPI_PINS = 0;
+    // COMPANION: answer the BL616's FPGA-Companion firmware and take a USB
+    // keyboard from it. Once the Companion sees this FPGA it turns the Nano's
+    // USB-C port into a USB host for the keyboard (2026-11-12: the BL616's
+    // debugger and serial disappeared from the laptop), so it is off by
+    // default and the normal image never takes the port away from the laptop.
+    localparam integer COMPANION = 0;
 
     // keys and F1-F10 held from the host over the debug UART
     reg [39:0] keys_meta = 40'd0, keys_sync = 40'd0;
@@ -221,8 +229,35 @@ module nexttang_nano20k_zxnext (
         keys_meta <= host_keys; keys_sync <= keys_meta;
         functions_meta <= host_functions; functions_sync <= functions_meta;
     end
+    // A USB keyboard through the on-board BL616 running FPGA-Companion (a USB-C
+    // OTG splitter on the Nano's port): its SPI on pins 86/13/76/75
+    // (nexttang_companion_keyboard). Its keys and F-keys add to the host's.
+    wire [39:0] companion_keys;
+    wire [10:1] companion_functions;
+    wire        companion_seen;
+    wire        companion_message;
+    reg         companion_message_seen = 1'b0;
+    generate
+    if (COMPANION != 0) begin : companion
+        nexttang_companion_keyboard companion_keyboard (
+            .clock(clock_28), .reset(machine_reset),
+            .spi_cs_n(companion_cs_n), .spi_sclk(companion_sclk), .spi_mosi(companion_mosi),
+            .spi_miso(companion_miso),
+            .keys(companion_keys), .function_keys(companion_functions),
+            .seen(companion_seen), .keyboard_message(companion_message));
+        always @(posedge clock_28)
+            if (companion_message) companion_message_seen <= 1'b1;
+    end else begin : no_companion
+        assign companion_keys = 40'd0;
+        assign companion_functions = 10'd0;
+        assign companion_seen = 1'b0;
+        assign companion_message = 1'b0;
+        assign companion_miso = 1'b1;
+    end
+    endgenerate
+    wire [39:0] all_keys = keys_sync | companion_keys;
     nexttang_keyboard_matrix keyboard_scan (
-        .row_select(keyboard_rows), .keys(keys_sync), .columns(keyboard_columns));
+        .row_select(keyboard_rows), .keys(all_keys), .columns(keyboard_columns));
     wire uart_tx;
 
     nexttang_next_machine #(
@@ -283,7 +318,7 @@ module nexttang_nano20k_zxnext (
         .capture_x(9'd0),
         .capture_y(9'd0),
         .capture_pixel(9'd0),
-        .capture_protocol_error(1'b0),
+        .capture_protocol_error(companion_message_seen),   // status line: a Companion keyboard message arrived
         .frame_store_fault(1'b0),
 
         .core_audio_left(core_audio_left),
@@ -291,11 +326,11 @@ module nexttang_nano20k_zxnext (
 
         .keyboard_rows(keyboard_rows),
         .keyboard_columns(keyboard_columns),
-        .function_keys(functions_sync),
+        .function_keys(functions_sync | companion_functions),
         .left_joystick(12'b0),
         .right_joystick(12'b0),
-        .keyboard_connected(1'b0),
-        .input_active(|keys_sync),
+        .keyboard_connected(companion_seen),                 // status line: the BL616's Companion answered
+        .input_active(|all_keys),
         .host_keys(host_keys),
         .host_functions(host_functions),
 
@@ -304,7 +339,10 @@ module nexttang_nano20k_zxnext (
         .spi_sd0_select_n(spi_sd0_select_n),
         .spi_sd_miso(sd_miso),
 
-        .debug_uart_rx(debug_uart_rx && usb_uart_rx),
+        // With the Companion running, pins 69/70 are not the BL616's serial
+        // link any more: ignore 70 (its noise read as key commands) and keep
+        // 69 high.
+        .debug_uart_rx(debug_uart_rx && (usb_uart_rx || companion_seen)),
         .debug_uart_tx(uart_tx),
         .board_command_valid(board_command_valid),
         .board_command_byte(board_command_byte),
@@ -462,8 +500,7 @@ module nexttang_nano20k_zxnext (
     assign sd_dat2 = 1'b1;
 
     assign debug_uart_tx = uart_tx;
-    assign companion_irq_n = uart_tx;     // BL616 USB serial RX (stock firmware)
-    assign companion_miso = 1'b1;
+    assign companion_irq_n = companion_seen ? 1'b1 : uart_tx;   // BL616 serial RX (debugger firmware); Companion IRQ idle
     // ------------------------------------------------------------- audio
     // AUDIO bit 1: the core's mixed stereo to the on-board MAX98357A over I2S: signed,
     // DC removed (nexttang_zxnext_audio_pcm, one sample per I2S frame:
