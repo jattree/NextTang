@@ -40,7 +40,9 @@
 //   keyboard  also a USB keyboard on the Nano's USB-C port through an OTG
 //             splitter, read by the BL616 running FPGA-Companion firmware
 //             (nexttang_companion_keyboard, build option COMPANION, off by
-//             default); simulated; on the board the Companion accepted it.
+//             default); simulated; on the board it boots 10 of 10 with no
+//             phantom keys; real keys not yet tested (they need the Nano off
+//             the laptop, since the BL616 stays a programmer with a PC on it).
 // Capability limits on this part (2026-11-06 synthesis probe): no Spec256,
 // no Layer 2 block-RAM mirror, no DDR3 frame store or 720p scaler.
 
@@ -216,10 +218,15 @@ module nexttang_nano20k_zxnext (
     // debug UART (FT232R on 29/30, or the BL616's USB serial).
     localparam integer PI_SPI_PINS = 0;
     // COMPANION: answer the BL616's FPGA-Companion firmware and take a USB
-    // keyboard from it. Once the Companion sees this FPGA it turns the Nano's
-    // USB-C port into a USB host for the keyboard (2026-11-12: the BL616's
-    // debugger and serial disappeared from the laptop), so it is off by
-    // default and the normal image never takes the port away from the laptop.
+    // keyboard from it. The BL616's FPGA Partner loader stays the programmer
+    // when a PC is on the USB-C port and runs the Companion (USB host for the
+    // keyboard) when one is not, e.g. power and keyboard through a splitter.
+    // 2026-11-12: with the laptop attached this image kept the BL616 a
+    // programmer for 5 minutes and 10 of 10 reloads, no phantom keys, the
+    // FT232 debugger answering. An earlier build that drove the status-line
+    // UART onto pin 69 (the Companion's level-low IRQ) made the BL616 drop off
+    // USB until a power cycle; pin 69 now idles high once the Companion is
+    // seen. Off by default until real keys have been tested on the board.
     localparam integer COMPANION = 0;
 
     // keys and F1-F10 held from the host over the debug UART
