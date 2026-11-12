@@ -126,10 +126,16 @@ module nexttang_sdr_sdram_service #(
     wire       a_done_toggle;           // memory domain
     wire [31:0] a_word;                 // memory domain, stable once done
     reg  [1:0] a_lane = 2'd0;
-    reg        a_done_sync = 1'b0;      // completion, taken into the machine domain
+    // Completion crosses in two machine stages and the word is taken every
+    // cycle, so by the cycle a_done_sync changes, a_word_sync was taken a
+    // whole machine cycle after the word settled. (The machine clock rises
+    // half a memory cycle after the memory clock, so a word taken on the same
+    // edge as its toggle had only 5.9 ns and could arrive stale.)
+    reg        a_done_meta = 1'b0, a_done_sync = 1'b0;
     reg [31:0] a_word_sync = 32'd0;
     always @(posedge machine_clock) begin
-        a_done_sync <= a_done_toggle;
+        a_done_meta <= a_done_toggle;
+        a_done_sync <= a_done_meta;
         a_word_sync <= a_word;
     end
     wire       a_pending = a_toggle != a_done_sync;
@@ -158,10 +164,11 @@ module nexttang_sdr_sdram_service #(
     wire [31:0] c_word;
     reg        c_seen = 1'b0;
     reg        c_armed = 1'b1;          // the request has been low since the last ack
-    reg        c_done_sync = 1'b0;
+    reg        c_done_meta = 1'b0, c_done_sync = 1'b0;
     reg [31:0] c_word_sync = 32'd0;
     always @(posedge machine_clock) begin
-        c_done_sync <= c_done_toggle;
+        c_done_meta <= c_done_toggle;
+        c_done_sync <= c_done_meta;
         c_word_sync <= c_word;
     end
     wire       c_pending = c_toggle != c_done_sync;
@@ -197,8 +204,12 @@ module nexttang_sdr_sdram_service #(
     wire       b_pf_event = b_pf_toggle != b_pf_prev;
     wire       b_event = b_toggle != b_prev;
     wire       b_empty = b_head == b_tail;
-    wire       b_head_ready = (b_done - b_head) != 5'd0 && (b_done - b_head) <= (b_tail - b_head);
+    // b_done is registered here first: read combinationally from the memory
+    // domain it had 5.9 ns to reach b_data's enable (half a memory cycle).
+    reg  [4:0] b_done_s = 5'd0;
+    wire       b_head_ready = (b_done_s - b_head) != 5'd0 && (b_done_s - b_head) <= (b_tail - b_head);
     always @(posedge machine_clock) begin
+        b_done_s <= b_done;
         b_pf_prev <= b_pf_toggle;
         b_prev <= b_toggle;
         if (b_pf_event) begin
@@ -313,8 +324,18 @@ module nexttang_sdr_sdram_service #(
     wire       b_want = !b_fetch_stale && b_fetch != b_tail_m && !b_busy;
     wire       b_want_read = b_want && !b_slot_dup[b_fetch[3:0]];
 
-    wire a_new = a_toggle != a_seen_m;
-    wire c_new = c_toggle != c_seen_m;
+    // The request toggles are registered in the memory domain before the
+    // command decision: read combinationally they had 5.9 ns to get through
+    // it (the machine clock rises half a memory cycle after the memory
+    // clock) and missed by up to 1.8 ns. The request's address and data were
+    // set with the toggle, so they are a memory cycle old when used.
+    reg a_toggle_m = 1'b0, c_toggle_m = 1'b0;
+    always @(posedge memory_clock) begin
+        a_toggle_m <= a_toggle;
+        c_toggle_m <= c_toggle;
+    end
+    wire a_new = a_toggle_m != a_seen_m;
+    wire c_new = c_toggle_m != c_seen_m;
     wire refresh_now = refresh_owed[1] || (refresh_owed != 2'd0 && !a_new && !c_new);
 
     task automatic command(input [3:0] c);
@@ -358,7 +379,7 @@ module nexttang_sdr_sdram_service #(
             state <= S_INIT; init_count <= INIT_CYCLES[15:0]; init_wait <= 1'b1;
             sdram_cke <= 1'b0; ready <= 1'b0;
             sdram_dqm <= 4'hF; refresh_owed <= 2'd0; refresh_count <= REFRESH_CYCLES[15:0];
-            a_seen_m <= a_toggle; a_done_m <= a_toggle; c_seen_m <= c_toggle; c_done_m <= c_toggle;
+            a_seen_m <= a_toggle_m; a_done_m <= a_toggle_m; c_seen_m <= c_toggle_m; c_done_m <= c_toggle_m;
             fault_timeout <= 1'b0; a_age <= 16'd0; rd_pipe <= 0;
             b_busy <= 1'b0; b_fetch <= b_head_m; b_done_m <= b_head_m;
         end else case (state)
@@ -396,13 +417,13 @@ module nexttang_sdr_sdram_service #(
                     sdram_addr <= {2'b00, b_slot_address[b_fetch[3:0]][20:12]};
                     state <= S_OP;
                 end else if (a_new) begin
-                    a_seen_m <= a_toggle; a_age <= 16'd0;
+                    a_seen_m <= a_toggle_m; a_age <= 16'd0;
                     op_refresh <= 1'b0; op_port_c <= 1'b0; op_port_b <= 1'b0;
                     op_read <= !a_op_read_n; op_address <= a_op_address; op_data <= a_op_data;
                     command(C_ACT); sdram_ba <= a_op_address[11:10]; sdram_addr <= {2'b00, a_op_address[20:12]};
                     state <= S_OP;
                 end else if (c_new) begin
-                    c_seen_m <= c_toggle;
+                    c_seen_m <= c_toggle_m;
                     op_refresh <= 1'b0; op_port_c <= 1'b1; op_port_b <= 1'b0;
                     op_read <= !c_op_read_n; op_address <= c_op_address; op_data <= c_op_data;
                     command(C_ACT); sdram_ba <= c_op_address[11:10]; sdram_addr <= {2'b00, c_op_address[20:12]};

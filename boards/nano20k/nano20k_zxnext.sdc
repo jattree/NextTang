@@ -3,10 +3,13 @@
 create_clock -name clock_27 -period 37.037 [get_ports {clock_27}]
 
 // machine/memory rPLL: 84.375 MHz SDRAM clock and its divide-by-3 28.125 MHz
-// machine clock, both rising at time zero (three memory cycles per machine
-// cycle); CLKDIVs make 14 and 7 MHz from the machine clock.
+// machine clock (three memory cycles per machine cycle); CLKDIVs make 14 and
+// 7 MHz from the machine clock. Gowin's clock guide (UG286) has CLKOUTD3 rise
+// on a falling edge of CLKOUT, so the machine clock is declared half a memory
+// cycle (5.926 ns) after it. Until 2026-11-12 both were declared rising at
+// zero, which analysed every crossing between them 5.9 ns out.
 create_clock -name memory_clock -period 11.852 [get_pins {machine_pll/CLKOUT}]
-create_clock -name clock_28 -period 35.556 [get_pins {machine_pll/CLKOUTD3}]
+create_clock -name clock_28 -period 35.556 -waveform {5.926 23.704} [get_pins {machine_pll/CLKOUTD3}]
 create_generated_clock -name clock_14 -source [get_pins {machine_pll/CLKOUTD3}] -divide_by 2 [get_pins {divide_14/CLKOUT}]
 create_generated_clock -name clock_7 -source [get_pins {machine_pll/CLKOUTD3}] -divide_by 4 [get_pins {divide_7/CLKOUT}]
 
