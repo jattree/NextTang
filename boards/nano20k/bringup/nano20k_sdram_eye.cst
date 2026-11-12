@@ -1,0 +1,20 @@
+// Tang Nano 20K SDRAM eye scan: the pins it uses, from nano20k_v3923.cst. The SDRAM
+// needs no IO_LOC (the GW2AR-18 binds O_sdram_* and IO_sdram_* to the die by name).
+IO_LOC "clock_27" 4;
+IO_PORT "clock_27" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC "companion_irq_n" 69;
+IO_PORT "companion_irq_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[0]" 15;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[1]" 16;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[2]" 17;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[3]" 18;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[4]" 19;
+IO_PORT "led[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[5]" 20;
+IO_PORT "led[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "debug_uart_tx" 29;
+IO_PORT "debug_uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
