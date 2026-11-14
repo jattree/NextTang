@@ -129,6 +129,7 @@ module nexttang_nano20k_zxnext (
     wire serial_clock;      // 135 MHz
     wire pixel_clock;       // 27 MHz
     wire video_pll_lock;
+    wire video_pll_reset;   // W over the debug UART (below the machine)
     rPLL #(
         .FCLKIN("27"), .DEVICE("GW2AR-18C"),
         .IDIV_SEL(0), .FBDIV_SEL(4), .ODIV_SEL(4),   // 135 MHz, VCO 540 MHz
@@ -139,7 +140,7 @@ module nexttang_nano20k_zxnext (
         .CLKOUT_DLY_STEP(0), .CLKOUTP_DLY_STEP(0), .CLKFB_SEL("internal"),
         .CLKOUT_BYPASS("false"), .CLKOUTP_BYPASS("false"), .CLKOUTD_BYPASS("false")
     ) video_pll (
-        .CLKIN(clock_27), .CLKFB(1'b0), .RESET(1'b0), .RESET_P(1'b0),
+        .CLKIN(clock_27), .CLKFB(1'b0), .RESET(video_pll_reset), .RESET_P(1'b0),
         .FBDSEL(6'd0), .IDSEL(6'd0), .ODSEL(6'd0), .PSDA(4'd0), .DUTYDA(4'd0), .FDLY(4'd0),
         .CLKOUT(serial_clock), .LOCK(video_pll_lock),
         .CLKOUTP(), .CLKOUTD(), .CLKOUTD3()
@@ -201,6 +202,27 @@ module nexttang_nano20k_zxnext (
     wire        spi_sd0_select_n;
     wire        board_command_valid;
     wire [7:0]  board_command_byte;
+    // W over the debug UART resets the video PLL for about 37 us (1,024
+    // machine clocks, a clock that does not come from the video PLL); losing
+    // lock restarts everything video: the pixel divider, the serializers, the
+    // encoders and packets (pixel_reset) and hdmi_frame. The Elgato loses the
+    // picture for 1.7 s and gets it back unchanged.
+    //
+    // Keep this even if W is never sent. With the PLL's RESET tied low
+    // (d814676), 9 of 244 loads came up with no HDMI signal at all while
+    // NextZXOS ran, at three of four placements (p1r1 5/139, p1r2 0/30, p2r1
+    // 2/17, p2r2 2/58), and a 50/60 Hz switch did not bring it back. With
+    // RESET driven from this counter, the same four placements gave 0 in 230
+    // loads and 0 in 1,280 W restarts (2026-11-14). Why driving RESET from
+    // the fabric matters is not known; whether W recovers a lost signal was
+    // never seen, as none occurred.
+    reg [10:0] video_pll_reset_count = 11'd0;
+    always @(posedge clock_28)
+        if (board_command_valid && board_command_byte == "W")
+            video_pll_reset_count <= 11'd1024;
+        else if (video_pll_reset_count != 11'd0)
+            video_pll_reset_count <= video_pll_reset_count - 11'd1;
+    assign video_pll_reset = video_pll_reset_count != 11'd0;
 
     // Layer 2 from the SDRAM through port B (prefetched from the core's
     // lookahead), in every unit.
