@@ -92,6 +92,15 @@ IO_LOC "pi_mosi" 27;
 IO_PORT "pi_mosi" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
 IO_LOC "pi_sclk" 28;
 IO_PORT "pi_sclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+
+// Pi Zero UART (the Next's UART 1, for the accelerator): Pi pin 8 (TXD, GPIO 14)
+// to header 73, Pi pin 10 (RXD, GPIO 15) from header 74; the first two pins of
+// the left row from the USB-C end (2026-11-14).
+IO_LOC "pi_uart_txd" 73;
+IO_PORT "pi_uart_txd" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "pi_uart_rxd" 74;
+IO_PORT "pi_uart_rxd" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
 IO_LOC "debug_uart_tx" 29;
 IO_PORT "debug_uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
 IO_LOC "debug_uart_rx" 30;

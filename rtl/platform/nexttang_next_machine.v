@@ -231,7 +231,13 @@ module nexttang_next_machine #(
     input  wire        pi_ce0_n,
     input  wire        pi_sclk,
     input  wire        pi_mosi,
-    output wire        pi_miso
+    output wire        pi_miso,
+    // The Pi's serial port, the Next's UART 1 (GPIO 14/15, NextREG 0xA0), as
+    // a real Next's Pi Zero accelerator uses it: pi_uart_txd is the Pi's TXD
+    // (its GPIO 14), pi_uart_rxd drives the Pi's RXD (its GPIO 15). Tie
+    // pi_uart_txd high where there is no Pi.
+    input  wire        pi_uart_txd,
+    output wire        pi_uart_rxd
 );
     initial begin
         host_keys = 40'b0;
@@ -294,6 +300,12 @@ module nexttang_next_machine #(
     wire        pi_spi_sclk = PI_SPI_PINS != 0 ? pin_sclk_sync[1] : master_spi_sclk;
     wire        pi_spi_mosi = PI_SPI_PINS != 0 ? pin_mosi_sync[1] : master_spi_mosi;
     wire [27:0] core_gpio;
+    wire [27:0] core_gpio_en;
+    reg  [1:0]  pi_uart_txd_meta = 2'b11;
+    always @(posedge clock_28) pi_uart_txd_meta <= {pi_uart_txd_meta[0], pi_uart_txd};
+    wire        pi_uart_txd_sync = pi_uart_txd_meta[1];
+    assign      pi_uart_rxd = core_gpio_en[14] ? core_gpio[14]
+                            : core_gpio_en[15] ? core_gpio[15] : 1'b1;
     // Hardware breakpoints (rtl/debug/nexttang_breakpoints.vhd).
     wire [15:0] cpu_next_pc;
     wire        cpu_stopped;
@@ -465,14 +477,18 @@ module nexttang_next_machine #(
         // GPIO 8 to 11 carry the Pi debug slave's SPI (CE0, MISO, MOSI, SCLK).
         // The slave is opened without NextREG 0xA0 so the debugger works
         // whatever the Next's software has set.
-        .i_GPIO({16'b0, pi_spi_sclk, pi_spi_mosi, 1'b0, pi_spi_ce_n, 8'b0}),
+        // GPIO 14 and 15 carry UART 1 to the Pi. The core receives on GPIO 15
+        // (or 14 with NextREG 0xA0 bit 5) and sends the same TX on whichever
+        // of the two it enables, so the Pi's TXD feeds both inputs and the
+        // Pi's RXD takes the core's TX from either.
+        .i_GPIO({12'b0, pi_uart_txd_sync, pi_uart_txd_sync, 2'b0, pi_spi_sclk, pi_spi_mosi, 1'b0, pi_spi_ce_n, 8'b0}),
         .i_PI_SPI_SLAVE_FORCE(1'b1),
         .o_CPU_NEXT_PC(cpu_next_pc),
         .o_CPU_STOPPED(cpu_stopped),
         .i_CPU_BREAK(cpu_break),
         .o_MMU(core_mmu),
         .o_GPIO(core_gpio),
-        .o_GPIO_EN(),
+        .o_GPIO_EN(core_gpio_en),
 
         // The official core's Xilinx device DNA and XADC ports; the Gowin part
         // has neither.

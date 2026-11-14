@@ -91,6 +91,8 @@ module nexttang_nano20k_zxnext (
 
     input  wire        pi_ce0_n,
     output wire        pi_miso,
+    input  wire        pi_uart_txd,     // header 73: the Pi's TXD (Pi pin 8)
+    output wire        pi_uart_rxd,     // header 74: to the Pi's RXD (Pi pin 10)
     input  wire        pi_mosi,
     input  wire        pi_sclk,
     input  wire        debug_uart_rx,
@@ -363,6 +365,8 @@ module nexttang_nano20k_zxnext (
     nexttang_keyboard_matrix keyboard_scan (
         .row_select(keyboard_rows), .keys(all_keys), .columns(keyboard_columns));
     wire uart_tx;
+    wire machine_pi_uart_rxd;
+    assign pi_uart_rxd = PI_SPI_PINS != 0 ? machine_pi_uart_rxd : 1'b1;
 
     nexttang_next_machine #(
         .LAYER2_UNITS(LAYER2_UNITS),
@@ -458,7 +462,10 @@ module nexttang_nano20k_zxnext (
         .pi_ce0_n(pi_ce0_n),
         .pi_sclk(pi_sclk),
         .pi_mosi(pi_mosi),
-        .pi_miso(pi_miso)
+        .pi_miso(pi_miso),
+        // UART 1 to a Pi Zero accelerator, with the Pi pins (PI_SPI_PINS)
+        .pi_uart_txd(PI_SPI_PINS != 0 ? pi_uart_txd : 1'b1),
+        .pi_uart_rxd(machine_pi_uart_rxd)
     );
 
     // ------------------------------------------------------------ memory
