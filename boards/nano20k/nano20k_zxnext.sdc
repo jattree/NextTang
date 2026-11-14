@@ -73,19 +73,21 @@ set_multicycle_path -from [get_regs {sdram/a_op_* sdram/c_op_*}] -to [get_clocks
 set_multicycle_path -from [get_regs {sdram/a_op_* sdram/c_op_*}] -to [get_clocks {memory_clock}] -hold -end 1
 
 // SD card (SPI). SCK and MOSI leave from I/O-cell registers on clock_28's
-// rising edge; MISO is sampled by spi_master on a falling edge. Zero external
-// delays make the report give the FPGA's own share of each path (see the
-// report_timing lines below). First constrained build (2026-11-12): SCK reaches
-// its pin 6.19 ns after clock_28 rises; MISO must be at its pin by 14.06 ns
-// after that same edge plus 5.93 (19.99 ns), so after its SCK edge the card has
-// 19.99 - 12.11 = 7.9 ns, about 7.4 ns once the board is allowed for. The SD
-// spec lets a card take 14 ns: this sampling point (the official core's, at
-// 28 MHz CPU speed, SCK 14 MHz) relies on cards being quicker than the spec.
-// Jon's card is: 10 boots read the same 274,218 bytes. A MISO register in the
-// I/O cell would win about 3.7 ns if a card ever proves too slow.
+// rising edge. First constrained build (2026-11-12): SCK reaches its pin 6.19
+// ns after clock_28 rises. With the official sampling point (a falling edge)
+// MISO had to be back 17.78 ns after that edge, less the pin's 3.7 ns into the
+// fabric, which left the card 7.4 ns once the board is allowed for, against
+// the SD spec's 14 (at 28 MHz CPU speed, SCK 14 MHz). Since 2026-11-13 the
+// core's SPI master samples MISO on the rising edge after (spi_master
+// g_miso_late, SPI_MISO_LATE in the top), a whole clock_28 period after the
+// edge that moved SCK: the input delay is SCK's way out (6.19) + the board
+// (0.5) + a spec card's 14 ns = 20.69 ns against that edge, captured one
+// period later, so no multicycle. Min 0: the card holds MISO until after the
+// next SCK fall, a period later still. SCK, MOSI and CS keep zero output
+// delays: the report gives their own share (they leave from I/O registers).
 set_output_delay -clock clock_28 -max 0 [get_ports {sd_clk sd_mosi sd_cs}]
 set_output_delay -clock clock_28 -min 0 [get_ports {sd_clk sd_mosi sd_cs}]
-set_input_delay -clock clock_28 -max 0 [get_ports {sd_miso}]
+set_input_delay -clock clock_28 -max 20.69 [get_ports {sd_miso}]
 set_input_delay -clock clock_28 -min 0 [get_ports {sd_miso}]
 
 // Any report_timing line replaces the default worst-path tables, so those come

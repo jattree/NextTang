@@ -82,6 +82,7 @@ architecture rtl of hdmi_frame is
    signal scanlines      : std_logic_vector(1 downto 0) := (others => '0');
 
    signal rgb_sync       : std_logic := '0';
+   signal rgb_sync_meta  : std_logic := '0';   -- NextTang
 
    type   state_t        is (S_ASYNC_RESET, S_RGB_SYNC, S_FRAME_WAIT, S_RUNNING);
    signal state          : state_t;
@@ -137,6 +138,9 @@ architecture rtl of hdmi_frame is
    signal fp_extra       : signed(11 downto 0) := (others => '0');   -- this frame's front porch change
    signal fp_hold        : unsigned(6 downto 0) := (others => '0');  -- front porch lines still to repeat
    signal frame_waddr    : std_logic_vector(12 downto 0) := (others => '0');
+   signal frame_waddr_h  : std_logic_vector(12 downto 0) := (others => '0');   -- frame_waddr, taken in i_CLK_HDMI's domain
+   signal running_rgb_sync : std_logic_vector(1 downto 0) := (others => '0'); -- running, in i_CLK_RGB's domain
+   signal running_rgb    : std_logic;
    signal rgb_gap        : unsigned(11 downto 0) := (others => '0');
 
 begin
@@ -150,13 +154,18 @@ begin
       end if;
    end process;
 
+   -- NextTang: i_rgb_sync comes from the core's 7 MHz domain, asynchronous to
+   -- i_CLK_HDMI on boards whose pixel clock has its own PLL; one more register
+   -- before the state machine uses it.
    process (i_CLK_HDMI, i_reset_async_n)
    begin
       if i_reset_async_n = '0' then
+         rgb_sync_meta <= '0';
          rgb_sync <= '0';
       elsif rising_edge(i_CLK_HDMI) then
+         rgb_sync_meta <= i_rgb_sync;
          if state = S_RGB_SYNC then
-            rgb_sync <= i_rgb_sync;
+            rgb_sync <= rgb_sync_meta;
          else
             rgb_sync <= '0';
          end if;
@@ -233,6 +242,20 @@ begin
       end if;
    end process;
    relock <= '1' when G_RELOCK and state = S_RUNNING and (frame_start_sync(2) xor frame_start_sync(1)) = '1' else '0';
+
+   -- NextTang: G_RELOCK. frame_waddr is a 13-bit value from i_CLK_RGB's
+   -- domain, written on the same edge as frame_start_toggle and then still
+   -- for a frame. Taken here when the synchronised toggle moves (two
+   -- i_CLK_HDMI edges later) rather than read whenever the first active line
+   -- comes round, which could catch it changing.
+   frame_waddr_take : process (i_CLK_HDMI)
+   begin
+      if rising_edge(i_CLK_HDMI) then
+         if (frame_start_sync(2) xor frame_start_sync(1)) = '1' then
+            frame_waddr_h <= frame_waddr;
+         end if;
+      end if;
+   end process;
 
    relock_control : process (i_CLK_HDMI)
       variable q, extra, flen : signed(11 downto 0);
@@ -394,10 +417,22 @@ begin
 
    -- pixel buffer
    
+   -- NextTang: G_RELOCK. running is an i_CLK_HDMI signal; two registers
+   -- bring it into i_CLK_RGB's domain before it holds waddr at zero. (The
+   -- re-lock reads from frame_waddr, so the two clocks' extra delay moves
+   -- nothing on screen; without G_RELOCK, as before.)
    process (i_CLK_RGB)
    begin
       if rising_edge(i_CLK_RGB) then
-         if running = '0' then
+         running_rgb_sync <= running_rgb_sync(0) & running;
+      end if;
+   end process;
+   running_rgb <= running_rgb_sync(1) when G_RELOCK else running;
+
+   process (i_CLK_RGB)
+   begin
+      if rising_edge(i_CLK_RGB) then
+         if running_rgb = '0' then
             waddr <= (others => '0');
          elsif i_CLK_RGB_EN = '1' then
             waddr <= waddr + 1;
@@ -411,7 +446,7 @@ begin
          if running = '0' then
             raddr <= (others => '0');
          elsif G_RELOCK and h_last = '1' and vcnt = i_VACTIVE - 1 then   -- NextTang: G_RELOCK, the frame's first line
-            raddr <= frame_waddr;
+            raddr <= frame_waddr_h;
          elsif hdmi_active = '1' then
             raddr <= raddr + 1;
          elsif (v_active = '1') and (hsync_n = '0') and (vcnt(0) /= i_VACTIVE(0)) then
@@ -424,7 +459,7 @@ begin
    begin
       if rising_edge(i_CLK_HDMI) then
          if G_RELOCK and h_last = '1' and vcnt = i_VACTIVE - 1 then   -- NextTang: G_RELOCK
-            raddr_lag <= frame_waddr;
+            raddr_lag <= frame_waddr_h;
          elsif (hsync_n = '0') and (vcnt(0) = i_VACTIVE(0)) then
             raddr_lag <= raddr;
          end if;

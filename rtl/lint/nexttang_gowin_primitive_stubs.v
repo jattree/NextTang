@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 NextTang contributors
 
-// Lint-only stand-ins for the three Gowin hard primitives the project
+// Lint-only stand-ins for the Gowin hard primitives the project
 // instantiates directly. They exist so `scripts/hdl_lint.sh` can elaborate a
 // whole board profile without the vendor toolchain installed; nothing here is
 // ever handed to synthesis, and no board build lists this file.
@@ -14,6 +14,7 @@
 //               boards/console138k/nexttang_console138k_usb_pll.v
 //   OSER10      rtl/video/nexttang_gowin_hdmi_serializer.sv
 //   ELVDS_OBUF  rtl/video/nexttang_gowin_hdmi_serializer.sv
+//   TLVDS_OBUF  boards/nano20k/nexttang_nano20k_zxnext.v
 //
 // The parameter list is the set the board wrappers reach with `defparam`. A
 // `defparam` into a black box is rejected by the linter, so the names have to
@@ -144,6 +145,15 @@ module OSER10 (
 endmodule
 
 module ELVDS_OBUF (
+    output wire O,
+    output wire OB,
+    input  wire I
+);
+    assign O = 1'b0;
+    assign OB = 1'b1;
+endmodule
+
+module TLVDS_OBUF (
     output wire O,
     output wire OB,
     input  wire I

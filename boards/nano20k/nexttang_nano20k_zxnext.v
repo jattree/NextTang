@@ -16,7 +16,7 @@
 //             set the status line's overrun flag.
 //   video     the official hdmi_frame (576p50 / 480p60 from the core's own
 //             frame, through a line buffer) into nexttang_tmds_encoder and
-//             OSER10 / ELVDS_OBUF, as DVI (no audio yet). The pixel clock
+//             OSER10 / TLVDS_OBUF, as DVI (no audio yet). The pixel clock
 //             comes from the crystal, not locked to the core's frame as on
 //             the official board, so hdmi_frame re-locks every frame
 //             (G_RELOCK, a NextTang option): the counters jump a few lines
@@ -277,7 +277,12 @@ module nexttang_nano20k_zxnext (
         // above about 86 percent full met timing on paper and failed on the
         // board (2026-11-12); builds at 82-83 percent booted every time.
         .BREAKPOINT_SLOTS(2),
-        .PI_SPI_PINS(PI_SPI_PINS)
+        .PI_SPI_PINS(PI_SPI_PINS),
+        // SD MISO sampled half a CPU clock later: SCK leaves through an
+        // I/O-cell register half a clock after the core moves it, so with the
+        // official sampling point the card had 7.4 ns of the SD spec's 14 at
+        // 28 MHz (nano20k_zxnext.sdc); about 25 ns this way.
+        .SPI_MISO_LATE(1)
     ) machine (
         .clock_28(clock_28),
         .clock_28_n(clock_28_n),
@@ -396,13 +401,37 @@ module nexttang_nano20k_zxnext (
     // numbers).
     wire        hdmi_blank, hdmi_hsync_n, hdmi_vsync_n;
     wire [8:0]  hdmi_rgb;
-    wire        video_60 = core_video_60;
+    // video_60 (NextREG 05 bit 2) is a clock_28 signal; two registers bring it
+    // into the pixel clock's domain before it picks the timing numbers below.
+    reg  [1:0]  video_60_sync = 2'b00;
+    reg         video_60 = 1'b0;
+    always @(posedge pixel_clock) begin
+        video_60_sync <= {video_60_sync[0], core_video_60};
+        video_60 <= video_60_sync[1];
+    end
+    wire        video_60_change = video_60 != video_60_sync[1];
     // G_RELOCK: the pixel clock comes from the crystal, 24/25 of the machine
     // clock, so it cannot match the core's frame; re-lock every frame
     // (tests/sim/video/tb_hdmi_frame_relock.vhd: without it the picture drifts
     // through the line buffer within a few frames).
+    // hdmi_frame's reset leaves on a pixel clock edge. machine_reset is a
+    // clock_28 signal and the two clocks are asynchronous, so released straight
+    // into hdmi_frame (until 2026-11-13) its registers could leave reset on
+    // different pixel edges, a path no timing check covers. machine_reset
+    // follows only the PLL lock and the SDRAM's start-up; the Next's soft and
+    // hard resets (core_reset) never reach the video, so anything this reset
+    // leaves wrong stays wrong until the next load.
+    // A 50/60 Hz change also restarts the frame: the counters may be past the
+    // new last line. (The core's own HDMI reset, core_hdmi_reset, also fires
+    // on machine timing changes, which the re-lock follows without a restart.)
+    wire frame_reset_async = !video_pll_lock || machine_reset;
+    reg [2:0] frame_reset_sync = 3'b111;
+    always @(posedge pixel_clock or posedge frame_reset_async)
+        if (frame_reset_async) frame_reset_sync <= 3'b111;
+        else if (video_60_change) frame_reset_sync <= 3'b111;
+        else frame_reset_sync <= {frame_reset_sync[1:0], 1'b0};
     hdmi_frame #(.G_RELOCK(1)) frame (
-        .i_reset_async_n(video_pll_lock && !machine_reset),
+        .i_reset_async_n(!frame_reset_sync[2]),
         .i_scanlines(2'b00),
         .i_CLK_RGB(clock_14), .i_CLK_RGB_EN(core_hdmi_pixel),
         .i_rgb_sync(core_hdmi_lock), .i_rgb(core_rgb),
@@ -462,12 +491,18 @@ module nexttang_nano20k_zxnext (
             .control_zero(1'b0), .control_one(1'b0), .data_enable(!hdmi_blank), .symbol(symbol_red));
     end
     endgenerate
-    // The serializers are not reset: released from pixel_reset they missed
-    // recovery against the 135 MHz clock by about 0.5 ns in every build (the
-    // "3 endpoints violated" in Gowin's summary), and some loads came up with
-    // a black HDMI picture while NextZXOS ran (2026-11-12). They settle within
-    // a few pixel clocks of the PLL locking.
-    wire serializer_reset = 1'b0;
+    // The serializers share the pixel divider's reset, the video PLL's lock, as
+    // Gowin's own DVI transmitter wires them (OSER10 RESET = ~rst_n with CLKDIV
+    // RESETN = rst_n = pll_lock & key), so the divider and the serializers'
+    // word counters start together. Released from pixel_reset (until 3f7950b)
+    // they missed recovery against the 135 MHz clock by about 0.5 ns in every
+    // build; with no reset at all (3f7950b to 1a5ea94) their start was left to
+    // placement. Some loads of 1a5ea94 came up with a black HDMI picture while
+    // NextZXOS ran (2 of 32, 2026-11-12), but this reset alone did not cure
+    // that (1 to 3 black in about 25 loads, 2026-11-13); with hdmi_frame's
+    // synchronised reset as well, 0 of 39. Which change cured it is not
+    // isolated.
+    wire serializer_reset = !video_pll_lock;
     wire [2:0] serial_data;
     OSER10 serialize_blue (.D0(symbol_blue[0]), .D1(symbol_blue[1]), .D2(symbol_blue[2]), .D3(symbol_blue[3]),
         .D4(symbol_blue[4]), .D5(symbol_blue[5]), .D6(symbol_blue[6]), .D7(symbol_blue[7]), .D8(symbol_blue[8]),
@@ -478,10 +513,19 @@ module nexttang_nano20k_zxnext (
     OSER10 serialize_red (.D0(symbol_red[0]), .D1(symbol_red[1]), .D2(symbol_red[2]), .D3(symbol_red[3]),
         .D4(symbol_red[4]), .D5(symbol_red[5]), .D6(symbol_red[6]), .D7(symbol_red[7]), .D8(symbol_red[8]),
         .D9(symbol_red[9]), .PCLK(pixel_clock), .FCLK(serial_clock), .RESET(serializer_reset), .Q(serial_data[2]));
-    ELVDS_OBUF tmds_clock_out (.I(pixel_clock), .O(tmds_clk_p), .OB(tmds_clk_n));
-    ELVDS_OBUF tmds_out_0 (.I(serial_data[0]), .O(tmds_d_p[0]), .OB(tmds_d_n[0]));
-    ELVDS_OBUF tmds_out_1 (.I(serial_data[1]), .O(tmds_d_p[1]), .OB(tmds_d_n[1]));
-    ELVDS_OBUF tmds_out_2 (.I(serial_data[2]), .O(tmds_d_p[2]), .OB(tmds_d_n[2]));
+    // The TMDS clock leaves through a fourth serializer (five ones, five
+    // zeros per pixel), so it takes the same path to its pin as the data, and
+    // all four pairs use the true LVDS buffers at LVDS25 3.5 mA, both as in
+    // Gowin's DVI transmitter. Until 2026-11-13 the pixel clock went straight
+    // from the divider to an emulated-LVDS buffer.
+    wire serial_clock_out;
+    OSER10 serialize_clock (.D0(1'b0), .D1(1'b0), .D2(1'b0), .D3(1'b0), .D4(1'b0),
+        .D5(1'b1), .D6(1'b1), .D7(1'b1), .D8(1'b1), .D9(1'b1),
+        .PCLK(pixel_clock), .FCLK(serial_clock), .RESET(serializer_reset), .Q(serial_clock_out));
+    TLVDS_OBUF tmds_clock_out (.I(serial_clock_out), .O(tmds_clk_p), .OB(tmds_clk_n));
+    TLVDS_OBUF tmds_out_0 (.I(serial_data[0]), .O(tmds_d_p[0]), .OB(tmds_d_n[0]));
+    TLVDS_OBUF tmds_out_1 (.I(serial_data[1]), .O(tmds_d_p[1]), .OB(tmds_d_n[1]));
+    TLVDS_OBUF tmds_out_2 (.I(serial_data[2]), .O(tmds_d_p[2]), .OB(tmds_d_n[2]));
 
     // ------------------------------------------------------- other pins
     // SD on the core's SPI, as the official board drives it (zxnext_top_issue4):

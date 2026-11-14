@@ -40,7 +40,10 @@ entity zxnext is
       g_option             : unsigned(15 downto 0);
       -- NextTang: the 16K units of memory Layer 2 can read, passed to the
       -- layer2 entity.
-      g_layer2_units        : std_logic_vector(127 downto 0) := (others => '1')
+      g_layer2_units        : std_logic_vector(127 downto 0) := (others => '1');
+      -- NextTang: 1 samples SD/Pi SPI MISO half a CPU clock later (spi_master
+      -- g_miso_late), for boards whose SCK reaches the card late.
+      g_spi_miso_late       : integer := 0
    );
 
    -- g_option : build-time module options
@@ -3687,6 +3690,9 @@ end generate;
    -- NextTang: the MiSTer-era SPI master, with clock enables; the official
    -- core's rewritten one (for 3.02) is not adopted yet.
    spi_master_mod: entity work.spi_master
+   generic map (
+      g_miso_late    => g_spi_miso_late   -- NextTang
+   )
    port map (
       clock_i        => i_CLK_CPU,
       cen_r_i        => i_CPU_CEN_R,   -- NextTang

@@ -42,6 +42,15 @@ use ieee.numeric_std.all;
 use ieee.std_logic_unsigned.all;
 
 entity spi_master is
+   generic (
+      -- NextTang: 1 samples MISO on the enabled rising edge after the usual
+      -- falling one, half a CPU clock later, for boards whose SCK reaches the
+      -- card late (Nano 20K: an I/O-cell register and 6 ns of output path
+      -- left the card 7.4 ns of the spec's 14 at 28 MHz). The card changes
+      -- MISO only after SCK falls, which is launched at the next enabled
+      -- falling edge, so the later sample still sees this bit. 0: as official.
+      g_miso_late    : integer := 0
+   );
    port (
       clock_i        : in std_logic;
       cen_r_i        : in std_logic := '1';   -- NextTang: clock_i edge enables
@@ -70,6 +79,10 @@ architecture rtl of spi_master is
    signal sck              : std_logic := '0';
    signal shift            : std_logic_vector(8 downto 0) := (others => '1');
    signal miso_dat         : std_logic_vector(7 downto 0);
+   -- NextTang: g_miso_late
+   signal sample_due       : std_logic := '0';   -- this falling edge was a sampling edge
+   signal miso_late        : std_logic := '1';   -- the bit, taken on the rising edge after
+   signal miso_now         : std_logic;          -- the received bit 0 as the byte is published
 
 begin
 
@@ -118,13 +131,44 @@ begin
             end if;
          elsif counter_is_zero = '0' then
             if sck = '0' then
-               shift(0) <= spi_miso_i;
-            else
+               if g_miso_late = 0 then
+                  shift(0) <= spi_miso_i;
+               end if;
+            elsif g_miso_late = 0 then
                shift <= shift(7 downto 0) & '1';
+            else
+               shift <= shift(7 downto 1) & miso_late & '1';   -- NextTang: miso_late stands in for shift(0)
             end if;
          end if;
       end if;
    end process;
+
+   -- NextTang: g_miso_late. sample_due marks the falling edges that would
+   -- have sampled; the rising edge after one takes the bit into miso_late,
+   -- which the next shifting edge moves up as it would have moved shift(0).
+   -- No register here is written on both edges.
+   process (clock_i)
+   begin
+      if falling_edge(clock_i) and cen_f_i = '1' then
+         if reset_i = '1' or spi_begin = '1' or counter_is_zero = '1' then
+            sample_due <= '0';
+         else
+            sample_due <= not sck;
+         end if;
+      end if;
+   end process;
+
+   process (clock_i)
+   begin
+      if rising_edge(clock_i) and cen_r_i = '1' then
+         if sample_due = '1' then
+            miso_late <= spi_miso_i;
+         end if;
+      end if;
+   end process;
+
+   -- the last bit is sampled on the same rising edge that publishes the byte
+   miso_now <= spi_miso_i when sample_due = '1' else miso_late;
 
    -- miso data
    
@@ -132,7 +176,11 @@ begin
    begin
       if rising_edge(clock_i) and cen_r_i = '1' then
          if counter_is_zero = '1' then
-            miso_dat <= shift(7 downto 0);
+            if g_miso_late = 0 then
+               miso_dat <= shift(7 downto 0);
+            else
+               miso_dat <= shift(7 downto 1) & miso_now;   -- NextTang: g_miso_late
+            end if;
          end if;
       end if;
    end process;

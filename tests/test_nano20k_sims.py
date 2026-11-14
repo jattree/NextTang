@@ -1,7 +1,8 @@
 """Simulations behind the Tang Nano 20K board: the SDR SDRAM service (ports A
 and C, and Layer 2 on port B), the I2S transmitter, hdmi_frame's G_RELOCK
-option, where HDMI data islands go in hdmi_frame's output, and the BL616
-FPGA-Companion keyboard target."""
+option, where HDMI data islands go in hdmi_frame's output, the BL616
+FPGA-Companion keyboard target, and the SPI master's late MISO sampling
+against an SD card through the Nano's pins."""
 
 from pathlib import Path
 import shutil
@@ -70,6 +71,37 @@ class HdmiFrameRelockTest(unittest.TestCase):
                               f"-gCORE_CYC={cycles}", f"-gCORE_LINES={lines}", f"-gLOCK_LINE={lock}",
                               "--ieee-asserts=disable"], Path(directory))
                 self.assertIn("PASS", output, output)
+
+
+@unittest.skipUnless(shutil.which("ghdl"), "ghdl not installed")
+class SpiMasterLateMisoTest(unittest.TestCase):
+    """tests/sim/zxnext/tb_spi_master.vhd: SCK out through the Nano's I/O
+    register and 6.44 ns of pin and board, MISO back in 3.95 ns. The official
+    sampling point leaves a card 7.4 ns at 28 MHz (nano20k_zxnext.sdc), so a
+    14 ns card (the SD spec's limit) fails there; g_miso_late gives about 25."""
+
+    def test_card_delays_and_cpu_speeds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            flags = ["--std=08", "-frelaxed", "-fsynopsys", f"--workdir={directory}"]
+            run(["ghdl", "-a", *flags,
+                 str(REPO_ROOT / "rtl" / "serial" / "spi_master.vhd"),
+                 str(SIM / "zxnext" / "tb_spi_master.vhd")], REPO_ROOT)
+            run(["ghdl", "-e", *flags, "tb_spi_master"], Path(directory))
+
+            def simulate(late: int, divide: int, stretch: bool, card_ps: int) -> str:
+                return run(["ghdl", "-r", *flags, "tb_spi_master", f"-gMISO_LATE={late}",
+                            f"-gDIVIDE={divide}", f"-gSTRETCH={'true' if stretch else 'false'}",
+                            f"-gCARD_PS={card_ps}", "--ieee-asserts=disable"], Path(directory))
+
+            # the official sampling point: a 7 ns card works, a 14 ns one fails at 28 MHz
+            self.assertIn("PASS", simulate(0, 1, True, 7000))
+            self.assertIn("FAIL", simulate(0, 1, False, 14000))
+            # late sampling: a 14 ns card at every CPU speed, with contention; 24 ns at 28 MHz
+            for divide in (1, 2, 4, 8):
+                output = simulate(1, divide, True, 14000)
+                self.assertIn("PASS", output, f"divide {divide}: {output}")
+            self.assertIn("PASS", simulate(1, 1, False, 24000))
+            self.assertIn("PASS", simulate(1, 1, True, 2000))
 
 
 @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "iverilog not installed")

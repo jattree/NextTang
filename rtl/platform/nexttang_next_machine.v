@@ -141,7 +141,10 @@ module nexttang_next_machine #(
     // debug UART (as above). 1: it is the board's pins pi_ce0_n, pi_sclk,
     // pi_mosi and pi_miso, for a real Raspberry Pi (the Nano 20K's Pi Zero);
     // the UART's Pi protocol is then unused.
-    parameter integer PI_SPI_PINS = 0
+    parameter integer PI_SPI_PINS = 0,
+    // 1: the core's SPI master samples MISO half a CPU clock later
+    // (spi_master g_miso_late), for boards whose SD clock reaches the card late.
+    parameter integer SPI_MISO_LATE = 0
 ) (
     // clocks and resets
     input  wire        clock_28,
@@ -313,6 +316,7 @@ module nexttang_next_machine #(
         .g_sub_version(8'h05),   // official core 3.02.05
         .g_video_inc(2'b10),
         .g_layer2_units(LAYER2_UNITS),
+        .g_spi_miso_late(SPI_MISO_LATE),
         .g_machine_id(8'h0A),
         .g_board_issue(4'h2),
         .g_option(CORE_OPTION)
