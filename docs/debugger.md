@@ -44,9 +44,17 @@ host/debug/bin/nexttang-debug --spi /dev/spidev0.0 status
 host/debug/bin/nexttang-debug --spi /dev/spidev0.0 pause
 ```
 
-Mode 0, one transfer per command, 500 kHz by default (`--spi-speed`); the
+Mode 0, one transfer per command, 2 MHz by default (`--spi-speed`); the
 slave samples SCLK through synchronisers on the 28 MHz machine clock.
-Not yet tried on hardware.
+Hardware-verified on a Nano 20K with a Pi Zero W (2026-11-14): status,
+NextREGs, pause, registers, memory and resume work. 0.5 to 3 MHz read clean
+(300 NextREG reads and 5 x 4 KB peeks each); 4 MHz and above return wrong data.
+At 2 MHz a NextREG read takes 0.3 ms and memory reads about 160 KB/s inside one
+process; each CLI call adds about 1.5 s of Python start-up on a Zero W.
+
+Wiring (Pi physical pin -> Nano 20K FPGA pin): 19 MOSI -> 27, 21 MISO -> 26,
+23 SCLK -> 28, 24 CE0 -> 25, and a ground (the Nano's left header from the
+USB-C end runs 27, 28, 25, 26, 29, 30). Build with `--pi-pins 1`.
 
 ## DeZog in VS Code
 

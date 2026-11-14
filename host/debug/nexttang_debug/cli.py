@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--spi", metavar="DEVICE",
                         help="run on a Raspberry Pi wired to the Pi debug slave: its spidev device, "
                              "such as /dev/spidev0.0, instead of the debug UART")
-    parser.add_argument("--spi-speed", type=int, default=500_000, help="SPI clock in Hz (default 500000)")
+    parser.add_argument("--spi-speed", type=int, default=2_000_000, help="SPI clock in Hz (default 2000000; 4 MHz and above fail)")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
     commands.add_parser("version")

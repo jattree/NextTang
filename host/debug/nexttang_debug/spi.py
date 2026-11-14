@@ -6,10 +6,11 @@ one command is one transfer with chip select held, mode 0, MSB first, as
 rtl/debug/nexttang_pi_spi_master.vhd drives the same slave from the FPGA.
 
 Standard library only: the transfer is the Linux spidev ioctl
-(SPI_IOC_MESSAGE), so the Pi needs no spidev Python package. Keep the clock
-modest (default 500 kHz): the slave samples SCLK through synchronisers on the
-28 MHz machine clock, and a main-memory byte must be ready before the next
-edge.
+(SPI_IOC_MESSAGE), so the Pi needs no spidev Python package. The slave samples
+SCLK through synchronisers on the 28 MHz machine clock, and a main-memory byte
+must be ready before the next edge. Measured on a Nano 20K with a Pi Zero W
+(2026-11-14, 300 NextREG reads and 5 x 4 KB peeks per speed): 0.5, 1, 2 and
+3 MHz all clean; 4 and 6 MHz every read wrong. The default is 2 MHz.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ def pack_transfer(tx_address: int, rx_address: int, length: int, speed_hz: int) 
 
 
 class SpiLink:
-    def __init__(self, device: str = "/dev/spidev0.0", speed_hz: int = 500_000) -> None:
+    def __init__(self, device: str = "/dev/spidev0.0", speed_hz: int = 2_000_000) -> None:
         self.speed_hz = speed_hz
         self.fd = os.open(device, os.O_RDWR)
         fcntl.ioctl(self.fd, SPI_IOC_WR_MODE, struct.pack("B", 0))
