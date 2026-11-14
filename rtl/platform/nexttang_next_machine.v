@@ -237,7 +237,13 @@ module nexttang_next_machine #(
     // (its GPIO 14), pi_uart_rxd drives the Pi's RXD (its GPIO 15). Tie
     // pi_uart_txd high where there is no Pi.
     input  wire        pi_uart_txd,
-    output wire        pi_uart_rxd
+    output wire        pi_uart_rxd,
+    // The Pi's I2S audio into the Next (NextREG 0xA2; AlpineNext sets 0xD2:
+    // the Pi is master and drives its data on GPIO 21): bit clock (Pi GPIO 18),
+    // word clock (GPIO 19) and data (GPIO 21). Tie low where there is no Pi.
+    input  wire        pi_i2s_bclk,
+    input  wire        pi_i2s_lrclk,
+    input  wire        pi_i2s_data
 );
     initial begin
         host_keys = 40'b0;
@@ -304,6 +310,11 @@ module nexttang_next_machine #(
     reg  [1:0]  pi_uart_txd_meta = 2'b11;
     always @(posedge clock_28) pi_uart_txd_meta <= {pi_uart_txd_meta[0], pi_uart_txd};
     wire        pi_uart_txd_sync = pi_uart_txd_meta[1];
+    reg  [5:0]  pi_i2s_meta = 6'd0;      // {data, lrclk, bclk} x 2 stages
+    always @(posedge clock_28) pi_i2s_meta <= {pi_i2s_meta[2:0], pi_i2s_data, pi_i2s_lrclk, pi_i2s_bclk};
+    wire        pi_i2s_bclk_sync = pi_i2s_meta[3];
+    wire        pi_i2s_lrclk_sync = pi_i2s_meta[4];
+    wire        pi_i2s_data_sync = pi_i2s_meta[5];
     assign      pi_uart_rxd = core_gpio_en[14] ? core_gpio[14]
                             : core_gpio_en[15] ? core_gpio[15] : 1'b1;
     // Hardware breakpoints (rtl/debug/nexttang_breakpoints.vhd).
@@ -481,7 +492,10 @@ module nexttang_next_machine #(
         // (or 14 with NextREG 0xA0 bit 5) and sends the same TX on whichever
         // of the two it enables, so the Pi's TXD feeds both inputs and the
         // Pi's RXD takes the core's TX from either.
-        .i_GPIO({12'b0, pi_uart_txd_sync, pi_uart_txd_sync, 2'b0, pi_spi_sclk, pi_spi_mosi, 1'b0, pi_spi_ce_n, 8'b0}),
+        // GPIO 18-21 carry the Pi's I2S: clocks on 18/19 and its data on 21
+        // (NextREG 0xA2 bit 4 set) or 20 (bit 4 clear); the data feeds both.
+        .i_GPIO({6'b0, pi_i2s_data_sync, pi_i2s_data_sync, pi_i2s_lrclk_sync, pi_i2s_bclk_sync,
+                 2'b0, pi_uart_txd_sync, pi_uart_txd_sync, 2'b0, pi_spi_sclk, pi_spi_mosi, 1'b0, pi_spi_ce_n, 8'b0}),
         .i_PI_SPI_SLAVE_FORCE(1'b1),
         .o_CPU_NEXT_PC(cpu_next_pc),
         .o_CPU_STOPPED(cpu_stopped),

@@ -93,6 +93,9 @@ module nexttang_nano20k_zxnext (
     output wire        pi_miso,
     input  wire        pi_uart_txd,     // header 73: the Pi's TXD (Pi pin 8)
     output wire        pi_uart_rxd,     // header 74: to the Pi's RXD (Pi pin 10)
+    input  wire        pi_i2s_bclk,     // header 77: Pi pin 12 (GPIO 18)
+    input  wire        pi_i2s_lrclk,    // header 31: Pi pin 35 (GPIO 19)
+    input  wire        pi_i2s_data,     // header 42: Pi pin 40 (GPIO 21)
     input  wire        pi_mosi,
     input  wire        pi_sclk,
     input  wire        debug_uart_rx,
@@ -255,6 +258,9 @@ module nexttang_nano20k_zxnext (
     // COMPANION_REPORT: 1 reports the Companion's SPI traffic on the debug UART
     // (diagnostic; see the companion block below).
     localparam integer COMPANION_REPORT = 0;
+    // PI_I2S: 1 takes the Pi's I2S audio into the Next (with PI_SPI_PINS); 0
+    // ties the inputs low so the core's Pi audio path is optimised away.
+    localparam integer PI_I2S = 0;
 
     // keys and F1-F10 held from the host over the debug UART
     reg [39:0] keys_meta = 40'd0, keys_sync = 40'd0;
@@ -465,7 +471,10 @@ module nexttang_nano20k_zxnext (
         .pi_miso(pi_miso),
         // UART 1 to a Pi Zero accelerator, with the Pi pins (PI_SPI_PINS)
         .pi_uart_txd(PI_SPI_PINS != 0 ? pi_uart_txd : 1'b1),
-        .pi_uart_rxd(machine_pi_uart_rxd)
+        .pi_uart_rxd(machine_pi_uart_rxd),
+        .pi_i2s_bclk(PI_SPI_PINS != 0 && PI_I2S != 0 ? pi_i2s_bclk : 1'b0),
+        .pi_i2s_lrclk(PI_SPI_PINS != 0 && PI_I2S != 0 ? pi_i2s_lrclk : 1'b0),
+        .pi_i2s_data(PI_SPI_PINS != 0 && PI_I2S != 0 ? pi_i2s_data : 1'b0)
     );
 
     // ------------------------------------------------------------ memory

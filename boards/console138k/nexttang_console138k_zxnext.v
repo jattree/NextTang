@@ -318,7 +318,10 @@ module `NEXTTANG_ZXNEXT_TOP (
         .pi_mosi(1'b0),
         .pi_miso(),
         .pi_uart_txd(1'b1),
-        .pi_uart_rxd()
+        .pi_uart_rxd(),
+        .pi_i2s_bclk(1'b0),
+        .pi_i2s_lrclk(1'b0),
+        .pi_i2s_data(1'b0)
     );
 
     // ------------------------------------------------------------ keyboard, SD

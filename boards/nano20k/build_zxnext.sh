@@ -30,6 +30,8 @@ status_line=0    # --status-line 1: the debug status line (about 1,000 cells; us
 pi_pins=0        # --pi-pins 1: the Pi debug slave on a Pi Zero's SPI (header 25-28) instead
 companion=0      # --companion 1: a USB keyboard through the BL616's FPGA-Companion firmware; the
                  # Companion then takes the Nano's USB-C port as a host (no laptop debugger on it)
+pi_i2s=0         # --pi-i2s 1: with --pi-pins 1, the Pi's I2S audio into the Next (header 77/31/42;
+                 # 85% logic without --companion; with it, 88% and timing failed, 2026-11-14)
 while (($#)); do
     case "$1" in
         --profile) [[ $# -ge 2 ]] || exit 2; profile=$2; shift 2 ;;
@@ -41,11 +43,12 @@ while (($#)); do
         --status-line) [[ $# -ge 2 && $2 == [01] ]] || exit 2; status_line=$2; shift 2 ;;
         --pi-pins) [[ $# -ge 2 && $2 == [01] ]] || exit 2; pi_pins=$2; shift 2 ;;
         --companion) [[ $# -ge 2 && $2 == [01] ]] || exit 2; companion=$2; shift 2 ;;
+        --pi-i2s) [[ $# -ge 2 && $2 == [01] ]] || exit 2; pi_i2s=$2; shift 2 ;;
         --toolchain|--vendor-source) [[ $# -ge 2 ]] || exit 2; shift 2 ;;
         --print-sources) print_sources=1; shift ;;
         -h|--help)
             printf '%s\n' 'usage: boards/nano20k/build_zxnext.sh --profile skeleton|first [--print-sources] [--output DIR]' \
-                '       [--boot-image FILE] [--audio 0-3] [--status-line 0|1] [--pi-pins 0|1] [--companion 0|1] [--place N] [--route N]'
+                '       [--boot-image FILE] [--audio 0-3] [--status-line 0|1] [--pi-pins 0|1] [--companion 0|1] [--pi-i2s 0|1] [--place N] [--route N]'
             exit 0 ;;
         *) printf 'nano20k zxnext build: unknown argument: %s\n' "$1" >&2; exit 2 ;;
     esac
@@ -141,8 +144,10 @@ sed -e "s/^    localparam integer AUDIO = [0-3];/    localparam integer AUDIO = 
     -e "s/^    localparam integer STATUS_LINE = [01];/    localparam integer STATUS_LINE = $status_line;/" \
     -e "s/^    localparam integer PI_SPI_PINS = [01];/    localparam integer PI_SPI_PINS = $pi_pins;/" \
     -e "s/^    localparam integer COMPANION = [01];/    localparam integer COMPANION = $companion;/" \
+    -e "s/^    localparam integer PI_I2S = [01];/    localparam integer PI_I2S = $pi_i2s;/" \
     "$shell_source" >"$output_dir/nexttang_nano20k_zxnext.v"
-for option in "AUDIO = $audio" "STATUS_LINE = $status_line" "PI_SPI_PINS = $pi_pins" "COMPANION = $companion"; do
+for option in "AUDIO = $audio" "STATUS_LINE = $status_line" "PI_SPI_PINS = $pi_pins" "COMPANION = $companion" \
+              "PI_I2S = $pi_i2s"; do
     grep -q "^    localparam integer $option;" "$output_dir/nexttang_nano20k_zxnext.v" || {
         printf 'nano20k zxnext build: could not set %s in the shell\n' "$option" >&2; exit 1; }
 done
@@ -157,7 +162,7 @@ if [[ "$status_line" == 0 ]]; then
         [[ "${source_files[$i]}" == "$sdc_source" ]] && source_files[i]="$output_dir/nano20k_zxnext.sdc"
     done
 fi
-printf 'audio=%s status_line=%s pi_pins=%s companion=%s place=%s route=%s\n' "$audio" "$status_line" "$pi_pins" "$companion" \
+printf 'audio=%s status_line=%s pi_pins=%s companion=%s pi_i2s=%s place=%s route=%s\n' "$audio" "$status_line" "$pi_pins" "$companion" "$pi_i2s" \
     "$place_option" "$route_option" >"$output_dir/build-options.txt"
 sha256sum "${source_files[@]}" >"$output_dir/source-sha256.txt"
 {

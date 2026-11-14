@@ -101,6 +101,15 @@ IO_PORT "pi_uart_txd" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 IO_LOC "pi_uart_rxd" 74;
 IO_PORT "pi_uart_rxd" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
 
+// Pi Zero I2S audio into the Next (NextREG 0xA2 = 0xD2): Pi pin 12 (GPIO 18,
+// bit clock) to header 77, pin 35 (GPIO 19, word clock) to header 31, pin 40
+// (GPIO 21, data) to header 42 (2026-11-14).
+IO_LOC "pi_i2s_bclk" 77;
+IO_PORT "pi_i2s_bclk" IO_TYPE=LVCMOS33 PULL_MODE=DOWN;
+IO_LOC "pi_i2s_lrclk" 31;
+IO_PORT "pi_i2s_lrclk" IO_TYPE=LVCMOS33 PULL_MODE=DOWN;
+IO_LOC "pi_i2s_data" 42;
+IO_PORT "pi_i2s_data" IO_TYPE=LVCMOS33 PULL_MODE=DOWN;
 IO_LOC "debug_uart_tx" 29;
 IO_PORT "debug_uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
 IO_LOC "debug_uart_rx" 30;
