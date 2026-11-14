@@ -79,7 +79,7 @@ source_files+=(
     "$repo_root/rtl/memory/nexttang_sdr_sdram_service.v"
     "$repo_root/rtl/input/nexttang_keyboard_matrix.v"
     "$repo_root/rtl/input/nexttang_companion_keyboard.v"
-    "$repo_root/rtl/input/nexttang_ps2_matrix.v"
+    "$repo_root/rtl/input/nexttang_usb_keyboard_matrix.v"
     "$repo_root/rtl/video/hdmi_frame.vhd"
     "$repo_root/rtl/video/nexttang_tmds_encoder.v"
     "$repo_root/rtl/video/nexttang_hdmi_island_timing.v"

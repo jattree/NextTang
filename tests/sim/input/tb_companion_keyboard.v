@@ -3,8 +3,9 @@
 //
 // nexttang_companion_keyboard against an SPI master that frames messages the
 // way FPGA-Companion's firmware does (SPI MODE 1 at 20 MHz): the STATUS poll
-// must read 5c 42 00 00, and keyboard messages (usage byte, filler, PS/2 set-2
-// codes) must set and clear matrix keys and F-keys.
+// must read 7c 42 00 00, and keyboard messages must set and clear matrix keys
+// and F-keys in both formats the firmware lines use: byte 2 alone (NextNano's
+// on-board BL616 build) and byte 2, filler, PS/2 set-2 codes (upstream).
 `timescale 1ns/1ps
 `default_nettype none
 module tb_companion_keyboard;
@@ -47,6 +48,10 @@ module tb_companion_keyboard;
         end
     endtask
 
+    task short_key(input [7:0] code);
+        begin begin_msg; send(8'd1); send(8'd1); send(code); end_msg; #600; end
+    endtask
+
     reg [7:0] r [0:6];
     integer i;
     initial begin
@@ -55,7 +60,7 @@ module tb_companion_keyboard;
         begin_msg;
         for (i = 0; i < 7; i = i + 1) xfer(i < 2 ? 8'd0 : 8'd0, r[i]);
         end_msg; #400;
-        if (r[3] !== 8'h5c || r[4] !== 8'h42 || r[5] !== 8'h00 || r[6] !== 8'h00) begin
+        if (r[3] !== 8'h7c || r[4] !== 8'h42 || r[5] !== 8'h00 || r[6] !== 8'h00) begin
             $display("FAIL status reply %h %h %h %h", r[3], r[4], r[5], r[6]); errors = errors + 1;
         end
         if (!seen) begin $display("FAIL seen not set"); errors = errors + 1; end
@@ -63,19 +68,12 @@ module tb_companion_keyboard;
         begin_msg; send(8'd0); send(8'd8); send(8'd0); xfer(8'd0, got); end_msg;
         if (got === 8'h3c) begin $display("FAIL config read looks like XML"); errors = errors + 1; end
 
+        // ---- upstream format: usage, filler, PS/2 codes
         // A: usage 04, PS/2 1c; release 84, F0 1c
         key_message(8'h04, 8'h1c, 8'h00, 8'h00, 1);
         if (keys[5] !== 1'b1) begin $display("FAIL A not pressed (keys %h)", keys); errors = errors + 1; end
         key_message(8'h84, 8'hf0, 8'h1c, 8'h00, 2);
         if (keys !== 40'd0) begin $display("FAIL A not released (keys %h)", keys); errors = errors + 1; end
-        // SPACE (row 7 col 0 = bit 35): usage 2c, PS/2 29
-        key_message(8'h2c, 8'h29, 8'h00, 8'h00, 1);
-        if (keys[35] !== 1'b1) begin $display("FAIL SPACE not pressed"); errors = errors + 1; end
-        key_message(8'hac, 8'hf0, 8'h29, 8'h00, 2);
-        // left shift as a modifier (0x68 + bit 1), PS/2 12: caps shift (bit 0)
-        key_message(8'h69, 8'h12, 8'h00, 8'h00, 1);
-        if (keys[0] !== 1'b1) begin $display("FAIL caps shift not pressed (keys %h)", keys); errors = errors + 1; end
-        key_message(8'he9, 8'hf0, 8'h12, 8'h00, 2);
         // cursor up: usage 52, E0 75 (caps shift + 7)
         key_message(8'h52, 8'he0, 8'h75, 8'h00, 2);
         if (keys[0] !== 1'b1 || keys[23] !== 1'b1) begin $display("FAIL up arrow (keys %h)", keys); errors = errors + 1; end
@@ -86,6 +84,30 @@ module tb_companion_keyboard;
         if (fkeys !== 10'b0000000001) begin $display("FAIL F1 not held (%b)", fkeys); errors = errors + 1; end
         key_message(8'hba, 8'hf0, 8'h05, 8'h00, 2);
         if (fkeys !== 10'd0) begin $display("FAIL F1 not released"); errors = errors + 1; end
+
+        // ---- NextNano's format: [1][1][usage | release bit], nothing else
+        short_key(8'h28);                                   // ENTER (bit 30)
+        if (keys[30] !== 1'b1) begin $display("FAIL short ENTER not pressed (keys %h)", keys); errors = errors + 1; end
+        short_key(8'h2c);                                   // SPACE too (bit 35)
+        if (keys[30] !== 1'b1 || keys[35] !== 1'b1) begin $display("FAIL two keys held (keys %h)", keys); errors = errors + 1; end
+        short_key(8'ha8);                                   // release ENTER only
+        if (keys[30] !== 1'b0 || keys[35] !== 1'b1) begin $display("FAIL release one of two (keys %h)", keys); errors = errors + 1; end
+        short_key(8'hac);
+        if (keys !== 40'd0) begin $display("FAIL short keys not released (keys %h)", keys); errors = errors + 1; end
+        short_key(8'h68);                                   // left control = symbol shift (bit 36)
+        short_key(8'h13);                                   // P (bit 25): symbol shift + P is "
+        if (keys[36] !== 1'b1 || keys[25] !== 1'b1) begin $display("FAIL symbol shift + P (keys %h)", keys); errors = errors + 1; end
+        short_key(8'h93); short_key(8'he8);
+        if (keys !== 40'd0) begin $display("FAIL symbol shift + P not released (keys %h)", keys); errors = errors + 1; end
+        short_key(8'h69);                                   // left shift = caps shift (bit 0)
+        if (keys[0] !== 1'b1) begin $display("FAIL short caps shift (keys %h)", keys); errors = errors + 1; end
+        short_key(8'he9);
+        short_key(8'h43);                                   // F10
+        if (fkeys !== 10'b1000000000) begin $display("FAIL short F10 (%b)", fkeys); errors = errors + 1; end
+        short_key(8'hc3);
+        // a repeated press must not take a second slot; one release clears it
+        short_key(8'h04); short_key(8'h04); short_key(8'h84);
+        if (keys !== 40'd0 || fkeys !== 10'd0) begin $display("FAIL repeated press (keys %h)", keys); errors = errors + 1; end
         // a message to another target must not disturb the keys
         begin_msg; send(8'd2); send(8'd2); send(8'd0); send(8'h1c); end_msg;
         if (keys !== 40'd0) begin $display("FAIL OSD message reached the keys"); errors = errors + 1; end

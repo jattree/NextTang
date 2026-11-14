@@ -126,7 +126,7 @@ class CompanionKeyboardTest(unittest.TestCase):
             run(["iverilog", "-g2005", "-o", str(image),
                  str(SIM / "input" / "tb_companion_keyboard.v"),
                  str(REPO_ROOT / "rtl" / "input" / "nexttang_companion_keyboard.v"),
-                 str(REPO_ROOT / "rtl" / "input" / "nexttang_ps2_matrix.v")], REPO_ROOT)
+                 str(REPO_ROOT / "rtl" / "input" / "nexttang_usb_keyboard_matrix.v")], REPO_ROOT)
             output = run(["vvp", "-n", str(image)], REPO_ROOT)
             self.assertIn("PASS", output, output)
 

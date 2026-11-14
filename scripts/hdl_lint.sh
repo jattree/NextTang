@@ -65,6 +65,18 @@ resolve_tool() {
           -x "$NEXTTANG_OSS_CAD_SUITE/bin/$name" ]]; then
         found="$NEXTTANG_OSS_CAD_SUITE/bin/$name"
     fi
+    # Unset: the usual install places, including a dated release folder such as
+    # /opt/oss-cad-suite/2026-08-05 (newest first).
+    if [[ -z "$found" && -z "${NEXTTANG_OSS_CAD_SUITE:-}" ]]; then
+        local dirs=(/opt/oss-cad-suite/*/) i
+        dirs=(/opt/oss-cad-suite "${dirs[@]}")
+        for ((i = ${#dirs[@]} - 1; i >= 0; i--)); do   # glob order is sorted: last is newest
+            if [[ -x "${dirs[i]%/}/bin/$name" ]]; then
+                found="${dirs[i]%/}/bin/$name"
+                break
+            fi
+        done
+    fi
     printf '%s' "$found"
 }
 

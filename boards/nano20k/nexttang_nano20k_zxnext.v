@@ -250,6 +250,9 @@ module nexttang_nano20k_zxnext (
     // USB until a power cycle; pin 69 now idles high once the Companion is
     // seen. Off by default until real keys have been tested on the board.
     localparam integer COMPANION = 0;
+    // COMPANION_REPORT: 1 reports the Companion's SPI traffic on the debug UART
+    // (diagnostic; see the companion block below).
+    localparam integer COMPANION_REPORT = 0;
 
     // keys and F1-F10 held from the host over the debug UART
     reg [39:0] keys_meta = 40'd0, keys_sync = 40'd0;
@@ -265,6 +268,8 @@ module nexttang_nano20k_zxnext (
     wire [10:1] companion_functions;
     wire        companion_seen;
     wire        companion_message;
+    wire [7:0]  companion_byte;
+    wire        report_tx;
     reg         companion_message_seen = 1'b0;
     generate
     if (COMPANION != 0) begin : companion
@@ -273,14 +278,84 @@ module nexttang_nano20k_zxnext (
             .spi_cs_n(companion_cs_n), .spi_sclk(companion_sclk), .spi_mosi(companion_mosi),
             .spi_miso(companion_miso),
             .keys(companion_keys), .function_keys(companion_functions),
-            .seen(companion_seen), .keyboard_message(companion_message));
+            .seen(companion_seen), .keyboard_message(companion_message),
+            .message_byte(companion_byte));
         always @(posedge clock_28)
             if (companion_message) companion_message_seen <= 1'b1;
+        if (COMPANION_REPORT != 0) begin : report
+            // Diagnostic (2026-11-14): what the BL616 does, on the debug UART
+            // at 115200: '.' every 64 SPI messages (the Companion is running),
+            // 'S' when it reads the FPGA's status, 'K' and two hex digits for
+            // each keyboard byte. ANDed onto the debugger's TX, so don't run the
+            // debugger while watching.
+            function [7:0] hex(input [3:0] n);
+                hex = n < 4'd10 ? 8'h30 + {4'd0, n} : 8'h37 + {4'd0, n};
+            endfunction
+            reg [2:0] cs_sync = 3'b111;
+            reg [5:0] frames = 6'd0;
+            reg       pending_dot = 1'b0, pending_s = 1'b0, pending_k = 1'b0;
+            reg       seen_q = 1'b0;
+            reg [7:0] key_byte = 8'd0;
+            // the message being sent: up to four characters
+            reg [7:0] msg0 = 8'd0, msg1 = 8'd0, msg2 = 8'd0, msg3 = 8'd0;
+            reg [2:0] msg_count = 3'd0;      // characters in the message
+            reg [2:0] msg_index = 3'd0;      // next character to send
+            reg [9:0] baud = 10'd0;
+            reg [3:0] bit_index = 4'd0;
+            reg [9:0] frame = 10'h3ff;       // stop, 8 data bits LSB first, start
+            reg       sending = 1'b0;        // a character is on the wire
+            wire      idle = !sending && msg_index == msg_count;
+            wire      take = idle && (pending_k || pending_s || pending_dot);
+            reg [7:0] next_char;
+            always @* case (msg_index)
+                3'd0: next_char = msg0; 3'd1: next_char = msg1;
+                3'd2: next_char = msg2; default: next_char = msg3;
+            endcase
+            always @(posedge clock_28) begin
+                cs_sync <= {cs_sync[1:0], companion_cs_n};
+                seen_q <= companion_seen;
+                if (cs_sync[2:1] == 2'b10) begin
+                    frames <= frames + 6'd1;
+                    if (frames == 6'd63) pending_dot <= 1'b1;
+                end
+                if (companion_seen && !seen_q) pending_s <= 1'b1;
+                if (companion_message) begin pending_k <= 1'b1; key_byte <= companion_byte; end
+                if (take) begin
+                    msg_index <= 3'd0;
+                    if (pending_k) begin
+                        pending_k <= 1'b0;
+                        msg0 <= "K"; msg1 <= hex(key_byte[7:4]); msg2 <= hex(key_byte[3:0]); msg3 <= " ";
+                        msg_count <= 3'd4;
+                    end else begin
+                        if (pending_s) pending_s <= 1'b0; else pending_dot <= 1'b0;
+                        msg0 <= pending_s ? "S" : "."; msg_count <= 3'd1;
+                    end
+                end else if (!sending && msg_index != msg_count) begin
+                    // start the next character
+                    frame <= {1'b1, next_char, 1'b0};
+                    sending <= 1'b1; baud <= 10'd0; bit_index <= 4'd0;
+                    msg_index <= msg_index + 3'd1;
+                end else if (sending) begin
+                    if (baud == 10'd243) begin       // 28.125 MHz / 244: 115,266 baud
+                        baud <= 10'd0;
+                        frame <= {1'b1, frame[9:1]};
+                        if (bit_index == 4'd9) sending <= 1'b0;
+                        else bit_index <= bit_index + 4'd1;
+                    end else
+                        baud <= baud + 10'd1;
+                end
+            end
+            assign report_tx = sending ? frame[0] : 1'b1;
+        end else begin : no_report
+            assign report_tx = 1'b1;
+        end
     end else begin : no_companion
         assign companion_keys = 40'd0;
         assign companion_functions = 10'd0;
         assign companion_seen = 1'b0;
         assign companion_message = 1'b0;
+        assign companion_byte = 8'd0;
+        assign report_tx = 1'b1;
         assign companion_miso = 1'b1;
     end
     endgenerate
@@ -572,7 +647,7 @@ module nexttang_nano20k_zxnext (
     assign sd_dat1 = 1'b1;
     assign sd_dat2 = 1'b1;
 
-    assign debug_uart_tx = uart_tx;
+    assign debug_uart_tx = uart_tx & report_tx;
     assign companion_irq_n = companion_seen ? 1'b1 : uart_tx;   // BL616 serial RX (debugger firmware); Companion IRQ idle
     // ------------------------------------------------------------- audio
     // AUDIO bit 1: the core's mixed stereo to the on-board MAX98357A over I2S: signed,
