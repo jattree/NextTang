@@ -128,10 +128,34 @@ same through the debug interface.
   CPU bus (acknowledged and declined frames, a port read in the first instruction after
   a declined interrupt, empty frames, two CPU speeds, two desync cases), and the
   full-core check above still passes.
-- Next: the player on the Nano 20K, then the 138K. The simulation check here ties the
+- 2026-11-15, Nano 20K player, hardware-verified on the `boards` line:
+  `build_zxnext.sh --rzx 2` (or 3 with the recorder) adds the player and a UART link (`rtl/debug/nexttang_rzx_play_link.v`):
+  `P` and up to 255 bytes arm it while the CPU is stopped, playing starts at the resume,
+  and the rest of the recording follows on the UART into a 1024-byte buffer while the
+  board reports each frame end. `host/rzx_play.py` writes the recording's snapshot into
+  RAM and the CPU through the debugger and sends the frames. On the board, from a
+  cleared 48K BASIC screen, the BEEP recording replays in full (705 of 705 frames, no
+  desync, five runs): the program is typed again, runs, beeps and prints, with no key
+  touched. The earlier typed-program recording replays too (504 of 504). A copy with
+  one port read removed from frame 100 stops there with a desync.
+  - The player's port byte is swapped in inside the CPU, after its input register
+    (`t80na.vhd`, marked NextTang), not on the bus as in the first simulation version:
+    on the bus it lengthened the design's tightest path and no Nano build met timing
+    (20 to 34 setup violations in six builds); after the register, five of six do.
+  - A recording made by an emulator plays on the board: Fuse 1.6.0, a 48K Spectrum from
+    power-on with the Next's 48K ROM, the ROM's start-up and then a two-line program
+    typed and run (520 frames, Fuse's .szx snapshot). On the board: 520 of 520 frames,
+    no desync, and the screen ends as in Fuse ("12", "34", "0 OK, 20:1"). The play tool
+    reads Fuse's embedded .szx, and sets the interrupt mode, which the debugger cannot
+    write, by single-stepping an IM instruction in RAM.
+  - Limits: 48K programs; about 230 bytes of recording per frame at most over the UART.
+- Next: a game recording from the RZX Archive on the board, then the 138K.
+- The simulation check here ties the
   recorder's interrupt input high (its test ROM takes every interrupt); the declined
   case is covered by the recorder's unit tests and the Nano recordings. The core's tap
-  that also holds opcode bytes for the recorder is on the `boards` line only so far.
+  that also holds opcode bytes for the recorder, the Nano build option and the two host
+  tools are on the `boards` line only so far; the player, the play link and the CPU-side
+  byte swap are here.
 
 ## Order
 

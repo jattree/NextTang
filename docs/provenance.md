@@ -159,6 +159,10 @@ release moves the same way: `scripts/merge_official_core.py --upstream DIR
   CPU is in (0, 1, 2), in bits 5:4. The official 3.02.05 file reports `IMode`
   there, the instruction decoder's request, which reads 11 except while an IM
   instruction executes. Seen on a Nano 20K: 48K BASIC read as IM 2.
+- **RZX replay in the CPU wrapper** (2026-11-15, marked `NextTang` in
+  `t80na.vhd`): inputs `RZX_PLAY` and `RZX_DATA`; during an I/O read while a
+  recording plays, the recorded byte is latched beside `DI_Reg` and passed to
+  the CPU core in its place.
 - `spi_master.vhd` remains MiSTer's; the official 3.02.04 change to it
   (`spi_active`) is not taken yet.
 

@@ -171,7 +171,13 @@ entity T80Na is
       o_debug_lastM     : out std_logic;
       i_debug_pause     : in std_logic := '0';   -- NextTang
       o_debug_next_pc   : out std_logic_vector(15 downto 0);   -- NextTang
-      i_debug_break     : in std_logic := '0'   -- NextTang
+      i_debug_break     : in std_logic := '0';   -- NextTang
+
+      -- NextTang: RZX replay. While RZX_PLAY is high, the byte the CPU takes
+      -- from an I/O read is RZX_DATA as it stood when the read's data was
+      -- latched, not the byte on the bus.
+      RZX_PLAY          : in std_logic := '0';
+      RZX_DATA          : in std_logic_vector(7 downto 0) := (others => '1')
    );
 end T80Na;
 
@@ -204,6 +210,11 @@ architecture rtl of T80Na is
    signal A_i           : std_logic_vector(15 downto 0);
    signal DO            : std_logic_vector(7 downto 0);
    signal DI_Reg        : std_logic_vector (7 downto 0); -- Input synchroniser
+   -- NextTang: RZX replay. The recorded byte is latched beside DI_Reg and
+   -- chosen after it, so the bus's path into DI_Reg is no longer than before.
+   signal RZX_Reg       : std_logic_vector (7 downto 0) := (others => '1');
+   signal RZX_Sel       : std_logic := '0';
+   signal DI_Core       : std_logic_vector (7 downto 0);
    signal MCycle        : std_logic_vector(2 downto 0);
    signal TState        : std_logic_vector(2 downto 0);
 
@@ -266,7 +277,7 @@ begin
          A => A_i,
 --       DInst => D,
          DInst => D_i,
-         DI => DI_Reg,
+         DI => DI_Core,   -- NextTang: was DI_Reg
          DO => DO,
          MC => MCycle,
          TS => TState,
@@ -325,7 +336,7 @@ begin
          i_debug_break     => i_debug_break
       );
 
-   Spec256_state_di <= DI_Reg;
+   Spec256_state_di <= DI_Core;   -- what the CPU takes (DI_Reg, or a replayed byte)
 
    process (CLK_n)
    begin
@@ -337,9 +348,13 @@ begin
             else
                DI_Reg <= D_i;
             end if;
+            -- NextTang: an I/O read while a recording plays
+            RZX_Reg <= RZX_DATA;
+            RZX_Sel <= RZX_PLAY and IORQ_rw and not RD_n_i;
          end if;
       end if;
    end process;
+   DI_Core <= RZX_Reg when RZX_Sel = '1' else DI_Reg;   -- NextTang
 
 -- 30/10/19 Charlie Ingley - Generate WR_t2 to correct MREQ/WR timing
    process (Reset_s,CLK_n) 
