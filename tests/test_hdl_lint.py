@@ -140,7 +140,10 @@ class LintScriptTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as empty_path:
             environment = dict(os.environ)
             environment["PATH"] = f"{empty_path}:/usr/bin:/bin"
-            environment.pop("NEXTTANG_OSS_CAD_SUITE", None)
+            # Pointing the suite at an empty folder also turns off the search
+            # of the usual install places, which would find it on machines
+            # that have it under /opt.
+            environment["NEXTTANG_OSS_CAD_SUITE"] = empty_path
             done = subprocess.run(
                 ["bash", str(LINT_SCRIPT)],
                 capture_output=True, text=True, env=environment,
