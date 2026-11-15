@@ -293,6 +293,55 @@ def frames_from_logger(words: list[int]) -> list[Frame]:
     return frames
 
 
+@dataclass
+class UartRecording:
+    frames: list[Frame]
+    flags: int  # bit 0 the fetch count saturated, bit 1 the recorder's FIFO overflowed
+    frame_count: int  # as the board counted them
+    complete: bool  # the end marker arrived
+
+
+def frames_from_uart(data: bytes) -> UartRecording:
+    """Decode a recording sent by rtl/debug/nexttang_rzx_uart.v.
+
+    Everything before the first "RZX!" is ignored (status lines). IN bytes
+    after the last frame end belong to a frame cut off by stopping and are
+    dropped.
+    """
+    start = data.find(b"RZX!")
+    if start < 0:
+        raise RzxError("no recording start marker (RZX!) in the capture")
+    position = start + 4
+    frames: list[Frame] = []
+    inputs = bytearray()
+
+    def take(count: int) -> bytes:
+        nonlocal position
+        if position + count > len(data):
+            raise IndexError
+        chunk = data[position:position + count]
+        position += count
+        return chunk
+
+    try:
+        while position < len(data):
+            byte = take(1)[0]
+            if byte == 0xFF:
+                low, high = take(2)
+                frames.append(Frame(high << 8 | low, bytes(inputs)))
+                inputs.clear()
+            elif byte == 0xFE:
+                inputs.append(take(1)[0])
+            elif byte == 0xFD:
+                flags, low, high = take(3)
+                return UartRecording(frames, flags, high << 8 | low, True)
+            else:
+                inputs.append(byte)
+    except IndexError:
+        pass
+    return UartRecording(frames, 0, len(frames), False)
+
+
 def describe(rzx: Rzx) -> str:
     lines = [f"RZX {rzx.major}.{rzx.minor}, flags {rzx.flags:#x}"
              + (" (signed)" if rzx.flags & FILE_SIGNED else "")]

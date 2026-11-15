@@ -25,6 +25,13 @@
 // and is not counted. Whether an M1 cycle is an acknowledge is only known by
 // its end, so both are decided on M1's rising edge.
 //
+// An interrupt the CPU does not take still ends a frame, as an emulator
+// recording an RZX ends one at every frame interrupt and, on playback, only
+// tries to interrupt there (Fuse: spectrum_frame_event_fn): when INT (int_n)
+// goes low and rises again with no acknowledge in between, the frame ends at
+// that rise. Without it, a stretch with interrupts disabled would merge frames
+// past RZX's 16-bit count. Tie int_n high to end frames at acknowledges only.
+//
 // I/O reads: IORQ and RD low with M1 high. `data` is the CPU's own input
 // register (the core's o_SPEC256_DI, the T80's DI_Reg), which latches the bus
 // in T3 of every bus cycle and holds it until the next cycle's T3. It is
@@ -58,6 +65,7 @@ module nexttang_rzx_logger #(
     input  wire       iorq_n,
     input  wire       rd_n,
     input  wire [7:0] data,
+    input  wire       int_n,
 
     output wire [8:0] word,
     output wire       word_valid,
@@ -70,6 +78,8 @@ module nexttang_rzx_logger #(
     reg m1_n_q = 1'b1;
     reg io_rd_q = 1'b0;
     reg ack_seen = 1'b0;
+    reg int_n_q = 1'b1;
+    reg int_acked = 1'b0;        // an acknowledge since INT last went low
     reg [15:0] fetches = 16'd0;
     reg [7:0] count_hi = 8'h00;
     reg hi_pending = 1'b0;
@@ -77,6 +87,17 @@ module nexttang_rzx_logger #(
     wire io_rd = !iorq_n && !rd_n && m1_n;
     wire m1_end = !m1_n_q && m1_n;
     wire io_end = io_rd_q && !io_rd;
+    wire int_end = !int_n_q && int_n;
+    // An interrupt that went unanswered: a frame end without an acknowledge.
+    // (An acknowledge on this very clock is the ordinary frame end instead.)
+    wire missed = int_end && !int_acked && !(m1_end && ack_seen);
+    // An IN read ending now or its byte due now goes first (the read ended
+    // before the interrupt did), and the missed frame end waits in
+    // missed_pending, so its high byte (hi_pending, next clock) cannot meet
+    // that byte.
+    reg missed_pending = 1'b0;
+    wire missed_now = (missed || missed_pending) && !io_end && !io_end_q;
+    wire frame_end = (m1_end && ack_seen) || missed_now;
     reg io_end_q = 1'b0;
 
     // FIFO
@@ -94,7 +115,8 @@ module nexttang_rzx_logger #(
     // At most one word is pushed per clock: a frame end's high byte waits one
     // clock in hi_pending, and an IN byte is pushed one clock after its cycle.
     // The M1 cycle after an IN ends at least two T-states (two clocks at
-    // 28 MHz) after it, so these never fall on the same clock.
+    // 28 MHz) after it, so an acknowledge's frame end never meets an IN byte;
+    // a missed interrupt's frame end is held off by missed_pending.
     reg push;
     reg [8:0] push_word;
     always @* begin
@@ -104,12 +126,12 @@ module nexttang_rzx_logger #(
             if (hi_pending) begin
                 push = 1'b1;
                 push_word = {1'b1, count_hi};
-            end else if (m1_end && ack_seen) begin
-                push = 1'b1;
-                push_word = {1'b1, fetches[7:0]};
             end else if (io_end_q) begin
                 push = 1'b1;
                 push_word = {1'b0, data};
+            end else if (frame_end) begin
+                push = 1'b1;
+                push_word = {1'b1, fetches[7:0]};
             end
         end
     end
@@ -118,6 +140,12 @@ module nexttang_rzx_logger #(
         m1_n_q <= m1_n;
         io_rd_q <= io_rd;
         io_end_q <= io_end;
+        int_n_q <= int_n;
+        missed_pending <= (missed || missed_pending) && (io_end || io_end_q) && recording;
+        if (int_n_q && !int_n)
+            int_acked <= 1'b0;
+        else if (m1_end && ack_seen)
+            int_acked <= 1'b1;
         if (!m1_n && !iorq_n)
             ack_seen <= 1'b1;
         else if (m1_end)
@@ -135,13 +163,13 @@ module nexttang_rzx_logger #(
         end
 
         hi_pending <= 1'b0;
-        if (recording && m1_end) begin
-            if (ack_seen) begin
-                count_hi <= fetches[15:8];
-                hi_pending <= 1'b1;
-                fetches <= 16'd0;
-                frames <= frames + 1'b1;
-            end else if (fetches == 16'hffff)
+        if (recording && frame_end) begin
+            count_hi <= fetches[15:8];
+            hi_pending <= 1'b1;
+            fetches <= (m1_end && !ack_seen) ? 16'd1 : 16'd0;   // a fetch ending on the same clock is the next frame's
+            frames <= frames + 1'b1;
+        end else if (recording && m1_end && !ack_seen) begin
+            if (fetches == 16'hffff)
                 saturated <= 1'b1;
             else
                 fetches <= fetches + 1'b1;

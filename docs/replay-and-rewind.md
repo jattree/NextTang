@@ -94,8 +94,32 @@ same through the debug interface.
   with one IN byte left out of frame 2, the player reports a desync in frame 2 and hands
   the core back its live inputs. A fetch count off by one is not caught on this ROM,
   which waits for every interrupt in HALT, where one fetch more or less changes nothing.
-- Next, while the 138K is away: the recorder and player in the Nano 20K build, the stream
-  over the debug UART, the snapshot through the debugger, and an .rzx played in Fuse.
+- 2026-11-15, Nano 20K recorder, hardware-verified on the `boards` line (branch
+  `nano-rzx`; the build option and capture tool are not in this branch yet, the recorder,
+  sender and readout fix are): `build_zxnext.sh --rzx 1` adds the
+  recorder and a UART sender (`rtl/debug/nexttang_rzx_uart.v`) to the debug UART; `Z`
+  arms it (recording starts at the next CPU resume), `z` stops it. `host/rzx_capture.py`
+  pauses the CPU, reads registers and the 48K of RAM through the debugger into a .z80
+  snapshot, records, and writes the .rzx. A 10 s recording made on the board in 48K BASIC
+  (typing a two-line program and RUN; 504 frames, 4,027 IN values) plays to its end in
+  Fuse 1.6.0 as a 48K Spectrum, with Fuse's own 48K ROM and with the Next's 48K ROM.
+  Three things were needed for that:
+  - The recorder also ends a frame when an interrupt pulse passes without being
+    acknowledged (interrupts disabled), as emulators count a frame per ULA frame; before
+    this a frame's fetch count ran on over several frames and saturated.
+  - The debugger's interrupt-mode readout now reports the CPU's mode (`IStatus`). The
+    official 3.02.05 debug readout reports the decoder's request (`IMode`), which reads
+    as IM 2 almost always, and a snapshot saved with IM 2 goes out of step at the first
+    interrupts.
+  - NextZXOS leaves divMMC automapping on in 48K BASIC (entry points 0x0008 and 0x0038),
+    so every interrupt runs code a 48K Spectrum does not have; the capture tool turns it
+    off (NextREG 0x0A bit 4) for the recording and puts it back.
+  Only 48K programs so far. The board cannot yet play a recording (the player is in
+  simulation only), and the player does not yet handle frames that end without an
+  acknowledge.
+- Next: the player on the Nano 20K, then the 138K. The simulation check here ties the
+  recorder's interrupt input high (its test ROM takes every interrupt); the unacknowledged
+  case is covered by the recorder's unit tests and the Nano recording.
 
 ## Order
 
