@@ -144,6 +144,14 @@ class DebugHostTest(unittest.TestCase):
         self.assertEqual(registers["PC"], 0x8123)
         self.assertEqual(registers["IX"], 0x5A5B)
 
+    def test_interrupt_mode_and_flags(self) -> None:
+        # State register: 00, IM (T80's IStatus: 0, 1, 2), 0, HALT, IFF2, IFF1.
+        for mode in (0, 1, 2):
+            self.model.cpu[0x1A] = mode << 4 | 0b0101
+            registers = self.debug.registers()
+            self.assertEqual(registers["IM"], mode)
+            self.assertEqual((registers["HALT"], registers["IFF2"], registers["IFF1"]), (1, 0, 1))
+
 
 if __name__ == "__main__":
     unittest.main()

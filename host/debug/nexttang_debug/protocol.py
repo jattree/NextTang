@@ -171,8 +171,10 @@ class PiDebug:
         single = {name: self.cpu_register(number) for name, number in CPU_REGISTERS.items()}
         state = self.cpu_register(CPU_STATE_READ)
         result = {pair: single[high] << 8 | single[low] for pair, (high, low) in PAIRS.items()}
-        # T80 keeps the mode as the IM instruction's bits 4:3: 00, 10 or 11.
-        result.update(I=single["I"], R=single["R"], IM=(0, 0, 1, 2)[state >> 4 & 3],
+        # Bits 5:4 are the CPU's interrupt mode, 0, 1 or 2 (NextTang reports
+        # T80's IStatus there; the official core reports the decoder's IMode,
+        # which reads 3 except during an IM instruction, and is no use).
+        result.update(I=single["I"], R=single["R"], IM=state >> 4 & 3,
                       HALT=state >> 2 & 1, IFF2=state >> 1 & 1, IFF1=state & 1)
         return result
 

@@ -300,6 +300,21 @@ entity zxnext is
       o_CPU_STOPPED        : out std_logic;
       i_CPU_BREAK          : in std_logic := '0';
       o_MMU                : out std_logic_vector(63 downto 0);   -- NextTang: NextREGs 0x57 down to 0x50
+      -- NextTang: RZX replay (rtl/debug/nexttang_rzx_player.vhd). While
+      -- i_RZX_PLAY is high, every CPU I/O read takes i_RZX_IN_DATA and the
+      -- CPU's maskable interrupt is i_RZX_INT alone.
+      i_RZX_PLAY           : in std_logic := '0';
+      i_RZX_INT            : in std_logic := '0';
+      i_RZX_IN_DATA        : in std_logic_vector(7 downto 0) := (others => '1');
+      -- NextTang: for the RZX recorder (rtl/debug/nexttang_rzx_logger.v), the
+      -- CPU's own M1, IORQ and RD (not the DMA's), and the byte of the last
+      -- CPU I/O read, held until the next. (Where the core exports the T80's
+      -- input register, o_SPEC256_DI, the recorder takes that instead.)
+      o_RZX_M1_n           : out std_logic;
+      o_RZX_IORQ_n         : out std_logic;
+      o_RZX_RD_n           : out std_logic;
+      o_RZX_INT_n          : out std_logic;   -- the CPU's maskable interrupt input
+      o_RZX_IN_DATA        : out std_logic_vector(7 downto 0);
       
       o_GPIO               : out std_logic_vector(27 downto 0);
       o_GPIO_EN            : out std_logic_vector(27 downto 0);   -- 0 = high Z
@@ -371,6 +386,7 @@ architecture rtl of zxnext is
    signal cpu_debug_lastM        : std_logic;
    signal cpu_debug_pause        : std_logic;   -- NextTang: the Pi debug slave wants the CPU stopped
    signal cpu_debug_next_pc      : std_logic_vector(15 downto 0) := (others => '0');   -- NextTang
+   signal rzx_in_data            : std_logic_vector(7 downto 0) := (others => '1');    -- NextTang: RZX recorder
 
    signal dma_wait_n             : std_logic;
    signal dma_busrq_n            : std_logic;
@@ -1953,6 +1969,23 @@ end generate;
    o_CPU_STOPPED <= not z80_busak_n;      -- NextTang
    o_MMU <= MMU7 & MMU6 & MMU5 & MMU4 & MMU3 & MMU2 & MMU1 & MMU0;   -- NextTang
 
+   -- NextTang: RZX recorder taps. The CPU latches an I/O read's byte in T3;
+   -- this keeps the last byte on the bus while a CPU I/O read is under way,
+   -- which is that byte once the read ends.
+   o_RZX_M1_n <= z80_m1_n;
+   o_RZX_IORQ_n <= z80_iorq_n;
+   o_RZX_RD_n <= z80_rd_n;
+   o_RZX_INT_n <= z80_int_n;
+   process (i_CLK_28)
+   begin
+      if rising_edge(i_CLK_28) then
+         if z80_iorq_n = '0' and z80_rd_n = '0' and z80_m1_n = '1' and dma_holds_bus = '0' then
+            rzx_in_data <= cpu_di;
+         end if;
+      end if;
+   end process;
+   o_RZX_IN_DATA <= rzx_in_data;
+
 gen_cpu_00: if (g_option(1 downto 0) = "00") generate
 
    cpu_mod: entity work.T80na
@@ -2237,14 +2270,16 @@ end generate;
    expbus_disable_int <= '1' when expbus_eff_en = '0' or expbus_eff_disable_io = '1' or nr_c4_int_en_0_expbus = '0' else '0';
 
    z80_wait_n <= '0' when (ula_wait_n = '0') or (ulap_wait_n = '0') or (sram_wait_n = '0') or (i_BUS_WAIT_n = '0' and expbus_eff_en = '1') or (i_CPU_WAIT = '1') else '1';   -- NextTang: i_CPU_WAIT from MiSTer
-   z80_int_n <= ((pulse_int_n and im2_int_n) or not expbus_disable_int) and (i_BUS_INT_n or expbus_disable_int);
+   z80_int_n <= not i_RZX_INT when i_RZX_PLAY = '1' else   -- NextTang: RZX replay
+                ((pulse_int_n and im2_int_n) or not expbus_disable_int) and (i_BUS_INT_n or expbus_disable_int);
    z80_nmi_n <= nmi_generate_n;
    
    dma_wait_n <= z80_wait_n and spi_wait_n;
 
    process (z80_stackless_nmi, dma_holds_bus, z80_retn_address, cpu_mreq_n, cpu_rfsh_n, cpu_a, bootrom_en, bootrom_do, im2_ieo,
       sram_romcs_en, sram_pre_romcs_replace, i_BUS_DI, sram_bank5, cpu_bank5_do, sram_bank7, cpu_bank7_do, i_RAM_A_DI, cpu_m1_n,
-      cpu_iorq_n, port_internal_rd_response, bus_iorq_ula, port_rd_dat, im2_vector, expbus_eff_en, expbus_eff_disable_io, i_BUS_BUSREQ_n)
+      cpu_iorq_n, port_internal_rd_response, bus_iorq_ula, port_rd_dat, im2_vector, expbus_eff_en, expbus_eff_disable_io, i_BUS_BUSREQ_n,
+      i_RZX_PLAY, i_RZX_IN_DATA)   -- NextTang: RZX replay
    begin
       if z80_stackless_nmi = '1' and dma_holds_bus = '0' then
       
@@ -2268,6 +2303,8 @@ end generate;
       
          if cpu_m1_n = '0' and im2_ieo = '0' then
             cpu_di <= im2_vector;
+         elsif i_RZX_PLAY = '1' and cpu_m1_n = '1' and dma_holds_bus = '0' then
+            cpu_di <= i_RZX_IN_DATA;   -- NextTang: RZX replay, the recorded byte
          elsif port_internal_rd_response = '1' and bus_iorq_ula = '0' then
             cpu_di <= port_rd_dat;
          elsif expbus_eff_en = '1' and expbus_eff_disable_io = '0' then

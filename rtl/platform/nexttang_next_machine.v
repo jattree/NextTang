@@ -115,6 +115,13 @@
 // passed to the board on board_command_valid / board_command_byte for its own
 // commands.
 //
+// With RZX_RECORD, Z on the debug UART starts an RZX input recording
+// (docs/replay-and-rewind.md): at once if the CPU is running, or when it is
+// next resumed if it is stopped, so a host can pause the CPU, read the
+// starting snapshot through the debugger, send Z and resume. z stops it. From
+// the start until the recording is sent the UART carries it
+// (rtl/debug/nexttang_rzx_uart.v) instead of status lines or debugger replies.
+//
 // The SD card is on the core's SPI master (spi_clock, spi_mosi,
 // spi_sd0_select_n, spi_sd_miso). With SD_MONITOR set, every byte the card
 // sends is counted and summed on the status UART.
@@ -144,7 +151,9 @@ module nexttang_next_machine #(
     parameter integer PI_SPI_PINS = 0,
     // 1: the core's SPI master samples MISO half a CPU clock later
     // (spi_master g_miso_late), for boards whose SD clock reaches the card late.
-    parameter integer SPI_MISO_LATE = 0
+    parameter integer SPI_MISO_LATE = 0,
+    // 1: the RZX input recorder on the debug UART (Z / z, above).
+    parameter integer RZX_RECORD = 0
 ) (
     // clocks and resets
     input  wire        clock_28,
@@ -322,6 +331,8 @@ module nexttang_next_machine #(
     wire        cpu_stopped;
     wire        cpu_break;
     wire [63:0] core_mmu;
+    wire        rzx_m1_n, rzx_iorq_n, rzx_rd_n, rzx_int_n;
+    wire [7:0]  rzx_in_data;
 
     wire        core_m1_n;
     wire        core_wr_n;
@@ -501,6 +512,14 @@ module nexttang_next_machine #(
         .o_CPU_STOPPED(cpu_stopped),
         .i_CPU_BREAK(cpu_break),
         .o_MMU(core_mmu),
+        .i_RZX_PLAY(1'b0),
+        .i_RZX_INT(1'b0),
+        .i_RZX_IN_DATA(8'hff),
+        .o_RZX_M1_n(rzx_m1_n),
+        .o_RZX_IORQ_n(rzx_iorq_n),
+        .o_RZX_RD_n(rzx_rd_n),
+        .o_RZX_INT_n(rzx_int_n),
+        .o_RZX_IN_DATA(rzx_in_data),
         .o_GPIO(core_gpio),
         .o_GPIO_EN(core_gpio_en),
 
@@ -976,9 +995,81 @@ module nexttang_next_machine #(
     end
     endgenerate
 
+    // RZX input recorder (RZX_RECORD).
+    wire rzx_busy;
+    wire rzx_tx;
+    generate
+    if (RZX_RECORD != 0) begin : rzx
+        wire recording, saturated, overflow;
+        wire [8:0] word;
+        wire word_valid, word_ready;
+        wire [15:0] frames;
+        reg  armed = 1'b0;
+        reg  stopped_q = 1'b0;
+        wire command_start = board_command_valid && command_byte == "Z";
+        wire command_stop = board_command_valid && command_byte == "z";
+        wire resumed = stopped_q && !cpu_stopped;
+        wire start = (command_start && !cpu_stopped && !recording) || (armed && resumed);
+        reg  stop_q = 1'b0;
+
+        always @(posedge clock_28) begin
+            stopped_q <= cpu_stopped;
+            stop_q <= command_stop && recording;
+            if (command_start && cpu_stopped && !recording)
+                armed <= 1'b1;
+            if (start || command_stop || !machine_locked)
+                armed <= 1'b0;
+        end
+
+        nexttang_rzx_logger #(
+            .FIFO_BITS(6)
+        ) logger (
+            .clock(clock_28),
+            .reset(!machine_locked),
+            .start(start),
+            .stop(command_stop),
+            .recording(recording),
+            .m1_n(rzx_m1_n),
+            .iorq_n(rzx_iorq_n),
+            .rd_n(rzx_rd_n),
+            .data(rzx_in_data),
+            .int_n(rzx_int_n),
+            .word(word),
+            .word_valid(word_valid),
+            .word_ready(word_ready),
+            .frames(frames),
+            .saturated(saturated),
+            .overflow(overflow)
+        );
+
+        // The end marker's flags and count are taken a clock after the stop,
+        // when the recorder has settled.
+        nexttang_rzx_uart #(
+            .CLOCK_HZ(28000000),
+            .BAUD_RATE(115200)
+        ) sender (
+            .clock(clock_28),
+            .reset(!machine_locked),
+            .begin_stream(start),
+            .end_stream(stop_q),
+            .end_flags({overflow, saturated}),
+            .end_frames(frames),
+            .word(word),
+            .word_valid(word_valid),
+            .word_ready(word_ready),
+            .busy(rzx_busy),
+            .tx(rzx_tx)
+        );
+    end else begin : no_rzx
+        assign rzx_busy = 1'b0;
+        assign rzx_tx = 1'b1;
+    end
+    endgenerate
+
     assign pi_miso = core_gpio[9];
 
-    assign debug_uart_tx = pi_session ? pi_link_tx
+    assign debug_uart_tx = rzx_busy ? rzx_tx
+                         : pi_session ? pi_link_tx
                          : capture_sending ? capture_transmit
                          : trace_frozen ? trace_transmit
                          : log_sending ? log_transmit

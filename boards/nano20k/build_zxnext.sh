@@ -32,6 +32,7 @@ companion=0      # --companion 1: a USB keyboard through the BL616's FPGA-Compan
                  # Companion then takes the Nano's USB-C port as a host (no laptop debugger on it)
 pi_i2s=0         # --pi-i2s 1: with --pi-pins 1, the Pi's I2S audio into the Next (header 77/31/42;
                  # 85% logic without --companion; with it, 88% and timing failed, 2026-11-14)
+rzx=0            # --rzx 1: the RZX input recorder on the debug UART (Z / z; host/rzx_capture.py)
 while (($#)); do
     case "$1" in
         --profile) [[ $# -ge 2 ]] || exit 2; profile=$2; shift 2 ;;
@@ -44,11 +45,12 @@ while (($#)); do
         --pi-pins) [[ $# -ge 2 && $2 == [01] ]] || exit 2; pi_pins=$2; shift 2 ;;
         --companion) [[ $# -ge 2 && $2 == [01] ]] || exit 2; companion=$2; shift 2 ;;
         --pi-i2s) [[ $# -ge 2 && $2 == [01] ]] || exit 2; pi_i2s=$2; shift 2 ;;
+        --rzx) [[ $# -ge 2 && $2 == [01] ]] || exit 2; rzx=$2; shift 2 ;;
         --toolchain|--vendor-source) [[ $# -ge 2 ]] || exit 2; shift 2 ;;
         --print-sources) print_sources=1; shift ;;
         -h|--help)
             printf '%s\n' 'usage: boards/nano20k/build_zxnext.sh --profile skeleton|first [--print-sources] [--output DIR]' \
-                '       [--boot-image FILE] [--audio 0-3] [--status-line 0|1] [--pi-pins 0|1] [--companion 0|1] [--pi-i2s 0|1] [--place N] [--route N]'
+                '       [--boot-image FILE] [--audio 0-3] [--status-line 0|1] [--pi-pins 0|1] [--companion 0|1] [--pi-i2s 0|1] [--rzx 0|1] [--place N] [--route N]'
             exit 0 ;;
         *) printf 'nano20k zxnext build: unknown argument: %s\n' "$1" >&2; exit 2 ;;
     esac
@@ -83,6 +85,8 @@ source_files+=(
     "$repo_root/rtl/input/nexttang_keyboard_matrix.v"
     "$repo_root/rtl/input/nexttang_companion_keyboard.v"
     "$repo_root/rtl/input/nexttang_usb_keyboard_matrix.v"
+    "$repo_root/rtl/debug/nexttang_rzx_logger.v"
+    "$repo_root/rtl/debug/nexttang_rzx_uart.v"
     "$repo_root/rtl/video/hdmi_frame.vhd"
     "$repo_root/rtl/video/nexttang_tmds_encoder.v"
     "$repo_root/rtl/video/nexttang_hdmi_island_timing.v"
@@ -145,9 +149,10 @@ sed -e "s/^    localparam integer AUDIO = [0-3];/    localparam integer AUDIO = 
     -e "s/^    localparam integer PI_SPI_PINS = [01];/    localparam integer PI_SPI_PINS = $pi_pins;/" \
     -e "s/^    localparam integer COMPANION = [01];/    localparam integer COMPANION = $companion;/" \
     -e "s/^    localparam integer PI_I2S = [01];/    localparam integer PI_I2S = $pi_i2s;/" \
+    -e "s/^    localparam integer RZX_RECORD = [01];/    localparam integer RZX_RECORD = $rzx;/" \
     "$shell_source" >"$output_dir/nexttang_nano20k_zxnext.v"
 for option in "AUDIO = $audio" "STATUS_LINE = $status_line" "PI_SPI_PINS = $pi_pins" "COMPANION = $companion" \
-              "PI_I2S = $pi_i2s"; do
+              "PI_I2S = $pi_i2s" "RZX_RECORD = $rzx"; do
     grep -q "^    localparam integer $option;" "$output_dir/nexttang_nano20k_zxnext.v" || {
         printf 'nano20k zxnext build: could not set %s in the shell\n' "$option" >&2; exit 1; }
 done
@@ -162,7 +167,7 @@ if [[ "$status_line" == 0 ]]; then
         [[ "${source_files[$i]}" == "$sdc_source" ]] && source_files[i]="$output_dir/nano20k_zxnext.sdc"
     done
 fi
-printf 'audio=%s status_line=%s pi_pins=%s companion=%s pi_i2s=%s place=%s route=%s\n' "$audio" "$status_line" "$pi_pins" "$companion" "$pi_i2s" \
+printf 'audio=%s status_line=%s pi_pins=%s companion=%s pi_i2s=%s rzx=%s place=%s route=%s\n' "$audio" "$status_line" "$pi_pins" "$companion" "$pi_i2s" "$rzx" \
     "$place_option" "$route_option" >"$output_dir/build-options.txt"
 sha256sum "${source_files[@]}" >"$output_dir/source-sha256.txt"
 {
