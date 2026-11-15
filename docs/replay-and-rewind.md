@@ -133,10 +133,15 @@ same through the debug interface.
     (`t80na.vhd`, marked NextTang), not on the bus as in the first simulation version:
     on the bus it lengthened the design's tightest path and no Nano build met timing
     (20 to 34 setup violations in six builds); after the register, five of six do.
-  - Limits: 48K programs in the interrupt mode the board is already in (the debugger
-    cannot set the mode); about 230 bytes of recording per frame at most over the UART.
-- Next: the same changes in the main branch, a recording made by an emulator, then the
-  138K.
+  - A recording made by an emulator plays on the board: Fuse 1.6.0, a 48K Spectrum from
+    power-on with the Next's 48K ROM, the ROM's start-up and then a two-line program
+    typed and run (520 frames, Fuse's .szx snapshot). On the board: 520 of 520 frames,
+    no desync, and the screen ends as in Fuse ("12", "34", "0 OK, 20:1"). The play tool
+    reads Fuse's embedded .szx, and sets the interrupt mode, which the debugger cannot
+    write, by single-stepping an IM instruction in RAM.
+  - Limits: 48K programs; about 230 bytes of recording per frame at most over the UART.
+- Next: the same changes in the main branch, a game recording from the RZX Archive, then
+  the 138K.
 
 ## Order
 

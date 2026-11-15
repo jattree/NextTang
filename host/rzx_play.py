@@ -3,12 +3,12 @@
 
 Needs an image built with the RZX player (Nano 20K: build_zxnext.sh --rzx 2
 or 3) and the debugger on the debug UART (--pi-pins 0). The board must
-already be a 48K Spectrum in the recording's interrupt mode (NextZXOS's 48K
-BASIC, for a recording made there). On the debug UART the tool:
+already be a 48K Spectrum (NextZXOS's 48K BASIC). On the debug UART the tool:
 
-1. pauses the CPU, writes the recording's snapshot (a version 1,
-   uncompressed 48K .z80, as host/rzx_capture.py writes) into RAM at
-   0x4000-0xFFFF and into the CPU's registers;
+1. pauses the CPU, writes the recording's first snapshot (a 48K .szx, as
+   Fuse embeds, or a version 1 uncompressed 48K .z80, as host/rzx_capture.py
+   writes) into RAM at 0x4000-0xFFFF and into the CPU's registers; later
+   snapshots in the file (Fuse's autosaves) are not needed and are skipped;
 2. sends P and the first frames of the recording, which arms the player, and
    resumes the CPU: playing starts at that instruction;
 3. sends the rest as the board plays it, keeping the board's 1024-byte buffer
@@ -22,7 +22,8 @@ does nothing and the program runs as it did when recorded.
 
 divMMC automapping is turned off for the replay (see rzx_capture.py) and put
 back afterwards. The interrupt mode cannot be written through the debugger,
-so the tool refuses if the board's differs from the snapshot's.
+so if the board's differs from the snapshot's the tool runs an IM instruction
+in RAM first.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ import select
 import struct
 import sys
 import termios
+import zlib
 import time
 from pathlib import Path
 
@@ -65,6 +67,53 @@ def parse_z80_v1(data: bytes) -> tuple[dict[str, int], bytes]:
     return regs, data[30:]
 
 
+def parse_szx_48k(data: bytes) -> tuple[dict[str, int], bytes]:
+    """Registers and the 48K of RAM from a 48K Spectrum .szx (ZX-State), the
+    snapshot Fuse embeds in its recordings."""
+    if data[:4] != b"ZXST":
+        raise ValueError("not an .szx snapshot")
+    if data[6] not in (0, 1):
+        raise ValueError(f"the .szx is not for a 16K or 48K Spectrum (machine {data[6]})")
+    regs = None
+    pages: dict[int, bytes] = {}
+    at = 8
+    while at + 8 <= len(data):
+        name, size = data[at:at + 4], struct.unpack_from("<I", data, at + 4)[0]
+        body = data[at + 8:at + 8 + size]
+        at += 8 + size
+        if name == b"Z80R":
+            (af, bc, de, hl, af_, bc_, de_, hl_, ix, iy, sp, pc, i, r, iff1, iff2, mode) = \
+                struct.unpack_from("<12H5B", body)
+            if body[34] & 2:
+                raise ValueError("the snapshot's CPU is halted; not supported yet")
+            regs = {"AF": af, "BC": bc, "DE": de, "HL": hl, "AF'": af_, "BC'": bc_, "DE'": de_,
+                    "HL'": hl_, "IX": ix, "IY": iy, "SP": sp, "PC": pc, "I": i, "R": r,
+                    "IFF1": 1 if iff1 else 0, "IFF2": 1 if iff2 else 0, "IM": mode & 3}
+        elif name == b"RAMP":
+            flags, page = struct.unpack_from("<HB", body)
+            raw = body[3:]
+            pages[page] = zlib.decompress(raw) if flags & 1 else raw
+    if regs is None or any(len(pages.get(n, b"")) != 0x4000 for n in (5, 2, 0)):
+        raise ValueError("the .szx lacks the registers or one of RAM pages 5, 2 and 0")
+    return regs, pages[5] + pages[2] + pages[0]
+
+
+IM_OPCODES = {0: b"\xed\x46", 1: b"\xed\x56", 2: b"\xed\x5e"}
+
+
+def set_interrupt_mode(debug: PiDebug, memory: Z80Memory, mode: int, scratch: int = 0xC000) -> None:
+    """The debugger cannot write the interrupt mode, so run an IM instruction:
+    put it in RAM, point PC at it and single-step. The caller writes RAM and
+    the registers afterwards, so nothing needs putting back."""
+    memory.write(scratch, IM_OPCODES[mode] + b"\x00\x00")
+    debug.set_register("PC", scratch)
+    for _ in range(2):                      # a step may stop between ED and the opcode
+        debug.step()
+        if debug.registers()["IM"] == mode:
+            return
+    raise RuntimeError(f"could not put the CPU in IM {mode}")
+
+
 def frame_bytes(frame: Frame) -> bytes:
     return struct.pack("<HH", frame.fetches, len(frame.inputs)) + frame.inputs
 
@@ -84,10 +133,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     rzx = read(args.recording)
-    if not rzx.snapshots or rzx.snapshots[0].extension.upper() != "Z80":
-        print("the recording has no .z80 snapshot", file=sys.stderr)
+    if not rzx.snapshots or not rzx.snapshots[0].data:
+        print("the recording has no embedded snapshot", file=sys.stderr)
         return 1
-    regs, ram = parse_z80_v1(rzx.snapshots[0].data)
+    first = rzx.snapshots[0]
+    try:
+        if first.extension.upper() == "SZX":
+            regs, ram = parse_szx_48k(first.data)
+        elif first.extension.upper() == "Z80":
+            regs, ram = parse_z80_v1(first.data)
+        else:
+            raise ValueError(f"no reader for a .{first.extension.lower()} snapshot")
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
     frames = rzx.frames()
     sizes = [4 + len(f.inputs) for f in frames]
     if max(sizes) > BUFFER - KEEP_FREE:
@@ -108,8 +167,6 @@ def main(argv: list[str] | None = None) -> int:
         problem = None
         if pages != PAGES_48K:
             problem = f"not the 48K memory map: MMU {' '.join(f'{p:02X}' for p in pages)}"
-        elif now["IM"] != regs["IM"]:
-            problem = f"the board is in IM {now['IM']}, the snapshot in IM {regs['IM']}"
         if problem:
             debug.resume()
             if nr0a & 0x10 and not args.keep_divmmc:
@@ -117,12 +174,15 @@ def main(argv: list[str] | None = None) -> int:
             print(problem, file=sys.stderr)
             return 1
 
+        if now["IM"] != regs["IM"]:
+            set_interrupt_mode(debug, memory, regs["IM"])
+            print(f"interrupt mode set: IM {now['IM']} -> IM {regs['IM']}")
         memory.write(0x4000, ram)
         for name in ("AF", "BC", "DE", "HL", "AF'", "BC'", "DE'", "HL'", "IX", "IY", "SP", "PC", "I", "R"):
             debug.set_register(name, regs[name])
         debug.set_cpu_register(CPU_STATE_WRITE, regs["IFF2"] << 1 | regs["IFF1"])   # not halted
         check = debug.registers()
-        wrong = [n for n in ("AF", "BC", "DE", "HL", "IX", "IY", "SP", "PC", "I", "IFF1", "IFF2", "HALT")
+        wrong = [n for n in ("AF", "BC", "DE", "HL", "IX", "IY", "SP", "PC", "I", "IM", "IFF1", "IFF2", "HALT")
                  if check[n] != (regs[n] if n != "HALT" else 0)]
         if wrong or memory.read(0x4000, 0x100) != ram[:0x100] or memory.read(0xFF00, 0x100) != ram[-0x100:]:
             debug.resume()
