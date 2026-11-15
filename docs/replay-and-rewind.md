@@ -119,7 +119,24 @@ same through the debug interface.
   Only 48K programs so far. The board cannot yet play a recording (the player is in
   simulation only), and the player does not yet handle frames that end without an
   acknowledge.
-- Next: the same changes in the main branch, the player on the Nano 20K, then the 138K.
+- 2026-11-15, Nano 20K player, hardware-verified: `build_zxnext.sh --rzx 2` (or 3 with
+  the recorder) adds the player and a UART link (`rtl/debug/nexttang_rzx_play_link.v`):
+  `P` and up to 255 bytes arm it while the CPU is stopped, playing starts at the resume,
+  and the rest of the recording follows on the UART into a 1024-byte buffer while the
+  board reports each frame end. `host/rzx_play.py` writes the recording's snapshot into
+  RAM and the CPU through the debugger and sends the frames. On the board, from a
+  cleared 48K BASIC screen, the BEEP recording replays in full (705 of 705 frames, no
+  desync, five runs): the program is typed again, runs, beeps and prints, with no key
+  touched. The earlier typed-program recording replays too (504 of 504). A copy with
+  one port read removed from frame 100 stops there with a desync.
+  - The player's port byte is swapped in inside the CPU, after its input register
+    (`t80na.vhd`, marked NextTang), not on the bus as in the first simulation version:
+    on the bus it lengthened the design's tightest path and no Nano build met timing
+    (20 to 34 setup violations in six builds); after the register, five of six do.
+  - Limits: 48K programs in the interrupt mode the board is already in (the debugger
+    cannot set the mode); about 230 bytes of recording per frame at most over the UART.
+- Next: the same changes in the main branch, a recording made by an emulator, then the
+  138K.
 
 ## Order
 

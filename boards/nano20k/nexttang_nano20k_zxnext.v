@@ -261,9 +261,9 @@ module nexttang_nano20k_zxnext (
     // PI_I2S: 1 takes the Pi's I2S audio into the Next (with PI_SPI_PINS); 0
     // ties the inputs low so the core's Pi audio path is optimised away.
     localparam integer PI_I2S = 0;
-    // RZX_RECORD: 1 adds the RZX input recorder on the debug UART (Z starts,
-    // z stops; docs/replay-and-rewind.md).
-    localparam integer RZX_RECORD = 0;
+    // RZX: 1 adds the RZX input recorder on the debug UART (Z starts, z
+    // stops), 2 the RZX player (P), 3 both (docs/replay-and-rewind.md).
+    localparam integer RZX = 0;
 
     // keys and F1-F10 held from the host over the debug UART
     reg [39:0] keys_meta = 40'd0, keys_sync = 40'd0;
@@ -388,7 +388,7 @@ module nexttang_nano20k_zxnext (
         // board (2026-11-12); builds at 82-83 percent booted every time.
         .BREAKPOINT_SLOTS(2),
         .PI_SPI_PINS(PI_SPI_PINS),
-        .RZX_RECORD(RZX_RECORD),
+        .RZX(RZX),
         // SD MISO sampled half a CPU clock later: SCK leaves through an
         // I/O-cell register half a clock after the core moves it, so with the
         // official sampling point the card had 7.4 ns of the SD spec's 14 at

@@ -68,7 +68,9 @@ entity T80na_Debug is
       o_debug_lastM : out std_logic;
       i_debug_pause : in std_logic := '0';   -- NextTang: see t80n.vhd
       o_debug_next_pc : out std_logic_vector(15 downto 0);
-      i_debug_break : in std_logic := '0'
+      i_debug_break : in std_logic := '0';
+      RZX_PLAY : in std_logic := '0';   -- NextTang: RZX replay, see t80na.vhd
+      RZX_DATA : in std_logic_vector(7 downto 0) := (others => '1')
    );
 end entity;
 
@@ -85,7 +87,8 @@ begin
          Z80N_dout_o => Z80N_dout_o, Z80N_data_o => Z80N_data_o, Z80N_command_o => Z80N_command_o,
          i_debug_reg => i_debug_reg, i_debug_wr => i_debug_wr, i_debug_dat => i_debug_dat,
          o_debug_dat => o_debug_dat, o_debug_lastM => o_debug_lastM, i_debug_pause => i_debug_pause,
-         o_debug_next_pc => o_debug_next_pc, i_debug_break => i_debug_break
+         o_debug_next_pc => o_debug_next_pc, i_debug_break => i_debug_break,
+         RZX_PLAY => RZX_PLAY, RZX_DATA => RZX_DATA
       );
 end architecture;
 
@@ -113,7 +116,9 @@ entity T80na_Complete_Debug is
       o_debug_lastM : out std_logic;
       i_debug_pause : in std_logic := '0';   -- NextTang: see t80n.vhd
       o_debug_next_pc : out std_logic_vector(15 downto 0);
-      i_debug_break : in std_logic := '0'
+      i_debug_break : in std_logic := '0';
+      RZX_PLAY : in std_logic := '0';   -- NextTang: RZX replay, see t80na.vhd
+      RZX_DATA : in std_logic_vector(7 downto 0) := (others => '1')
    );
 end entity;
 
@@ -130,6 +135,7 @@ begin
          Z80N_dout_o => Z80N_dout_o, Z80N_data_o => Z80N_data_o, Z80N_command_o => Z80N_command_o,
          i_debug_reg => i_debug_reg, i_debug_wr => i_debug_wr, i_debug_dat => i_debug_dat,
          o_debug_dat => o_debug_dat, o_debug_lastM => o_debug_lastM, i_debug_pause => i_debug_pause,
-         o_debug_next_pc => o_debug_next_pc, i_debug_break => i_debug_break
+         o_debug_next_pc => o_debug_next_pc, i_debug_break => i_debug_break,
+         RZX_PLAY => RZX_PLAY, RZX_DATA => RZX_DATA
       );
 end architecture;

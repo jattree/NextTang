@@ -115,12 +115,20 @@
 // passed to the board on board_command_valid / board_command_byte for its own
 // commands.
 //
-// With RZX_RECORD, Z on the debug UART starts an RZX input recording
+// With RZX bit 0, Z on the debug UART starts an RZX input recording
 // (docs/replay-and-rewind.md): at once if the CPU is running, or when it is
 // next resumed if it is stopped, so a host can pause the CPU, read the
 // starting snapshot through the debugger, send Z and resume. z stops it. From
 // the start until the recording is sent the UART carries it
 // (rtl/debug/nexttang_rzx_uart.v) instead of status lines or debugger replies.
+//
+// With RZX bit 1, P on the debug UART while the CPU is stopped arms the RZX
+// player (rtl/debug/nexttang_rzx_play_link.v has the byte protocol): the host
+// puts the machine at the recording's snapshot through the debugger, sends P
+// and the first part of the recording, and resumes. From that resume until
+// playing ends, every byte received is the recording, the CPU's port reads
+// and maskable interrupt come from it, and the UART's transmit side carries
+// the player's progress.
 //
 // The SD card is on the core's SPI master (spi_clock, spi_mosi,
 // spi_sd0_select_n, spi_sd_miso). With SD_MONITOR set, every byte the card
@@ -152,8 +160,9 @@ module nexttang_next_machine #(
     // 1: the core's SPI master samples MISO half a CPU clock later
     // (spi_master g_miso_late), for boards whose SD clock reaches the card late.
     parameter integer SPI_MISO_LATE = 0,
-    // 1: the RZX input recorder on the debug UART (Z / z, above).
-    parameter integer RZX_RECORD = 0
+    // Bit 0: the RZX input recorder on the debug UART (Z / z, above).
+    // Bit 1: the RZX player on the debug UART (P, above).
+    parameter integer RZX = 0
 ) (
     // clocks and resets
     input  wire        clock_28,
@@ -332,6 +341,9 @@ module nexttang_next_machine #(
     wire        cpu_break;
     wire [63:0] core_mmu;
     wire        rzx_m1_n, rzx_iorq_n, rzx_rd_n, rzx_int_n;
+    wire        rzx_playing, rzx_play_int;
+    wire [7:0]  rzx_play_data;
+    wire        rzx_play_taking;
     wire [7:0]  rzx_in_data;
 
     wire        core_m1_n;
@@ -512,9 +524,9 @@ module nexttang_next_machine #(
         .o_CPU_STOPPED(cpu_stopped),
         .i_CPU_BREAK(cpu_break),
         .o_MMU(core_mmu),
-        .i_RZX_PLAY(1'b0),
-        .i_RZX_INT(1'b0),
-        .i_RZX_IN_DATA(8'hff),
+        .i_RZX_PLAY(rzx_playing),
+        .i_RZX_INT(rzx_play_int),
+        .i_RZX_IN_DATA(rzx_play_data),
         .o_RZX_M1_n(rzx_m1_n),
         .o_RZX_IORQ_n(rzx_iorq_n),
         .o_RZX_RD_n(rzx_rd_n),
@@ -803,7 +815,7 @@ module nexttang_next_machine #(
     wire       pi_reply_done;
     wire [7:0] pi_reply;
     wire       pi_spi_idle;
-    assign     board_command_valid = command_valid && !pi_frame_active;
+    assign     board_command_valid = command_valid && !pi_frame_active && !rzx_play_taking;
     assign     board_command_byte = command_byte;
     wire       bp_strobe;
     wire [7:0] bp_slot;
@@ -819,7 +831,7 @@ module nexttang_next_machine #(
     ) pi_debug_link (
         .clock(clock_28),
         .reset(!machine_locked),
-        .rx_valid(command_valid),
+        .rx_valid(command_valid && !rzx_play_taking),
         .rx_byte(command_byte),
         .frame_active(pi_frame_active),
         .session_active(pi_session),
@@ -995,11 +1007,11 @@ module nexttang_next_machine #(
     end
     endgenerate
 
-    // RZX input recorder (RZX_RECORD).
+    // RZX input recorder (RZX bit 0).
     wire rzx_busy;
     wire rzx_tx;
     generate
-    if (RZX_RECORD != 0) begin : rzx
+    if ((RZX & 1) != 0) begin : rzx
         wire recording, saturated, overflow;
         wire [8:0] word;
         wire word_valid, word_ready;
@@ -1066,9 +1078,70 @@ module nexttang_next_machine #(
     end
     endgenerate
 
+    // RZX player (RZX bit 1).
+    wire rzx_play_busy;
+    wire rzx_play_tx;
+    generate
+    if ((RZX & 2) != 0) begin : rzx_play
+        wire play_start, play_stop, desync;
+        wire [15:0] frames;
+        wire [7:0] stream_byte;
+        wire stream_valid, stream_ready;
+
+        nexttang_rzx_play_link #(
+            .CLOCK_HZ(28000000),
+            .BAUD_RATE(115200),
+            .FIFO_BITS(10)
+        ) link (
+            .clock(clock_28),
+            .reset(!machine_locked),
+            .command_valid(command_valid && (!pi_frame_active || rzx_play_taking)),
+            .command_byte(command_byte),
+            .taking(rzx_play_taking),
+            .cpu_stopped(cpu_stopped),
+            .play_start(play_start),
+            .play_stop(play_stop),
+            .playing(rzx_playing),
+            .desync(desync),
+            .frames(frames),
+            .byte_out(stream_byte),
+            .byte_valid(stream_valid),
+            .byte_ready(stream_ready),
+            .busy(rzx_play_busy),
+            .tx(rzx_play_tx)
+        );
+
+        nexttang_rzx_player player (
+            .clock(clock_28),
+            .reset(!machine_locked),
+            .start(play_start),
+            .stop(play_stop),
+            .playing(rzx_playing),
+            .desync(desync),
+            .frames(frames),
+            .m1_n(rzx_m1_n),
+            .iorq_n(rzx_iorq_n),
+            .rd_n(rzx_rd_n),
+            .byte_in(stream_byte),
+            .byte_valid(stream_valid),
+            .byte_ready(stream_ready),
+            .in_data(rzx_play_data),
+            .int_request(rzx_play_int)
+        );
+    end else begin : no_rzx_play
+        assign rzx_playing = 1'b0;
+        assign rzx_play_int = 1'b0;
+        assign rzx_play_data = 8'hff;
+        assign rzx_play_taking = 1'b0;
+        assign rzx_play_busy = 1'b0;
+        assign rzx_play_tx = 1'b1;
+    end
+    endgenerate
+
     assign pi_miso = core_gpio[9];
 
-    assign debug_uart_tx = rzx_busy ? rzx_tx
+    assign debug_uart_tx = rzx_play_busy ? rzx_play_tx
+                         : rzx_busy ? rzx_tx
                          : pi_session ? pi_link_tx
                          : capture_sending ? capture_transmit
                          : trace_frozen ? trace_transmit
