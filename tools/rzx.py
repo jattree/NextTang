@@ -263,6 +263,36 @@ def write(path: Path, rzx: Rzx) -> None:
     path.write_bytes(serialise(rzx))
 
 
+def frames_from_logger(words: list[int]) -> list[Frame]:
+    """Frames from the core's input recorder (rtl/debug/nexttang_rzx_logger.v).
+
+    Each word is 9 bits: an IN byte (bit 8 clear), or a frame end given as two
+    tagged words, the fetch count's low byte then its high byte. Untagged words
+    after the last frame end belong to a frame cut off by stopping, and are
+    dropped.
+    """
+    frames: list[Frame] = []
+    inputs = bytearray()
+    low: int | None = None
+    for position, word in enumerate(words):
+        if not 0 <= word <= 0x1FF:
+            raise RzxError(f"recorder word {position} out of range: {word:#x}")
+        if word & 0x100:
+            if low is None:
+                low = word & 0xFF
+            else:
+                frames.append(Frame((word & 0xFF) << 8 | low, bytes(inputs)))
+                inputs.clear()
+                low = None
+        elif low is not None:
+            raise RzxError(f"recorder word {position}: IN byte inside a frame end")
+        else:
+            inputs.append(word)
+    if low is not None:
+        raise RzxError("recorder stream ends inside a frame end")
+    return frames
+
+
 def describe(rzx: Rzx) -> str:
     lines = [f"RZX {rzx.major}.{rzx.minor}, flags {rzx.flags:#x}"
              + (" (signed)" if rzx.flags & FILE_SIGNED else "")]

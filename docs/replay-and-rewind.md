@@ -1,6 +1,8 @@
 # RZX replay, recording and rewind (planned)
 
-Status: **planned, not implemented** (owner request 2026-11-14). The official Next has
+Status: **planned; first piece simulation-verified** (owner request 2026-11-14). The
+input recorder (`rtl/debug/nexttang_rzx_logger.v`, below) is checked in simulation
+against the real core; it is not yet in any build, and nothing has run on hardware. The official Next has
 no input recording, no RZX support and no rewind; NextZXOS 26.11 loads SNA/Z80/SNX/NEX
 snapshots and the NMI menu can save state by hand. This is a NextTang addition, inside
 the Next core, for the 138K and, where it fits, the Nano 20K. cpcnext plans the same
@@ -65,6 +67,22 @@ File I/O stays with NextZXOS (it owns the SD card): dot commands such as `.RZXRE
 hardware through NextTang NextREGs; later, entries in the NMI menu and a rewind key.
 On boards with a Pi (Pi Zero on the Nano, Pi 5 on the 138K) the host tools can do the
 same through the debug interface.
+
+## Progress
+
+- **Input recorder, simulation-verified (2026-11-14).** `rtl/debug/nexttang_rzx_logger.v`
+  watches the CPU's own M1, IORQ and RD and its input register (the core's existing
+  `o_SPEC256_*` exports, so the core itself is unchanged) and streams IN bytes and
+  frame ends as 9-bit words; `tools/rzx.py`'s `frames_from_logger` turns them into RZX
+  frames. `tests/test_rzx_logger.py` covers the module on its own (random frames with
+  back-pressure, 28 MHz timing, saturation, overflow). `tests/sim/zxnext/run_rzx_check.sh`
+  runs the whole core on the clock test ROM (all four CPU speeds, frame interrupts from
+  HALT, keyboard and port reads) for 4.5 million cycles: 6 frames, 219,602 fetches and
+  33 IN reads, every frame's fetch count agreeing with the CPU's R register, and the
+  recorder's output identical to the frames worked out from the bus. Hiding a single
+  fetch makes the R check fail.
+- Next: drain the stream into SDRAM, the host-side snapshot over the debugger, an .rzx
+  written from a 138K run and played in Fuse.
 
 ## Order
 

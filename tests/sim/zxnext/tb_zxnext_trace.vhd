@@ -76,7 +76,13 @@ entity tb_zxnext_trace is
         -- every lane's registers equal the CPU's, and that their bus strobes
         -- never differ. The lines between the SPEC256 markers are removed for
         -- the original core, which has no Spec256 exports.
-        SPEC256_LANES : boolean := false
+        SPEC256_LANES : boolean := false;
+        -- When set (enables mode only), write the CPU's M1, IORQ and RD, its
+        -- input register and its R register to this file, one line of
+        -- "cycle m1 iorq rd di r" (cycle decimal, the rest hex) whenever any
+        -- of them changes: the input of tests/sim/zxnext/rzx_check.py, which
+        -- checks the RZX input recorder against the real core.
+        RZX_DUMP : string := ""
     );
 end entity;
 
@@ -897,6 +903,27 @@ begin
                           string'(" desync ") & std_logic'image(s256_desync));
                     writeline(output, l);
                 end if;
+            end if;
+        end process;
+    end generate;
+
+    rzx_bus : if RZX_DUMP /= "" and MODE = "enables" generate
+        dump : process (cpu_clock)
+            file dump_file : text open write_mode is RZX_DUMP;
+            variable l : line;
+            variable ticks : natural := 0;
+            variable now_bits, last_bits : std_logic_vector(18 downto 0) := (others => 'U');
+        begin
+            if rising_edge(cpu_clock) then
+                now_bits := s256_m1_n & s256_iorq_n & s256_rd_n & s256_di & s256_r;
+                if now_bits /= last_bits then
+                    write(l, integer'image(ticks) & " " & std_logic'image(s256_m1_n)(2) & " " &
+                          std_logic'image(s256_iorq_n)(2) & " " & std_logic'image(s256_rd_n)(2) & " " &
+                          to_hstring(s256_di) & " " & to_hstring(s256_r));
+                    writeline(dump_file, l);
+                    last_bits := now_bits;
+                end if;
+                ticks := ticks + 1;
             end if;
         end process;
     end generate;

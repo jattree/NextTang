@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 
 from tools.rzx import (
-    Creator, Frame, RawBlock, Recording, Rzx, RzxError, Snapshot, main, parse, serialise,
+    Creator, Frame, RawBlock, Recording, Rzx, RzxError, Snapshot, frames_from_logger, main, parse,
+    serialise,
 )
 
 
@@ -78,6 +79,18 @@ class RzxTests(unittest.TestCase):
             serialise(Rzx([Recording(0, [Frame(0x10000, b"")])]))
         with self.assertRaisesRegex(RzxError, "19"):
             serialise(Rzx([Creator("x" * 20)]))
+
+    def test_frames_from_the_core_recorder(self) -> None:
+        words = [0xBF, 0xFE, 0x100 | 0x34, 0x100 | 0x12,   # two INs, 0x1234 fetches
+                 0x100 | 0x05, 0x100,                      # no INs, 5 fetches
+                 0x7F]                                     # cut off by stop
+        frames = frames_from_logger(words)
+        self.assertEqual(frames, [Frame(0x1234, b"\xbf\xfe"), Frame(5, b"")])
+        rzx = Rzx([Recording(frames=frames)])
+        self.assertEqual(parse(serialise(rzx)).frames(), frames)
+        for bad in ([0x200], [0x101], [0x101, 0x05, 0x102]):
+            with self.assertRaises(RzxError):
+                frames_from_logger(bad)
 
     def test_cli_info_frames_and_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
