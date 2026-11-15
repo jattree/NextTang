@@ -45,15 +45,45 @@ def szx(regs: dict[str, int], ram: bytes, machine: int = 1, halted: bool = False
 
 class RzxPlayHostTest(unittest.TestCase):
     def test_z80_written_by_the_capture_tool_reads_back(self) -> None:
-        regs, ram = play.parse_z80_v1(capture.z80_v1(REGS, RAM))
+        regs, ram = play.parse_z80(capture.z80_v1(REGS, RAM))
         self.assertEqual(regs, REGS)
         self.assertEqual(ram, RAM)
 
-    def test_other_z80_versions_are_refused(self) -> None:
-        data = bytearray(capture.z80_v1(REGS, RAM))
-        data[6:8] = b"\x00\x00"                    # PC 0: a version 2 or 3 file
-        with self.assertRaises(ValueError):
-            play.parse_z80_v1(bytes(data))
+    def test_z80_version_1_compressed(self) -> None:
+        ram = bytes(100) + b"\xed\xed" + RAM[102:0xC000 - 50] + b"\x55" * 50
+        packed = bytearray()
+        at = 0
+        while at < len(ram):                       # a simple packer: runs of 5 or more, and any ED ED
+            run = 1
+            while at + run < len(ram) and ram[at + run] == ram[at] and run < 255:
+                run += 1
+            if run >= 5 or (ram[at] == 0xED and run >= 2):
+                packed += bytes([0xED, 0xED, run, ram[at]])
+                at += run
+            else:
+                packed.append(ram[at])
+                at += 1
+                if ram[at - 1] == 0xED and at < len(ram):   # a byte after a lone ED is never packed
+                    packed.append(ram[at])
+                    at += 1
+        header = bytearray(capture.z80_v1(REGS, RAM)[:30])
+        header[12] |= 0x20
+        regs, got = play.parse_z80(bytes(header) + bytes(packed) + b"\x00\xed\xed\x00")
+        self.assertEqual(regs, REGS)
+        self.assertEqual(got, ram)
+
+    def test_z80_version_3(self) -> None:
+        header = bytearray(capture.z80_v1(REGS, RAM)[:30])
+        header[6:8] = b"\x00\x00"
+        extra = struct.pack("<HHB", 54, REGS["PC"], 0) + bytes(51)
+        blocks = b""
+        for page, offset in ((4, 0x4000), (5, 0x8000), (8, 0)):
+            blocks += struct.pack("<HB", 0xFFFF, page) + RAM[offset:offset + 0x4000]
+        regs, ram = play.parse_z80(bytes(header) + extra + blocks)
+        self.assertEqual(regs, REGS)
+        self.assertEqual(ram, RAM)
+        with self.assertRaises(ValueError):       # hardware 4: a 128K
+            play.parse_z80(bytes(header) + struct.pack("<HHB", 54, REGS["PC"], 4) + bytes(51) + blocks)
 
     def test_szx_48k(self) -> None:
         for compress in (True, False):

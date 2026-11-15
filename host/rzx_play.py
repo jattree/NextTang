@@ -6,8 +6,7 @@ or 3) and the debugger on the debug UART (--pi-pins 0). The board must
 already be a 48K Spectrum (NextZXOS's 48K BASIC). On the debug UART the tool:
 
 1. pauses the CPU, writes the recording's first snapshot (a 48K .szx, as
-   Fuse embeds, or a version 1 uncompressed 48K .z80, as host/rzx_capture.py
-   writes) into RAM at 0x4000-0xFFFF and into the CPU's registers; later
+   Fuse embeds, or a 48K .z80 of any version) into RAM at 0x4000-0xFFFF and into the CPU's registers; later
    snapshots in the file (Fuse's autosaves) are not needed and are skipped;
 2. sends P and the first frames of the recording, which arms the player, and
    resumes the CPU: playing starts at that instruction;
@@ -52,19 +51,61 @@ KEEP_FREE = 256          # never fill the board's buffer past BUFFER - KEEP_FREE
 PREFILL_MAX = 255
 
 
-def parse_z80_v1(data: bytes) -> tuple[dict[str, int], bytes]:
-    """Registers and the 48K of RAM from a version 1, uncompressed .z80."""
-    if len(data) != 30 + 0xC000:
-        raise ValueError("not an uncompressed 48K version 1 .z80")
+def _z80_unpack(data: bytes, length: int | None = None) -> bytes:
+    """Undo the .z80 run-length coding (ED ED count byte); in a version 1
+    file the block ends at 00 ED ED 00."""
+    out = bytearray()
+    at = 0
+    while at < len(data) and (length is None or len(out) < length):
+        if length is None and data[at:at + 4] == b"\x00\xed\xed\x00":
+            break
+        if data[at:at + 2] == b"\xed\xed" and at + 3 < len(data):
+            out += bytes([data[at + 3]]) * data[at + 2]
+            at += 4
+        else:
+            out.append(data[at])
+            at += 1
+    return bytes(out)
+
+
+def parse_z80(data: bytes) -> tuple[dict[str, int], bytes]:
+    """Registers and the 48K of RAM from a 48K .z80, versions 1 to 3."""
+    if len(data) < 30:
+        raise ValueError("not a .z80 snapshot")
     (a, f, bc, hl, pc, sp, i, r, flags, de, bc_, de_, hl_, a_, f_, iy, ix,
      iff1, iff2, mode) = struct.unpack("<BBHHHHBBBHHHHBBHHBBB", data[:30])
-    if pc == 0 or flags & 0x20:
-        raise ValueError("only version 1, uncompressed .z80 snapshots are supported")
+    if flags == 0xFF:
+        flags = 1
+    if pc != 0:                                   # version 1
+        body = data[30:]
+        ram = _z80_unpack(body) if flags & 0x20 else body
+    else:                                         # versions 2 and 3
+        extra = struct.unpack_from("<H", data, 30)[0]
+        pc = struct.unpack_from("<H", data, 32)[0]
+        hardware = data[34]
+        if hardware not in ((0, 1) if extra == 23 else (0, 1, 3)) or (len(data) > 37 and data[37] & 0x80):
+            raise ValueError(f"the .z80 is not for a 48K Spectrum (hardware {hardware})")
+        pages: dict[int, bytes] = {}
+        at = 32 + extra
+        while at + 3 <= len(data):
+            size, page = struct.unpack_from("<HB", data, at)
+            at += 3
+            if size == 0xFFFF:
+                pages[page] = data[at:at + 0x4000]
+                at += 0x4000
+            else:
+                pages[page] = _z80_unpack(data[at:at + size], 0x4000)
+                at += size
+        if any(len(pages.get(n, b"")) != 0x4000 for n in (8, 4, 5)):
+            raise ValueError("the .z80 lacks one of the 48K RAM pages")
+        ram = pages[8] + pages[4] + pages[5]
+    if len(ram) != 0xC000:
+        raise ValueError("the .z80 does not hold 48K of RAM")
     regs = {"AF": a << 8 | f, "BC": bc, "DE": de, "HL": hl, "AF'": a_ << 8 | f_, "BC'": bc_,
             "DE'": de_, "HL'": hl_, "IX": ix, "IY": iy, "SP": sp, "PC": pc, "I": i,
             "R": r & 0x7F | (flags & 1) << 7, "IFF1": 1 if iff1 else 0, "IFF2": 1 if iff2 else 0,
             "IM": mode & 3}
-    return regs, data[30:]
+    return regs, ram
 
 
 def parse_szx_48k(data: bytes) -> tuple[dict[str, int], bytes]:
@@ -141,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         if first.extension.upper() == "SZX":
             regs, ram = parse_szx_48k(first.data)
         elif first.extension.upper() == "Z80":
-            regs, ram = parse_z80_v1(first.data)
+            regs, ram = parse_z80(first.data)
         else:
             raise ValueError(f"no reader for a .{first.extension.lower()} snapshot")
     except ValueError as error:

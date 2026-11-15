@@ -139,9 +139,16 @@ same through the debug interface.
     no desync, and the screen ends as in Fuse ("12", "34", "0 OK, 20:1"). The play tool
     reads Fuse's embedded .szx, and sets the interrupt mode, which the debugger cannot
     write, by single-stepping an IM instruction in RAM.
-  - Limits: 48K programs; about 230 bytes of recording per frame at most over the UART.
-- Next: the same changes in the main branch, a game recording from the RZX Archive, then
-  the 138K.
+  - A game recording from the RZX Archive plays on the board: Jackal (48K, recorded in
+    SPIN 0.5, a version 2 .z80 snapshot, interrupt mode 2): 22,453 of 22,453 frames,
+    about seven and a half minutes of play, no desync. The play tool reads 48K .z80
+    snapshots of any version. (Archive recordings hold game snapshots: local tests only,
+    none are in this repository.)
+  - Limits: 48K programs; about 230 bytes of recording per frame on average over the
+    UART (the 1024-byte buffer takes single busier frames; Jackal's busiest has 284
+    port reads).
+- Next: the same changes in the main branch, then the 138K with the recording on the SD
+  card, 128K recordings, and rewind.
 
 ## Order
 
