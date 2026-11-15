@@ -13,7 +13,14 @@ checks:
 2. rtl/debug/nexttang_rzx_logger.v, simulated with the same signals clock by
    clock, produces exactly those frames.
 
-Usage: rzx_check.py DUMP [--keep DIR]
+With --write-stream, the frames are also written as the player's input (one
+hex byte per line: fetch count, IN count, IN bytes, as in an RZX file). With
+--expect STREAM, the frames must be those of STREAM: the check for a replay
+(the dump of a run played from STREAM), and with --expect-differ the check
+that a run's inputs really changed (the frames must not match).
+
+Usage: rzx_check.py DUMP [--keep DIR] [--write-stream FILE]
+                         [--expect STREAM [--expect-differ]]
 """
 
 from __future__ import annotations
@@ -37,11 +44,19 @@ def read_dump(path: Path) -> list[tuple[int, int, int, int, int, int]]:
     for line in path.read_text(encoding="ascii").splitlines():
         cycle, m1, iorq, rd, di, r = line.split()
         if not all(c in "01" for c in m1 + iorq + rd):
-            continue
+            continue  # strobes undefined before reset
+        # The input and R registers are undefined until first written (the
+        # first fetch happens before either is): keep the strobes, which are
+        # what count, and read an undefined register as 0xFF / 0.
         try:
-            events.append((int(cycle), int(m1), int(iorq), int(rd), int(di, 16), int(r, 16)))
+            di_value = int(di, 16)
         except ValueError:
-            continue  # undefined values before reset
+            di_value = 0xFF
+        try:
+            r_value = int(r, 16)
+        except ValueError:
+            r_value = 0
+        events.append((int(cycle), int(m1), int(iorq), int(rd), di_value, r_value))
     return events
 
 
@@ -141,10 +156,32 @@ def run_logger(events, work: Path) -> tuple[list[int], str]:
     return words, status
 
 
+def write_stream(frames: list[Frame], path: Path) -> None:
+    with open(path, "w", encoding="ascii") as handle:
+        for frame in frames:
+            for byte in (frame.fetches & 0xFF, frame.fetches >> 8,
+                         len(frame.inputs) & 0xFF, len(frame.inputs) >> 8, *frame.inputs):
+                handle.write(f"{byte:02x}\n")
+
+
+def read_stream(path: Path) -> list[Frame]:
+    data = bytes(int(line, 16) for line in path.read_text(encoding="ascii").split())
+    frames, position = [], 0
+    while position < len(data):
+        fetches = data[position] | data[position + 1] << 8
+        count = data[position + 2] | data[position + 3] << 8
+        frames.append(Frame(fetches, data[position + 4:position + 4 + count]))
+        position += 4 + count
+    return frames
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("dump", type=Path)
     parser.add_argument("--keep", type=Path, help="keep the logger simulation's files here")
+    parser.add_argument("--write-stream", type=Path, help="write the frames as the player's input")
+    parser.add_argument("--expect", type=Path, help="the frames must be this player input's")
+    parser.add_argument("--expect-differ", action="store_true", help="with --expect: they must not be")
     args = parser.parse_args()
     events = read_dump(args.dump)
     expected, problems = reference(events)
@@ -173,6 +210,22 @@ def main() -> int:
                 break
         else:
             print(f"LOGGER MISMATCH: logger {len(got)} frames, reference {len(expected)}")
+    if args.write_stream:
+        write_stream(expected, args.write_stream)
+        print(f"wrote {args.write_stream}: {len(expected)} frames")
+    if args.expect:
+        wanted = read_stream(args.expect)
+        same = expected == wanted
+        print(f"against {args.expect}: {len(wanted)} frames there, {len(expected)} here, "
+              f"{'identical' if same else 'different'}")
+        if not same:
+            for index, (a, b) in enumerate(zip(expected, wanted)):
+                if a != b:
+                    print(f"  first difference, frame {index}: {a.fetches} fetches {a.inputs.hex()} "
+                          f"against {b.fetches} fetches {b.inputs.hex()}")
+                    break
+        if same == args.expect_differ:
+            ok = False
     if len(expected) < 3:
         print("too few frames for an R check")
         ok = False

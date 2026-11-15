@@ -1,8 +1,9 @@
 # RZX replay, recording and rewind (planned)
 
-Status: **planned; first piece simulation-verified** (owner request 2026-11-14). The
-input recorder (`rtl/debug/nexttang_rzx_logger.v`, below) is checked in simulation
-against the real core; it is not yet in any build, and nothing has run on hardware. The official Next has
+Status: **recorder and player simulation-verified** (owner request 2026-11-14). The
+input recorder (`rtl/debug/nexttang_rzx_logger.v`) and player
+(`rtl/debug/nexttang_rzx_player.vhd`) are checked in simulation against the real core;
+neither is in any build yet, and nothing has run on hardware. The official Next has
 no input recording, no RZX support and no rewind; NextZXOS 26.11 loads SNA/Z80/SNX/NEX
 snapshots and the NMI menu can save state by hand. This is a NextTang addition, inside
 the Next core, for the 138K and, where it fits, the Nano 20K. cpcnext plans the same
@@ -77,12 +78,24 @@ same through the debug interface.
   frames. `tests/test_rzx_logger.py` covers the module on its own (random frames with
   back-pressure, 28 MHz timing, saturation, overflow). `tests/sim/zxnext/run_rzx_check.sh`
   runs the whole core on the clock test ROM (all four CPU speeds, frame interrupts from
-  HALT, keyboard and port reads) for 4.5 million cycles: 6 frames, 219,602 fetches and
+  HALT, keyboard and port reads) for 4.5 million cycles: 6 frames, 219,603 fetches and
   33 IN reads, every frame's fetch count agreeing with the CPU's R register, and the
   recorder's output identical to the frames worked out from the bus. Hiding a single
   fetch makes the R check fail.
-- Next: drain the stream into SDRAM, the host-side snapshot over the debugger, an .rzx
-  written from a 138K run and played in Fuse.
+- **Player, simulation-verified (2026-11-14).** `rtl/debug/nexttang_rzx_player.vhd` takes
+  RZX frames as a byte stream. While it plays, the core (three NextTang inputs on
+  `zxnext`: `i_RZX_PLAY`, `i_RZX_INT`, `i_RZX_IN_DATA`) takes every CPU I/O read's byte
+  from it and its maskable interrupt from it alone; it raises the interrupt during each
+  frame's last fetch and checks every frame at the acknowledge. `run_rzx_check.sh` now
+  records the clock test ROM, then runs it three more times: with every key down and EAR
+  high and no playback, the CPU reads different bytes (keyboard `e0` instead of `bf`);
+  with the same changed inputs played from the recording, all 6 frames are identical to
+  the recording (fetch counts, R and every IN byte) and the player reports no desync;
+  with one IN byte left out of frame 2, the player reports a desync in frame 2 and hands
+  the core back its live inputs. A fetch count off by one is not caught on this ROM,
+  which waits for every interrupt in HALT, where one fetch more or less changes nothing.
+- Next, while the 138K is away: the recorder and player in the Nano 20K build, the stream
+  over the debug UART, the snapshot through the debugger, and an .rzx played in Fuse.
 
 ## Order
 
