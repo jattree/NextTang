@@ -16,22 +16,33 @@
 -- began with, the CPU then runs the recorded instructions exactly.
 --
 -- Fetches are counted as the recorder counts them: one per M1 cycle that is
--- not an interrupt acknowledge. A frame ends with an interrupt after exactly
--- its fetch count, so int_request rises during the frame's last fetch (M1
--- low with fetch count - 1 already done), well before the CPU samples INT
--- at the end of that instruction, at any CPU speed, and stays up until the
--- acknowledge. The last fetch is always the last M1 of its instruction in a
--- faithful replay, as the recording ended the frame at that boundary.
+-- not an interrupt acknowledge. A frame ends with an interrupt request after
+-- exactly its fetch count, so int_request rises during the frame's last
+-- fetch (M1 low with fetch count - 1 already done), well before the CPU
+-- samples INT at the end of that instruction, at any CPU speed, and stays up
+-- until the next M1 cycle starts. The last fetch is always the last M1 of
+-- its instruction in a faithful replay, as the recording ended the frame at
+-- that boundary.
 --
--- At each acknowledge the frame is checked: exactly its fetches, exactly its
+-- That next M1 cycle is either the acknowledge, or, when the CPU has
+-- interrupts disabled, an ordinary fetch: the recorder ends a frame there
+-- too (a declined interrupt), and that fetch is the next frame's first. So
+-- the request is one try per frame, as an emulator's is. A frame with a
+-- fetch count of 0 is tried as soon as it is known.
+--
+-- At each frame end the frame is checked: exactly its fetches, exactly its
 -- IN bytes used. An I/O read when the frame has no byte left, a byte not yet
 -- in from the stream when a read starts, or a frame that ends wrongly is a
 -- desync: playing drops, so the core goes back to its live ports and
--- interrupts, and desync stays set until the next start.
+-- interrupts, and desync stays set until the next start. The player cannot
+-- tell a declined interrupt the recording did not have from one it did;
+-- such a replay goes wrong at a later frame's check.
 --
 -- The stream must keep up: a frame's header is read after the previous
--- acknowledge and must be in before the frame's last fetch, and each IN byte
--- before its read starts (one byte is held ready ahead).
+-- frame end and must be in before the frame's last fetch, and each IN byte
+-- before its read starts (one byte is held ready ahead). After a declined
+-- interrupt the CPU is already one fetch into the next frame when its
+-- header starts to arrive.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -98,7 +109,7 @@ begin
    in_last_fetch <= '1' when m1_n = '0' and ack_seen = '0' and target /= 0 and
                              fetches = target - 1 else '0';
    int_request <= '1' when play_r = '1' and header_left = 0 and
-                           (fetches >= target or in_last_fetch = '1') else '0';
+                           ((fetches = target and m1_n = '1') or in_last_fetch = '1') else '0';
 
    in_data <= next_byte;
    playing <= play_r;
@@ -154,7 +165,22 @@ begin
                   loaded <= (others => '0');
                   used <= (others => '0');
                   have_byte <= '0';
+               elsif header_left = 0 and fetches = target then
+                  -- The interrupt was declined: the frame ends here and this
+                  -- fetch is the next frame's first.
+                  if used /= in_count then
+                     bad := true;
+                  end if;
+                  frames_r <= frames_r + 1;
+                  fetches <= to_unsigned(1, 16);
+                  header_left <= to_unsigned(4, 3);
+                  loaded <= (others => '0');
+                  used <= (others => '0');
+                  have_byte <= '0';
                else
+                  if header_left = 0 and fetches > target then
+                     bad := true;   -- the header came after the frame's last fetch
+                  end if;
                   fetches <= fetches + 1;
                end if;
             end if;

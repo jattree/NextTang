@@ -121,6 +121,13 @@ same through the debug interface.
   Only 48K programs so far. The board cannot yet play a recording (the player is in
   simulation only), and the player does not yet handle frames that end without an
   acknowledge.
+- 2026-11-15, player: a frame that ends with the interrupt declined is played. The
+  request is now one try per frame (up from the frame's last fetch until the next M1
+  cycle starts); if that cycle is an ordinary fetch, the frame ends there and the fetch
+  is the next frame's first. `tests/test_rzx_player.py` drives the player from a scripted
+  CPU bus (acknowledged and declined frames, a port read in the first instruction after
+  a declined interrupt, empty frames, two CPU speeds, two desync cases), and the
+  full-core check above still passes.
 - Next: the player on the Nano 20K, then the 138K. The simulation check here ties the
   recorder's interrupt input high (its test ROM takes every interrupt); the declined
   case is covered by the recorder's unit tests and the Nano recordings. The core's tap
