@@ -45,7 +45,7 @@ CPU_REGISTERS = {
     "IXH": 0x10, "IXL": 0x11, "IYH": 0x12, "IYL": 0x13, "SPH": 0x14, "SPL": 0x15,
     "PCH": 0x16, "PCL": 0x17, "I": 0x18, "R": 0x19,
 }
-CPU_STATE_READ = 0x1A    # 00 IM(1:0) 0 HALT IFF2 IFF1
+CPU_STATE_READ = 0x1A    # 00 IM(1:0) 0 HALT IFF2 IFF1; IM is 0, 1 or 2
 CPU_STATE_WRITE = 0x1B   # only HALT, IFF2 and IFF1 are written
 PAIRS = {
     "AF": ("A", "F"), "BC": ("B", "C"), "DE": ("D", "E"), "HL": ("H", "L"),
@@ -171,8 +171,10 @@ class PiDebug:
         single = {name: self.cpu_register(number) for name, number in CPU_REGISTERS.items()}
         state = self.cpu_register(CPU_STATE_READ)
         result = {pair: single[high] << 8 | single[low] for pair, (high, low) in PAIRS.items()}
-        # T80 keeps the mode as the IM instruction's bits 4:3: 00, 10 or 11.
-        result.update(I=single["I"], R=single["R"], IM=(0, 0, 1, 2)[state >> 4 & 3],
+        # Bits 5:4 are the CPU's interrupt mode, 0, 1 or 2 (NextTang reports
+        # T80's IStatus there; the official core reports the decoder's IMode,
+        # which reads 3 except during an IM instruction, and is no use).
+        result.update(I=single["I"], R=single["R"], IM=state >> 4 & 3,
                       HALT=state >> 2 & 1, IFF2=state >> 1 & 1, IFF1=state & 1)
         return result
 
