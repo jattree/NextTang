@@ -25,7 +25,9 @@ entity T80na_Complete is
       D_o : out std_logic_vector(7 downto 0);
       Z80N_dout_o : out std_logic := '0';
       Z80N_data_o : out std_logic_vector(15 downto 0);
-      Z80N_command_o : out Z80N_seq
+      Z80N_command_o : out Z80N_seq;
+      RZX_PLAY : in std_logic := '0';   -- NextTang: RZX replay, see t80na.vhd
+      RZX_DATA : in std_logic_vector(7 downto 0) := (others => '1')
    );
 end entity;
 
@@ -40,7 +42,8 @@ begin
          RFSH_n => RFSH_n, HALT_n => HALT_n, BUSAK_n => BUSAK_n,
          A => A, D_i => D_i, D_o => D_o,
          Z80N_dout_o => Z80N_dout_o, Z80N_data_o => Z80N_data_o, Z80N_command_o => Z80N_command_o,
-         o_debug_dat => open, o_debug_lastM => open
+         o_debug_dat => open, o_debug_lastM => open,
+         RZX_PLAY => RZX_PLAY, RZX_DATA => RZX_DATA
       );
 end architecture;
 

@@ -304,8 +304,7 @@ entity zxnext is
       -- i_RZX_PLAY is high, every CPU I/O read takes i_RZX_IN_DATA and the
       -- CPU's maskable interrupt is i_RZX_INT alone. The byte is swapped in
       -- inside the CPU, after its input register (t80na.vhd), so the bus
-      -- itself still carries the live port's byte; only the CPU options with
-      -- the debug interface (g_option(1) = '1') are connected.
+      -- itself still carries the live port's byte.
       i_RZX_PLAY           : in std_logic := '0';
       i_RZX_INT            : in std_logic := '0';
       i_RZX_IN_DATA        : in std_logic_vector(7 downto 0) := (others => '1');
@@ -2020,7 +2019,9 @@ gen_cpu_00: if (g_option(1 downto 0) = "00") generate
       -- extended functions
       Z80N_dout_o       => Z80N_dout_s,
       Z80N_data_o       => Z80N_data_s,
-      Z80N_command_o    => Z80N_command_s
+      Z80N_command_o    => Z80N_command_s,
+      RZX_PLAY          => i_RZX_PLAY,   -- NextTang: RZX replay
+      RZX_DATA          => i_RZX_IN_DATA
    );
 
    cpu_debug_rd_dat <= (others => '0');
@@ -2057,7 +2058,9 @@ gen_cpu_01: if (g_option(1 downto 0) = "01") generate
       -- extended functions
       Z80N_dout_o       => Z80N_dout_s,
       Z80N_data_o       => Z80N_data_s,
-      Z80N_command_o    => Z80N_command_s
+      Z80N_command_o    => Z80N_command_s,
+      RZX_PLAY          => i_RZX_PLAY,   -- NextTang: RZX replay
+      RZX_DATA          => i_RZX_IN_DATA
    );
 
    cpu_debug_rd_dat <= (others => '0');
