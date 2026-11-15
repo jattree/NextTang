@@ -19,6 +19,12 @@ While playing, every port read the CPU makes returns the recorded byte and
 its maskable interrupt comes at the recorded instruction, so the keyboard
 does nothing and the program runs as it did when recorded.
 
+With --until FRAME the replay stops after that many frames and the machine
+carries on live from there, keys and all: a rewind to that frame, or a
+take-over of someone else's game. With --speed the CPU runs faster while
+playing (the replay does not depend on the machine's timing), which makes
+getting to a far frame quick.
+
 divMMC automapping is turned off for the replay (see rzx_capture.py) and put
 back afterwards. The interrupt mode cannot be written through the debugger,
 so if the board's differs from the snapshot's the tool runs an IM instruction
@@ -46,6 +52,7 @@ from tools.rzx import Frame, read  # noqa: E402
 
 DEFAULT_PORT = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A5069RR4-if00-port0"
 PAGES_48K = [0xFF, 0xFF, 0x0A, 0x0B, 0x04, 0x05, 0x00, 0x01]
+SPEEDS = {"3.5": 0, "7": 1, "14": 2, "28": 3}      # NextREG 0x07 bits 1:0
 BUFFER = 1024
 KEEP_FREE = 256          # never fill the board's buffer past BUFFER - KEEP_FREE
 PREFILL_MAX = 255
@@ -169,6 +176,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", default=DEFAULT_PORT)
     parser.add_argument("--prefill", type=int, default=PREFILL_MAX,
                         help="most bytes to send ahead of the resume (0 to 255)")
+    parser.add_argument("--until", type=int, default=None, metavar="FRAME",
+                        help="stop after this many frames and hand the machine back live there: "
+                             "with the keys free again, this is a rewind to that frame")
+    parser.add_argument("--speed", choices=sorted(SPEEDS, key=float), default=None,
+                        help="CPU speed in MHz while playing (the replay does not depend on it); "
+                             "put back afterwards")
     parser.add_argument("--keep-divmmc", action="store_true",
                         help="leave divMMC automapping as it is")
     args = parser.parse_args(argv)
@@ -189,6 +202,11 @@ def main(argv: list[str] | None = None) -> int:
         print(error, file=sys.stderr)
         return 1
     frames = rzx.frames()
+    if args.until is not None:
+        if not 0 < args.until <= len(frames):
+            print(f"--until must be 1 to {len(frames)}", file=sys.stderr)
+            return 1
+        frames = frames[:args.until]
     sizes = [4 + len(f.inputs) for f in frames]
     if max(sizes) > BUFFER - KEEP_FREE:
         print(f"a frame has {max(sizes) - 4} port reads: more than the board's buffer takes", file=sys.stderr)
@@ -202,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"divMMC automap off (NextREG 0x0A {nr0a:02X} -> {nr0a & ~0x10:02X}) for the replay")
             time.sleep(1.0)
         debug.pause()
+        nr07 = debug.nextreg(0x07) & 3
         memory = Z80Memory(debug)
         pages = memory.pages()
         now = debug.registers()
@@ -229,6 +248,9 @@ def main(argv: list[str] | None = None) -> int:
             debug.resume()
             print(f"the snapshot did not go in (registers that differ: {wrong})", file=sys.stderr)
             return 1
+        if args.speed is not None and SPEEDS[args.speed] != nr07:
+            debug.set_nextreg(0x07, SPEEDS[args.speed])
+            print(f"CPU speed {args.speed} MHz for the replay (NextREG 0x07 {nr07} -> {SPEEDS[args.speed]})")
         print(f"snapshot in: PC {regs['PC']:04X} SP {regs['SP']:04X} IM {regs['IM']} IFF1 {regs['IFF1']}; "
               f"{len(frames)} frames to play")
 
@@ -249,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         # and any byte after it would be taken as the recording.
         os.write(fd, b"X\x01" + bytes([CMD_CPU_RESUME]))
         termios.tcdrain(fd)
-        time.sleep(0.06)
+        time.sleep(0.002)                       # at 28 MHz the pre-filled frames last 50 ms
         termios.tcflush(fd, termios.TCIFLUSH)   # what is left of the resume's reply
 
         started = time.monotonic()
@@ -273,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
             ready, _, _ = select.select([fd], [], [], 0.02)
             if ready:
                 for value in os.read(fd, 4096):
-                    if tail or value & 0x80:
+                    if tail or value & 0xF8 == 0x80:
                         tail.append(value)
                         if len(tail) == 3:
                             result = (tail[0] & 7, tail[1] | tail[2] << 8)
@@ -289,11 +311,24 @@ def main(argv: list[str] | None = None) -> int:
                 break
         seconds = time.monotonic() - started
 
-    if nr0a & 0x10 and not args.keep_divmmc:
-        time.sleep(0.5)
+    # Put things back: the CPU speed at once (the machine is live again), and
+    # divMMC automapping unless the machine was handed over mid-recording,
+    # where the program now running is the recording's, not NextZXOS's.
+    restore_speed = args.speed is not None and SPEEDS[args.speed] != nr07
+    restore_divmmc = bool(nr0a & 0x10) and not args.keep_divmmc and args.until is None
+    if restore_speed or restore_divmmc:
+        time.sleep(0.05)
         with UartLink(args.port, 115200, timeout=2.0) as link:
-            PiDebug(link).set_nextreg(0x0A, nr0a)
-        print(f"NextREG 0x0A restored to {nr0a:02X}")
+            debug = PiDebug(link)
+            if restore_speed:
+                debug.set_nextreg(0x07, nr07)
+                print(f"CPU speed put back (NextREG 0x07 {nr07})")
+            if restore_divmmc:
+                time.sleep(0.5)
+                debug.set_nextreg(0x0A, nr0a)
+                print(f"NextREG 0x0A restored to {nr0a:02X}")
+    if nr0a & 0x10 and not args.keep_divmmc and args.until is not None:
+        print(f"divMMC automap left off (NextREG 0x0A was {nr0a:02X}): the machine is live in the recording")
 
     if result is None:
         return 1
