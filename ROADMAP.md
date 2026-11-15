@@ -25,8 +25,11 @@ evidence level of each:
   NextZXOS, a sprite glitch, the debugger over PCIe, and official core 3.03.03
   (zero-wait-state 28 MHz) once its source is published
   ([#8](https://github.com/jattree/NextTang/issues/8)).
-- **Tang Nano 20K, planned:** a parallel target with Pi0 support; a board-shell
-  split and a skeleton exist on a branch, with no image yet.
+- **Tang Nano 20K with a Pi Zero W, hardware (`boards` branch):** core 3.02.05 with
+  HDMI, NextZXOS 26.11 from the SD card and a USB keyboard through the BL616; the Pi
+  Zero is the Pi debug interface over SPI and, with AlpineNext, a Next accelerator over
+  UART 1. Open: Pi I2S audio (build-only, needs three more wires) and merging the
+  board shell into `main`.
 - **Console 60K, planned:** build-only until a board is in hand.
 
 The [MiSTer ZXNext core](https://github.com/MiSTer-devel/ZXNext_MISTer) is the

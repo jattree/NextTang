@@ -76,7 +76,21 @@ entity tb_zxnext_trace is
         -- every lane's registers equal the CPU's, and that their bus strobes
         -- never differ. The lines between the SPEC256 markers are removed for
         -- the original core, which has no Spec256 exports.
-        SPEC256_LANES : boolean := false
+        SPEC256_LANES : boolean := false;
+        -- When set (enables mode only), write the CPU's M1, IORQ and RD, its
+        -- input register and its R register to this file, one line of
+        -- "cycle m1 iorq rd di r" (cycle decimal, the rest hex) whenever any
+        -- of them changes: the input of tests/sim/zxnext/rzx_check.py, which
+        -- checks the RZX input recorder against the real core.
+        RZX_DUMP : string := "";
+        -- When set (enables mode only), play this RZX input stream (one hex
+        -- byte per line: each frame's fetch count, IN count and IN bytes, as
+        -- in an RZX file) into the core through nexttang_rzx_player from the
+        -- first cycle, and report the player's verdict at the end.
+        RZX_PLAY_FILE : string := "";
+        -- Feed the core different live inputs from a normal run: every key
+        -- down and EAR high. With RZX_PLAY_FILE the CPU must not see them.
+        RZX_PERTURB : boolean := false
     );
 end entity;
 
@@ -105,7 +119,11 @@ architecture sim of tb_zxnext_trace is
     signal memory_done : std_logic := '0';
 
     signal rgb         : std_logic_vector(8 downto 0);
+    signal kbd_col : std_logic_vector(4 downto 0) := (others => '1');
+    signal ear_in  : std_logic := '0';
     -- SPEC256 begin
+    signal rzx_playing, rzx_int : std_logic := '0';
+    signal rzx_in_data : std_logic_vector(7 downto 0) := (others => '1');
     signal s256_reset_n, s256_m1_n, s256_mreq_n, s256_iorq_n, s256_rd_n, s256_wr_n : std_logic;
     signal s256_wait_n, s256_int_n, s256_nmi_n, s256_busrq_n, s256_debug_pause : std_logic;
     signal s256_ir, s256_vector, s256_di, s256_i, s256_r, s256_f : std_logic_vector(7 downto 0);
@@ -149,6 +167,9 @@ architecture sim of tb_zxnext_trace is
 
     type memory_t is array (0 to 65535) of std_logic_vector(7 downto 0);
 begin
+    kbd_col <= "00000" when RZX_PERTURB else "11111";
+    ear_in <= '1' when RZX_PERTURB else '0';
+
     clocks : process
         variable position : natural range 0 to 3 := 0;  -- 0: a 7 MHz rising edge
         variable state    : cpu_clock_state := CPU_CLOCK_START;
@@ -451,7 +472,7 @@ begin
             i_SPKEY_FUNCTION_EXT => (others => '0'),
             o_KBD_CANCEL => open,
             o_KBD_ROW => kbd_row,
-            i_KBD_COL => (others => '1'),
+            i_KBD_COL => kbd_col,
             i_KBD_EXTENDED_KEYS => (others => '1'),
             o_KEYMAP_ADDR => open,
             o_KEYMAP_DATA => open,
@@ -499,7 +520,7 @@ begin
             o_AUDIO_HDMI_AUDIO_EN => open,
             o_AUDIO_SPEAKER_EN => open,
             o_AUDIO_SPEAKER_EXCL => open,
-            i_AUDIO_EAR => '0',
+            i_AUDIO_EAR => ear_in,
             o_AUDIO_MIC => open,
             o_AUDIO_EAR => open,
             o_AUDIO_L => audio_l,
@@ -526,6 +547,7 @@ begin
             o_SPEC256_HALTED => s256_halted, o_SPEC256_IMODE => s256_imode, o_SPEC256_XY => s256_xy,
             o_SPEC256_INT_CYCLE => s256_int_cycle, o_SPEC256_NMI_CYCLE => s256_nmi_cycle,
             o_SPEC256_BOUNDARY => s256_boundary, o_SPEC256_INCDECZ => s256_incdecz,
+            i_RZX_PLAY => rzx_playing, i_RZX_INT => rzx_int, i_RZX_IN_DATA => rzx_in_data,
             -- SPEC256 end
             o_DEBUG_NR_REG => debug_nr_reg,
             o_DEBUG_NR_DAT => debug_nr_dat,
@@ -897,6 +919,80 @@ begin
                           string'(" desync ") & std_logic'image(s256_desync));
                     writeline(output, l);
                 end if;
+            end if;
+        end process;
+    end generate;
+
+    rzx_play : if RZX_PLAY_FILE /= "" and MODE = "enables" generate
+        type stream_t is array (natural range <>) of std_logic_vector(7 downto 0);
+        impure function stream_length return natural is
+            file f : text open read_mode is RZX_PLAY_FILE;
+            variable l : line;
+            variable n : natural := 0;
+        begin
+            while not endfile(f) loop readline(f, l); n := n + 1; end loop;
+            return n;
+        end function;
+        constant LENGTH : natural := stream_length;
+        impure function stream_bytes return stream_t is
+            file f : text open read_mode is RZX_PLAY_FILE;
+            variable l : line;
+            variable b : std_logic_vector(7 downto 0);
+            variable bytes : stream_t(0 to LENGTH);
+        begin
+            bytes(LENGTH) := (others => '1');
+            for i in 0 to LENGTH - 1 loop readline(f, l); hread(l, b); bytes(i) := b; end loop;
+            return bytes;
+        end function;
+        constant BYTES : stream_t(0 to LENGTH) := stream_bytes;
+        signal position : natural := 0;
+        signal ready, valid, start, desync : std_logic := '0';
+        signal frames : std_logic_vector(15 downto 0);
+    begin
+        valid <= '1' when position < LENGTH else '0';
+        player : entity work.nexttang_rzx_player
+            port map (
+                clock => cpu_clock, reset => '0', start => start, stop => '0',
+                playing => rzx_playing, desync => desync, frames => frames,
+                m1_n => s256_m1_n, iorq_n => s256_iorq_n, rd_n => s256_rd_n,
+                byte_in => BYTES(position), byte_valid => valid, byte_ready => ready,
+                in_data => rzx_in_data, int_request => rzx_int);
+        feed : process (cpu_clock)
+            variable ticks : natural := 0;
+            variable l : line;
+        begin
+            if rising_edge(cpu_clock) then
+                start <= '1' when ticks = 0 else '0';
+                if ready = '1' then position <= position + 1; end if;
+                ticks := ticks + 1;
+                if ticks = CYCLES - 4 then
+                    write(l, string'("RZX_PLAY frames ") & integer'image(to_integer(unsigned(frames))) &
+                          string'(" playing ") & std_logic'image(rzx_playing) &
+                          string'(" desync ") & std_logic'image(desync) &
+                          string'(" bytes ") & integer'image(position) & string'(" of ") & integer'image(LENGTH));
+                    writeline(output, l);
+                end if;
+            end if;
+        end process;
+    end generate;
+
+    rzx_bus : if RZX_DUMP /= "" and MODE = "enables" generate
+        dump : process (cpu_clock)
+            file dump_file : text open write_mode is RZX_DUMP;
+            variable l : line;
+            variable ticks : natural := 0;
+            variable now_bits, last_bits : std_logic_vector(18 downto 0) := (others => 'U');
+        begin
+            if rising_edge(cpu_clock) then
+                now_bits := s256_m1_n & s256_iorq_n & s256_rd_n & s256_di & s256_r;
+                if now_bits /= last_bits then
+                    write(l, integer'image(ticks) & " " & std_logic'image(s256_m1_n)(2) & " " &
+                          std_logic'image(s256_iorq_n)(2) & " " & std_logic'image(s256_rd_n)(2) & " " &
+                          to_hstring(s256_di) & " " & to_hstring(s256_r));
+                    writeline(dump_file, l);
+                    last_bits := now_bits;
+                end if;
+                ticks := ticks + 1;
             end if;
         end process;
     end generate;

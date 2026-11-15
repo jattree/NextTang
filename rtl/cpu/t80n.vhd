@@ -2218,7 +2218,10 @@ begin
             when '1' & X"7" => out_debug_dat <= std_logic_vector(PC(7 downto 0));   -- PCL
             when '1' & X"8" => out_debug_dat <= I;                    -- I
             when '1' & X"9" => out_debug_dat <= std_logic_vector(R);  -- R
-            when others     => out_debug_dat <= "00" & IMode & '0' & Halt_FF & IntE_FF2 & IntE_FF1;  -- 0x1A, 0x1B
+            -- NextTang: IStatus, the mode the CPU is in (00, 01, 10 for IM 0, 1, 2).
+            -- The official core reports IMode, the decoder's request, which
+            -- reads 11 ("no change") except while an IM instruction executes.
+            when others     => out_debug_dat <= "00" & IStatus & '0' & Halt_FF & IntE_FF2 & IntE_FF1;  -- 0x1A, 0x1B
          end case;
       end if;
    end process;

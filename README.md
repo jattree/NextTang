@@ -47,7 +47,7 @@ board, within the stated limits.
 | Pi debug interface and host debugger | Console 138K | Hardware | Over the debug UART: pause, registers, memory, single steps and breakpoints on jump, call, return and relative-jump targets, optionally page-qualified; 17 of 19 checks in dezogif_ng's DZRP conformance subset (the two sprite commands are not reachable). DeZog itself in VS Code not yet tried |
 | Combined 3.02.05 + Spec256 + debugger | Console 138K | Build | This tree. Hardware check pending |
 | Pi 5 over PCIe | Console 138K + Pi 5 | Hardware (test design) | 5 GT/s x1 link up at boot with no steps on the Pi, including from flash (a cold start of both boards linked once with the same fix); the Pi reads and writes FPGA memory, and the Tang writes into the Pi's RAM at 475 MB/s with every byte checked. The Next core over PCIe is not built yet. See [boards/console138k/pcie-pi5](boards/console138k/pcie-pi5/) |
-| Next core | Tang Nano 20K | Planned | Parallel development target with Pi0 support through the official Pi debug interface. No NextTang build or hardware result |
+| Next core | Tang Nano 20K (v3923) + Pi Zero W | Hardware (on the `boards` branch) | Official core 3.02.05 with HDMI, NextZXOS from the SD card (System/Next 26.11, NextZXOS v2.10, firmware 1.45), a USB keyboard through the onboard BL616 and the debug UART. The Pi Zero W works as the Pi debug interface over SPI and, with the official AlpineNext image, as a Next accelerator over UART 1 (`.p3`, `.ximg`, `nextspi`). Booted with a picture 20 of 20 times from SRAM and 6 of 6 from flash. Pi I2S audio is build-only; the Pi and the keyboard image fills about 87% of the GW2AR-18 |
 | Next core | Console 60K | Planned | Build-only until a board is available. No build yet |
 | Official core 3.03.00 (System/Next 26.11) | — | Planned | Released as a binary only; its VHDL is not yet public. NextTang will follow when it is |
 
@@ -169,8 +169,8 @@ NextTang is an independent, community-developed port of the
 [ZX Spectrum Next](https://www.specnext.com/) FPGA implementation to
 [Sipeed Tang Console](https://wiki.sipeed.com/hardware/en/tang/tang-console/mega-console.html)
 boards. The first and flagship target is the Tang Console 138K paired with a
-Raspberry Pi 5; the Tang Console 60K and the Tang Nano 20K are planned on the
-same source tree.
+Raspberry Pi 5. The Tang Nano 20K with a Pi Zero runs the same core on the `boards`
+branch, and the Tang Console 60K is planned on the same source tree.
 
 The project starts from the actively maintained
 [MiSTer ZXNext core](https://github.com/MiSTer-devel/ZXNext_MISTer), which is a
@@ -209,7 +209,7 @@ cooperation or code sharing is welcome where technically and legally possible.
 | --- | --- | --- |
 | Tang Console 138K with a Raspberry Pi 5 | Flagship: the full core, deepest debugging, the Pi 5 as host over PCIe | `GW5AST-LV138PG484AC1/I0` on the 30354 1 GB SOM. The Next core, Spec256 and the debugger are hardware-verified as recorded above; the Pi 5 PCIe link is hardware-verified with a test design only |
 | Tang Console 60K | Shared-source release target | Planned. Build-only until a board is available; no build yet |
-| Tang Nano 20K | Parallel development target, with Pi0 support through the official Pi debug interface | Planned. No NextTang build or hardware result. Board revisions v3921 and v3923 differ and must be named with any result |
+| Tang Nano 20K | Parallel development target, with Pi0 support through the official Pi debug interface | `GW2AR-LV18QN88C8/I7`, board v3923. Hardware-verified on the `boards` branch as recorded above. Board revisions v3921 and v3923 differ and must be named with any result |
 
 All targets will use the same core and debugger protocol. Features
 that depend on available FPGA resources will be discovered at runtime through a

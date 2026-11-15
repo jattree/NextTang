@@ -292,6 +292,14 @@ entity zxnext is
       o_CPU_STOPPED        : out std_logic;
       i_CPU_BREAK          : in std_logic := '0';
       o_MMU                : out std_logic_vector(63 downto 0);   -- NextTang: NextREGs 0x57 down to 0x50
+      -- NextTang: RZX replay (rtl/debug/nexttang_rzx_player.vhd). While
+      -- i_RZX_PLAY is high, every CPU I/O read takes i_RZX_IN_DATA and the
+      -- CPU's maskable interrupt is i_RZX_INT alone. The byte is swapped in
+      -- inside the CPU, after its input register (t80na.vhd), so the bus
+      -- itself still carries the live port's byte.
+      i_RZX_PLAY           : in std_logic := '0';
+      i_RZX_INT            : in std_logic := '0';
+      i_RZX_IN_DATA        : in std_logic_vector(7 downto 0) := (others => '1');
       
       o_GPIO               : out std_logic_vector(27 downto 0);
       o_GPIO_EN            : out std_logic_vector(27 downto 0);   -- 0 = high Z
@@ -2075,7 +2083,9 @@ gen_cpu_00: if (g_option(1 downto 0) = "00") generate
       -- extended functions
       Z80N_dout_o       => Z80N_dout_s,
       Z80N_data_o       => Z80N_data_s,
-      Z80N_command_o    => Z80N_command_s
+      Z80N_command_o    => Z80N_command_s,
+      RZX_PLAY          => i_RZX_PLAY,   -- NextTang: RZX replay
+      RZX_DATA          => i_RZX_IN_DATA
    );
 
    cpu_debug_rd_dat <= (others => '0');
@@ -2131,7 +2141,9 @@ gen_cpu_01: if (g_option(1 downto 0) = "01") generate
       -- extended functions
       Z80N_dout_o       => Z80N_dout_s,
       Z80N_data_o       => Z80N_data_s,
-      Z80N_command_o    => Z80N_command_s
+      Z80N_command_o    => Z80N_command_s,
+      RZX_PLAY          => i_RZX_PLAY,   -- NextTang: RZX replay
+      RZX_DATA          => i_RZX_IN_DATA
    );
 
    cpu_debug_rd_dat <= (others => '0');
@@ -2196,7 +2208,9 @@ gen_cpu_10: if (g_option(1 downto 0) = "10") generate
       o_debug_lastM     => cpu_debug_lastM,
       i_debug_pause     => cpu_debug_pause,   -- NextTang
       o_debug_next_pc   => cpu_debug_next_pc,   -- NextTang
-      i_debug_break     => i_CPU_BREAK   -- NextTang
+      i_debug_break     => i_CPU_BREAK,   -- NextTang
+      RZX_PLAY          => i_RZX_PLAY,   -- NextTang: RZX replay
+      RZX_DATA          => i_RZX_IN_DATA
    );
 
 end generate;
@@ -2258,7 +2272,9 @@ gen_cpu_11: if (g_option(1 downto 0) = "11") generate
       o_debug_lastM     => cpu_debug_lastM,
       i_debug_pause     => cpu_debug_pause,   -- NextTang
       o_debug_next_pc   => cpu_debug_next_pc,   -- NextTang
-      i_debug_break     => i_CPU_BREAK   -- NextTang
+      i_debug_break     => i_CPU_BREAK,   -- NextTang
+      RZX_PLAY          => i_RZX_PLAY,   -- NextTang: RZX replay
+      RZX_DATA          => i_RZX_IN_DATA
    );
 
 end generate;
@@ -2387,7 +2403,8 @@ end generate;
    expbus_disable_int <= '1' when expbus_eff_en = '0' or expbus_eff_disable_io = '1' or nr_c4_int_en_0_expbus = '0' else '0';
 
    z80_wait_n <= '0' when (ula_wait_n = '0') or (ulap_wait_n = '0') or (sram_wait_n = '0') or (i_BUS_WAIT_n = '0' and expbus_eff_en = '1') or (i_CPU_WAIT = '1') else '1';   -- NextTang: i_CPU_WAIT from MiSTer
-   z80_int_n <= ((pulse_int_n and im2_int_n) or not expbus_disable_int) and (i_BUS_INT_n or expbus_disable_int);
+   z80_int_n <= not i_RZX_INT when i_RZX_PLAY = '1' else   -- NextTang: RZX replay
+                ((pulse_int_n and im2_int_n) or not expbus_disable_int) and (i_BUS_INT_n or expbus_disable_int);
    z80_nmi_n <= nmi_generate_n;
    
    dma_wait_n <= z80_wait_n and spi_wait_n;
