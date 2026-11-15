@@ -1971,7 +1971,8 @@ end generate;
 
    -- NextTang: RZX recorder taps. The CPU latches an I/O read's byte in T3;
    -- this keeps the last byte on the bus while a CPU I/O read is under way,
-   -- which is that byte once the read ends.
+   -- which is that byte once the read ends. It does the same during an
+   -- opcode fetch, so the recorder can tell prefixes from whole instructions.
    o_RZX_M1_n <= z80_m1_n;
    o_RZX_IORQ_n <= z80_iorq_n;
    o_RZX_RD_n <= z80_rd_n;
@@ -1979,7 +1980,8 @@ end generate;
    process (i_CLK_28)
    begin
       if rising_edge(i_CLK_28) then
-         if z80_iorq_n = '0' and z80_rd_n = '0' and z80_m1_n = '1' and dma_holds_bus = '0' then
+         if (z80_iorq_n = '0' and z80_rd_n = '0' and z80_m1_n = '1' and dma_holds_bus = '0') or
+            (z80_mreq_n = '0' and z80_rd_n = '0' and z80_m1_n = '0') then
             rzx_in_data <= cpu_di;
          end if;
       end if;

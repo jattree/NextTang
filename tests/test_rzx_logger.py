@@ -53,9 +53,9 @@ module testbench;
         tstates(1); iorq_n <= 0; rd_n <= 0; tstates(2);
         data <= value; tstates(1); iorq_n <= 1; rd_n <= 1; tstates(1);
     end endtask
-    // The next cycle's T3 overwrites the register (an opcode fetch's refresh
-    // T3 latches whatever is on the bus).
-    task fetch; begin m1_n <= 0; tstates(2); m1_n <= 1; data <= $random; tstates(2); end endtask
+    // An opcode fetch leaves its opcode byte in the register as M1 rises.
+    task fetch_op(input [7:0] opcode); begin m1_n <= 0; tstates(2); m1_n <= 1; data <= opcode; tstates(2); end endtask
+    task fetch; begin fetch_op(8'h00); end endtask
     // I/O write: must not be recorded.
     task out_write; begin
         tstates(1); iorq_n <= 0; tstates(3); iorq_n <= 1; tstates(1);
@@ -67,8 +67,8 @@ module testbench;
         m1_n <= 0; tstates(2); iorq_n <= 0; tstates(2); m1_n <= 1; iorq_n <= 1; tstates(3);
         int_n <= 1;
     end endtask
-    // An interrupt the CPU ignores (interrupts disabled): INT low for a while
-    // with fetches going on, then high again.
+    // An interrupt the CPU declines (interrupts disabled): INT low for a
+    // while with fetches going on, then high again.
     task missed_int(input integer fetches_during); integer k; begin
         int_n <= 0; tstates(1);
         for (k = 0; k < fetches_during; k = k + 1) fetch;
@@ -201,7 +201,7 @@ class RzxLoggerTest(unittest.TestCase):
         self.assertEqual(status["saturated"], 1)
         self.assertEqual(words, frame_words([], 0xFFFF))
 
-    def test_missed_interrupt_ends_a_frame(self) -> None:
+    def test_declined_interrupt_ends_a_frame(self) -> None:
         # DI, frame interrupts come and go, EI, then one is taken.
         body = """        start <= 1; @(posedge clock); start <= 0;
         repeat (5) fetch; in_read(8'h21);
@@ -212,29 +212,63 @@ class RzxLoggerTest(unittest.TestCase):
         ack;
 """
         status, words = run_bench(body)
-        # Fetches made while INT is low count before the frame end at its rise.
-        self.assertEqual(words, frame_words([0x21], 8) + frame_words([0x43], 5) + frame_words([], 2))
+        # First pulse: INT falls after the fifth fetch ended, so the CPU first
+        # looks at it at the end of the sixth; the seventh starts the next
+        # frame. Second pulse: no fetch inside it, so the frame ends at the
+        # next instruction.
+        self.assertEqual(words, frame_words([0x21], 6) + frame_words([0x43], 7) + frame_words([], 2))
         self.assertEqual(status["frames"], 3)
 
-    def test_missed_interrupt_beside_an_in_read(self) -> None:
-        # INT rising on every clock around the end of an IN read: the byte stays
-        # in the frame before the boundary and nothing is lost.
-        for offset in range(-6, 7):
-            with self.subTest(offset=offset):
+    def test_declined_interrupt_never_splits_a_prefixed_instruction(self) -> None:
+        for name, opcodes, first in (
+                ("DD", "fetch_op(8'hdd); fetch_op(8'h21);", 4),            # LD IX,nn
+                ("FD FD", "fetch_op(8'hfd); fetch_op(8'hfd); fetch_op(8'h21);", 5),
+                ("ED", "fetch_op(8'hed); fetch_op(8'hdd);", 4),            # second byte, not a prefix
+                ("CB", "fetch_op(8'hcb); fetch_op(8'hed);", 4),
+                ("DD CB", "fetch_op(8'hdd); fetch_op(8'hcb);", 4),         # DD CB d op: two fetches only
+                ("DD ED", "fetch_op(8'hdd); fetch_op(8'hed); fetch_op(8'h4a);", 5)):
+            with self.subTest(prefix=name):
                 body = f"""        start <= 1; @(posedge clock); start <= 0;
-        fetch; int_n <= 0;
-        fork
-            in_read(8'h5c);
-            begin repeat ({4 * 1 + 2 * 1 + 6 + offset}) @(posedge clock); int_n <= 1; end
-        join
-        fetch; fetch; ack;
+        fetch; fetch; int_n <= 0;
+        {opcodes}
+        fetch; fetch; int_n <= 1; fetch;
+        ack;
 """
-                status, words = run_bench(body, cpu_clocks=1)
-                self.assertEqual(status["overflow"], 0)
-                frames = frame_words_split(words)
-                self.assertEqual(len(frames), 2, words)                  # the missed one, then the ack
-                self.assertEqual(sum(f[0] for f in frames), 3)           # three fetches in all
-                self.assertEqual([b for f in frames for b in f[1]], [0x5C])
+                status, words = run_bench(body)
+                # INT falls as the prefixed instruction starts. A plain
+                # instruction there would see the frame end before the fourth
+                # fetch; this one ends it only after all its fetches.
+                total = 2 + opcodes.count("fetch_op") + 3
+                self.assertEqual(words, frame_words([], first) + frame_words([], total - first))
+
+    def test_acknowledge_later_in_the_same_pulse(self) -> None:
+        # Declined, then EI and an acknowledge while INT is still low: two
+        # frames, the second holding what ran in between.
+        body = """        start <= 1; @(posedge clock); start <= 0;
+        fetch; int_n <= 0; fetch; fetch; fetch; fetch;
+        ack;
+        fetch;
+"""
+        status, words = run_bench(body)
+        self.assertEqual(words, frame_words([], 2) + frame_words([], 3))
+
+    def test_declined_interrupt_after_an_in_read_at_full_speed(self) -> None:
+        body = """        start <= 1; @(posedge clock); start <= 0;
+        fetch; int_n <= 0; fetch; in_read(8'h5c);
+        fetch; in_read(8'h6d); int_n <= 1; fetch;
+        ack;
+"""
+        status, words = run_bench(body, cpu_clocks=1)
+        self.assertEqual(status["overflow"], 0)
+        self.assertEqual(words, frame_words([0x5C], 2) + frame_words([0x6D], 2))
+
+    def test_no_declined_frame_end_with_int_tied_high(self) -> None:
+        body = """        start <= 1; @(posedge clock); start <= 0;
+        repeat (40) fetch;
+        m1_n <= 0; tstates(2); iorq_n <= 0; tstates(2); m1_n <= 1; iorq_n <= 1; tstates(3);
+"""
+        status, words = run_bench(body)
+        self.assertEqual(words, frame_words([], 40))
 
     def test_overflow_when_consumer_stalls(self) -> None:
         body = """        start <= 1; @(posedge clock); start <= 0;

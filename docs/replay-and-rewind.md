@@ -102,9 +102,13 @@ same through the debug interface.
   (typing a two-line program and RUN; 504 frames, 4,027 IN values) plays to its end in
   Fuse 1.6.0 as a 48K Spectrum, with Fuse's own 48K ROM and with the Next's 48K ROM.
   Three things were needed for that:
-  - The recorder also ends a frame when an interrupt pulse passes without being
-    acknowledged (interrupts disabled), as emulators count a frame per ULA frame; before
-    this a frame's fetch count ran on over several frames and saturated.
+  - The recorder also ends a frame when the CPU declines an interrupt (interrupts
+    disabled), as emulators count a frame per ULA frame; before this a frame's fetch
+    count ran on over several frames and saturated. The frame ends at the start of the
+    first whole instruction, never after a DD, FD, ED or CB prefix, at which the CPU
+    looked at the interrupt and did not take it, which is where an emulator tries its
+    interrupt on replay. A second recording, of a program with `BEEP 1,0` (705 frames, 49
+    of them in a row with interrupts off), also plays to its end in Fuse with both ROMs.
   - The debugger's interrupt-mode readout now reports the CPU's mode (`IStatus`). The
     official 3.02.05 debug readout reports the decoder's request (`IMode`), which reads
     as IM 2 almost always, and a snapshot saved with IM 2 goes out of step at the first
