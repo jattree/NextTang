@@ -236,10 +236,24 @@ same through the debug interface.
     the archive game replays in full at 28 MHz: 22,453 frames in 91 s, against 448 s
     at 3.5 MHz. One limit is left by design: a frame of a single instruction
     straight after a declined interrupt (no real recording has one).
-  - Known and not fixed: at a debugger stop the stopped instruction's last loaded
-    byte is not in its register yet, so a register read there can be one instruction
-    stale, and a snapshot taken at an arbitrary stop (`rzx_capture.py`) can carry
-    that. Loading is not affected: the set-up code stops in HALT.
+  - A third debugger fault, fixed: the debugger's view of the registers was one
+    instruction behind. T80 writes an instruction's result into its register during
+    the next opcode fetch (the last loaded byte, and ALU results), and the CPU is
+    stopped before that fetch: single-stepping LD A,10 / INC A / INC A / INC A from
+    A = 5A read 5A, 10, 11, 12, and a register the debugger wrote at a stop could be
+    overwritten by the pending result at the resume. Now the pending result (register
+    and flags) is applied in the first clock of a debugger hold (`Debug_Flush` in
+    `t80n.vhd`) and not again afterwards, so the registers read at a stop are current
+    and a snapshot taken at any stop is exact. `tests/test_debug_step_registers.py`
+    steps 31 instructions on the CPU alone against a table (17 wrong before the fix),
+    and `run_pi_debug.sh` checks four steps in the whole core.
+    On the Nano 20K (rzxX-p0r2, 2026-11-16): 220 single steps of an 11-instruction
+    loop all read current registers, a register written at a stop survived the next
+    step, and 1,000 pause/resumes of a self-checking loop saw no wrong register.
+    Three 8 s recordings captured in the middle of a running game (stops at
+    arbitrary instructions, interrupts on and off; 400 frames each) play to their
+    end in Fuse and on the board, and the six earlier recordings still replay (48K,
+    128K, +3, the archive game at 3.5 and 28 MHz).
 - 2026-11-16, `build_zxnext.sh --video-probe 1`: H on the debug UART returns a line
   about the HDMI picture path (`rtl/debug/nexttang_video_probe.v`: hdmi_frame's
   state, and counts of the core's frame locks, lines and lit lines in and out), for
