@@ -908,7 +908,9 @@ begin
         command((x"AD", x"07", x"00", x"00"));
         expect("L after a resume from the end of LD HL,nn", reply(3), x"34");
         -- 3. What the debugger reads after a single step: B020 LD A,10 /
-        -- INC A / INC A / INC A. (Reported, not yet required: see below.)
+        -- INC A / INC A / INC A. T80 puts a result into its register during
+        -- the next fetch, so the debugger once read each one a step late
+        -- (5A, 10, 11, 12).
         command((x"A8", x"04", x"B0", x"20", x"00", x"07", x"3E", x"10", x"3C", x"3C", x"3C", x"18", x"FE"));
         command((x"AE", x"1B", x"00", x"00"));
         command((x"AE", x"16", x"B0", x"00"));
@@ -917,8 +919,7 @@ begin
             command((0 => x"A6"));
             wait_status("10");
             command((x"AD", x"00", x"00", x"00"));
-            write(l, string'("PI_DEBUG A after step ") & integer'image(i) & string'(" ") & to_hstring(reply(3)));
-            writeline(output, l);
+            expect("A after step " & integer'image(i), reply(3), std_logic_vector(to_unsigned(15 + i, 8)));
         end loop;
 
         command((0 => x"A5"));

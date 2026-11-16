@@ -174,16 +174,19 @@ same through the debug interface.
     loaded again between the debugger's release and the CPU's restart (a register
     loaded just before a pause held FF after the resume). `run_pi_debug.sh` has a
     check for each; both fail on the files as they were.
-  - Known and not fixed: the debugger's view of the registers is one instruction
-    behind. T80 writes an instruction's result into its register during the next
-    opcode fetch (the last loaded byte, and ALU results), and the CPU is stopped
-    before that fetch. In simulation, single-stepping LD A,10 / INC A / INC A / INC A
-    from A = 5A reads 5A, 10, 11, 12 after the four steps. A register the debugger
-    writes at a stop can likewise be overwritten by that pending result when the CPU
-    resumes. So a snapshot taken at an arbitrary stop (`rzx_capture.py`) can be off
-    by the last instruction's result; loading is not affected, because the set-up
-    code stops in HALT, which has no result pending. The fix is to apply the pending
-    result when the debugger's hold is granted (not done).
+  - A third debugger fault, fixed: the debugger's view of the registers was one
+    instruction behind. T80 writes an instruction's result into its register during
+    the next opcode fetch (the last loaded byte, and ALU results), and the CPU is
+    stopped before that fetch: single-stepping LD A,10 / INC A / INC A / INC A from
+    A = 5A read 5A, 10, 11, 12, and a register the debugger wrote at a stop could be
+    overwritten by the pending result at the resume. Now the pending result (register
+    and flags) is applied in the first clock of a debugger hold (`Debug_Flush` in
+    `t80n.vhd`) and not again afterwards, so the registers read at a stop are current
+    and a snapshot taken at any stop is exact. `tests/test_debug_step_registers.py`
+    steps 31 instructions on the CPU alone against a table (17 wrong before the fix),
+    and `run_pi_debug.sh` checks four steps in the whole core.
+    Hardware check: on the Nano 20K, from the boards branch (220 single steps and
+    1,000 pause/resumes, 2026-11-16).
 
 ## Order
 

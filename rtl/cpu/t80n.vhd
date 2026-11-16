@@ -260,6 +260,11 @@ architecture rtl of T80N is
    signal Debug_Held    : std_logic;   -- NextTang: BusAck was granted to i_debug_pause
    signal Debug_Release : std_logic;   -- NextTang: the debugger let go since
    signal Debug_Pause_r : std_logic;   -- NextTang: i_debug_pause one clock ago
+   -- NextTang: one clock at the start of a debugger hold, on which the
+   -- stopped instruction's pending result goes into its register (see the
+   -- Debug_Flush branches below)
+   signal Debug_Flush   : std_logic;
+   signal Flush_done    : std_logic := '0';
    signal Next_PC       : std_logic_vector(15 downto 0);   -- NextTang
    signal ClkEn         : std_logic;
    signal NMI_s         : std_logic;
@@ -1531,6 +1536,50 @@ begin
             end if;
          end if;
 
+         elsif Debug_Flush = '1' then  -- ClkEn = '0'
+
+            -- NextTang: T80 puts an instruction's result into its register
+            -- on the first clock of the next cycle: an ALU result and its
+            -- flags, or the last byte read (Save_ALU_r, Read_To_Reg_r, set
+            -- at T_Res). The debugger holds the CPU before that clock, so
+            -- it read registers one instruction old, and a register it wrote
+            -- could be overwritten on resume. This does that clock's work
+            -- for the stopped instruction when the hold begins, and clears
+            -- the two so it is not done again.
+            if (I_DJNZ = '0' and Save_ALU_r = '1') or ALU_Op_r = "1001" then
+               if Mode = 3 then
+                  F(6) <= F_Out(6);
+                  F(5) <= F_Out(5);
+                  F(7) <= F_Out(7);
+                  if PreserveC_r = '0' then
+                     F(4) <= F_Out(4);
+                  end if;
+               else
+                  F(7 downto 1) <= F_Out(7 downto 1);
+                  if PreserveC_r = '0' then
+                     F(Flag_C) <= F_Out(0);
+                  end if;
+               end if;
+            end if;
+            if (Save_ALU_r = '0' and Auto_Wait_t1 = '0') or
+               (Save_ALU_r = '1' and ALU_OP_r /= "0111") then
+               case Read_To_Reg_r is
+               when "10111" =>
+                  ACC <= Save_Mux;
+               when "10110" =>
+                  DO <= Save_Mux;
+               when "11000" =>
+                  SP(7 downto 0) <= unsigned(Save_Mux);
+               when "11001" =>
+                  SP(15 downto 8) <= unsigned(Save_Mux);
+               when "11011" =>
+                  F <= Save_Mux;
+               when others =>
+               end case;
+            end if;
+            Save_ALU_r <= '0';
+            Read_To_Reg_r <= "00000";
+
          elsif i_debug_wr = '1' then  -- ClkEn = '0'
 
             -- debug register modification during halt
@@ -1777,6 +1826,21 @@ begin
                   RegsL(to_integer(unsigned(reg_direct_add_L_b))) <= reg_direct_val_L_b;
                end if;
 
+         elsif Debug_Flush = '1' then  -- ClkEn = '0'
+
+            -- NextTang: the stopped instruction's pending register write
+            -- (see the Debug_Flush branch of the main process)
+            if (Save_ALU_r = '0' and Auto_Wait_t1 = '0') or
+               (Save_ALU_r = '1' and ALU_OP_r /= "0111") then
+               case Read_To_Reg_r is
+               when "10000" | "10010" | "10100" =>
+                  RegsH(to_integer(unsigned(RegAddrA_r))) <= Save_Mux;
+               when "10001" | "10011" | "10101" =>
+                  RegsL(to_integer(unsigned(RegAddrA_r))) <= Save_Mux;
+               when others =>
+               end case;
+            end if;
+
          elsif i_debug_wr = '1' then  -- ClkEn = '0'
 
             -- debug register modification during halt
@@ -1914,6 +1978,8 @@ begin
       end if;
    end process;
 
+   Debug_Flush <= BusAck and Debug_Held and not Flush_done;   -- NextTang
+
    MC <= std_logic_vector(MCycle);
    TS <= std_logic_vector(TState);
    DI_Reg <= DI;
@@ -1934,6 +2000,11 @@ begin
    begin
       if rising_edge(CLK_n) then
          Debug_Pause_r <= i_debug_pause;
+         if RESET_n = '0' or BusAck = '0' then
+            Flush_done <= '0';
+         elsif Debug_Held = '1' then
+            Flush_done <= '1';
+         end if;
          if RESET_n = '0' or BusAck = '0' then
             Debug_Release <= '0';
          elsif Debug_Held = '1' and Debug_Pause_r = '1' and i_debug_pause = '0' then
