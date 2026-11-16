@@ -60,7 +60,9 @@
 // is set until the next `start`. Either flag makes the recording unusable.
 //
 // `start` clears the counters and flags and begins recording at the next
-// clock; `stop` ends it. The frame in progress at `stop` gets no frame end
+// clock, with the frame under way already start_fetches fetches long (0 for
+// a recording that begins at a snapshot; the player's count when a recording
+// carries on where a replay ended, mid-frame). `stop` ends it. The frame in progress at `stop` gets no frame end
 // (RZX frames end at interrupts), so a reader drops any untagged words after
 // the last frame end.
 
@@ -73,6 +75,7 @@ module nexttang_rzx_logger #(
     input  wire       reset,
 
     input  wire       start,
+    input  wire [15:0] start_fetches,
     input  wire       stop,
     output reg        recording,
 
@@ -216,7 +219,8 @@ module nexttang_rzx_logger #(
             recording <= 1'b0;
         if (start) begin
             recording <= 1'b1;
-            fetches <= 16'd0;
+            // a fetch that ends on the start's own clock is this recording's
+            fetches <= start_fetches + ((m1_end && !ack_seen) ? 16'd1 : 16'd0);
             frames <= 16'd0;
             saturated <= 1'b0;
             overflow <= 1'b0;

@@ -36,6 +36,7 @@ architecture sim of tb is
    signal start, stop : std_logic := '0';
    signal playing, desync : std_logic;
    signal frames : std_logic_vector(15 downto 0);
+   signal fetch_count : std_logic_vector(15 downto 0);
    signal m1_n, iorq_n, rd_n : std_logic := '1';
    signal byte_in : std_logic_vector(7 downto 0) := (others => '0');
    signal byte_valid : std_logic := '0';
@@ -51,6 +52,7 @@ begin
       generic map (HOLD_LIMIT => HOLD_LIMIT)
       port map (clock => clock, reset => reset, start => start, stop => stop,
                 playing => playing, desync => desync, frames => frames,
+                fetch_count => fetch_count,
                 m1_n => m1_n, iorq_n => iorq_n, rd_n => rd_n,
                 byte_in => byte_in, byte_valid => byte_valid, byte_ready => byte_ready,
                 in_data => in_data, int_request => int_request, hold => hold);
@@ -127,6 +129,11 @@ begin
                   m1_n <= '0'; tstates(2); iorq_n <= '0'; tstates(2);
                   m1_n <= '1'; iorq_n <= '1'; tstates(3);
                end if;
+            when 'S' =>                       -- the host's stop: report where the player was
+               stop <= '1'; wait until rising_edge(clock); stop <= '0';
+               wait until rising_edge(clock);
+               write(w, string'("S ")); write(w, to_integer(unsigned(fetch_count)));
+               write(w, string'(" ")); write(w, std_logic'image(playing)); writeline(o, w);
             when others => null;
          end case;
       end loop;
@@ -180,6 +187,8 @@ def run(stream, script, cpu_clocks=8, stream_gap=0, hold_limit=28000000):
     reads = [int(line.split()[1], 16) for line in lines if line.startswith("I ")]
     ints = [line.split()[1] == "'1'" for line in lines if line.startswith("E ")]
     end = lines[-1].split()
+    if any(line.startswith("S ") for line in lines):
+        return [line for line in lines if line.startswith("S ")]
     return reads, ints, {"frames": int(end[2]), "playing": end[4] == "'1'", "desync": end[6] == "'1'",
                          "request dips": sum(line == "G" for line in lines)}
 
@@ -207,6 +216,21 @@ class RzxPlayerTest(unittest.TestCase):
         # first, and its instruction reads a port at once: the next frame's
         # header and byte have to be in by then.
         self.check([(3, [], False), (1, [0xA5], True), (2, [0x5A], False), (1, [0x99], False), (2, [], True)])
+
+    def test_fetch_count_at_the_stop(self) -> None:
+        # Where the CPU is in the frame after the last one played, for a
+        # recorder that carries on from the stop: nothing fetched yet after an
+        # acknowledge; after a declined interrupt the fetch that ended the
+        # frame, and whatever followed it.
+        sentinel = [0xFF, 0xFF, 0x00, 0x00]
+        rng = random.Random(5)
+        for cpu_clocks in (1, 8):
+            stream, script, _ = build([(4, [], True), (3, [], True)], rng)
+            self.assertEqual(run(stream + sentinel, script + ["S"], cpu_clocks=cpu_clocks), ["S 0 '0'"])
+            stream, script, _ = build([(4, [], True), (3, [], False)], rng)
+            self.assertEqual(run(stream + sentinel, script + ["F", "E 0", "S"], cpu_clocks=cpu_clocks), ["S 1 '0'"])
+            self.assertEqual(run(stream + sentinel, script + ["F", "E 0", "F", "E 0", "S"], cpu_clocks=cpu_clocks),
+                             ["S 2 '0'"])
 
     def test_frame_with_no_fetches(self) -> None:
         # A frame with a fetch count of 0 (emulator recordings can hold them):

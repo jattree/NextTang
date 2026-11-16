@@ -187,6 +187,15 @@ same through the debug interface.
     and `run_pi_debug.sh` checks four steps in the whole core.
     Hardware check: on the Nano 20K, from the boards branch (220 single steps and
     1,000 pause/resumes, 2026-11-16).
+  - For rewind by replay: a replay can hand over to the recorder at the frame it
+    reaches. The play link takes FE 02 as an end of stream that sets `record_after`;
+    the player reports how many fetches it has counted in the frame under way
+    (`fetch_count`); the recorder takes that as the length its first frame starts
+    with (`start_fetches`). A board that starts the recorder with the player's count
+    on the clock playing ends gets one recording across the join. Unit tests cover
+    each part; the wiring, the host tool (`host/rzx_session.py`) and the hardware
+    check (Nano 20K: sessions with rewinds play to their end in Fuse and on the
+    board, 2026-11-16) are on the boards branch.
 
 ## Order
 

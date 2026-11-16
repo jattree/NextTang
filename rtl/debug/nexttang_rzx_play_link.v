@@ -20,6 +20,10 @@
 //     byte            a stream byte, except
 //     FE 00           a stream byte FE
 //     FE 01           end of stream: playing stops once the buffer is empty
+//     FE 02           the same, and record_after is set: the board hands the
+//                     machine to the RZX recorder at that moment and stops
+//                     the CPU (a rewind: the host replays up to a frame and
+//                     the recording carries on from there)
 //
 // The host ends the stream with one more frame header that is not to be
 // played (FF FF 00 00) before FE 01: the player takes a header only when the
@@ -62,6 +66,7 @@ module nexttang_rzx_play_link #(
     // to and from the player
     output wire       play_start,
     output wire       play_stop,
+    output reg        record_after = 1'b0,   // the stream ended with FE 02
     input  wire       playing,
     input  wire       desync,
     input  wire [15:0] frames,
@@ -167,6 +172,7 @@ module nexttang_rzx_play_link #(
                     end else begin
                         ending <= 1'b1;
                         ended_by_host <= 1'b1;
+                        record_after <= command_byte == 8'h02;
                     end
                 end
                 default: ;
@@ -236,6 +242,7 @@ module nexttang_rzx_play_link #(
             ending <= 1'b0;
             overflow <= 1'b0;
             ended_by_host <= 1'b0;
+            record_after <= 1'b0;
             frame_tick <= 1'b0;
         end
 
@@ -250,6 +257,7 @@ module nexttang_rzx_play_link #(
             ending <= 1'b0;
             overflow <= 1'b0;
             ended_by_host <= 1'b0;
+            record_after <= 1'b0;
             stopped_q <= 1'b0;
             playing_q <= 1'b0;
             bits_left <= 4'd0;

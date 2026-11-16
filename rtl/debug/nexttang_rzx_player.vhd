@@ -65,6 +65,11 @@ entity nexttang_rzx_player is
       playing     : out std_logic;
       desync      : out std_logic;
       frames      : out std_logic_vector(15 downto 0);
+      -- Fetches counted so far in the frame under way. When playing ends at
+      -- the host's stop this is how far the CPU is into the frame after the
+      -- last one played (0 after an acknowledge, 1 or more after a declined
+      -- interrupt), for a recorder that carries on from there.
+      fetch_count : out std_logic_vector(15 downto 0);
 
       m1_n        : in  std_logic;
       iorq_n      : in  std_logic;
@@ -137,6 +142,7 @@ begin
    playing <= play_r;
    desync  <= desync_r;
    frames  <= std_logic_vector(frames_r);
+   fetch_count <= std_logic_vector(fetches);
 
    process (clock)
       variable bad : boolean;

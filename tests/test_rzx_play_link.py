@@ -21,13 +21,14 @@ module testbench;
     reg [7:0] command_byte = 0;
     reg playing = 0;
     reg [15:0] frames = 0;
-    wire taking, play_start, play_stop, byte_valid, busy, tx;
+    wire taking, play_start, play_stop, record_after, byte_valid, busy, tx;
     wire [7:0] byte_out;
     integer out;
 
     nexttang_rzx_play_link #(.CLOCK_HZ(1000000), .BAUD_RATE(100000), .FIFO_BITS(FIFO_BITS)) dut (
         .clock(clock), .reset(reset), .command_valid(command_valid), .command_byte(command_byte),
         .taking(taking), .cpu_stopped(cpu_stopped), .play_start(play_start), .play_stop(play_stop),
+        .record_after(record_after),
         .playing(playing), .desync(desync), .frames(frames),
         .byte_out(byte_out), .byte_valid(byte_valid), .byte_ready(byte_ready), .busy(busy), .tx(tx));
 
@@ -37,7 +38,7 @@ module testbench;
         if (play_stop) playing <= 0;
         if (byte_valid && byte_ready) $fdisplay(out, "B %02x", byte_out);
         if (play_start) $fdisplay(out, "START");
-        if (play_stop) $fdisplay(out, "STOP");
+        if (play_stop) $fdisplay(out, "STOP record_after=%0d", record_after);
     end
 
     // UART receiver on tx.
@@ -108,7 +109,7 @@ class RzxPlayLinkTest(unittest.TestCase):
         # taking: not for P itself, then count and prefill; not for K; all stream bytes
         self.assertEqual([int(t) for _, _, t in sent], [0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1])
         played = [line for line in lines if line.startswith(("B ", "START", "STOP"))]
-        self.assertEqual(played, ["START", "B 11", "B 50", "B 33", "B 44", "B fe", "B 50", "B ff", "STOP"])
+        self.assertEqual(played, ["START", "B 11", "B 50", "B 33", "B 44", "B fe", "B 50", "B ff", "STOP record_after=0"])
         to_host = [int(line.split()[1], 16) for line in lines if line.startswith("T ")]
         # a byte per frame end carrying the count so far, then the three end bytes
         self.assertEqual(to_host[:1], [0x41])
@@ -144,7 +145,25 @@ class RzxPlayLinkTest(unittest.TestCase):
         send(8'hfe); send(8'h01);
 """)
         played = [line for line in lines if line.startswith(("B ", "START", "STOP"))]
-        self.assertEqual(played, ["START", "B cc", "STOP"])
+        self.assertEqual(played, ["START", "B cc", "STOP record_after=0"])
+
+    def test_fe_02_ends_the_stream_and_asks_for_the_recorder(self) -> None:
+        lines = run("""
+        send("P"); send(8'd1); send(8'haa);
+        cpu_stopped <= 0; repeat (4) @(posedge clock);
+        take(1);
+        send(8'hfe); send(8'h02);
+        repeat (700) @(posedge clock);
+        cpu_stopped <= 1; repeat (4) @(posedge clock);
+        send("P"); send(8'd1); send(8'hbb);          // the next replay starts without it
+        cpu_stopped <= 0; repeat (4) @(posedge clock);
+        take(1);
+        send(8'hfe); send(8'h01);
+""")
+        played = [line for line in lines if line.startswith(("B ", "START", "STOP"))]
+        self.assertEqual(played, ["START", "B aa", "STOP record_after=1", "START", "B bb", "STOP record_after=0"])
+        to_host = [int(line.split()[1], 16) for line in lines if line.startswith("T ")]
+        self.assertEqual(to_host[:3], [0x80 | 0b100, 0, 0])
 
 
 if __name__ == "__main__":
