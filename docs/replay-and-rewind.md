@@ -165,15 +165,25 @@ same through the debug interface.
   - Player: the interrupt request no longer drops for one clock when the last
     fetch's M1 ends; at 28 MHz the CPU missed the interrupt after a four-T-state
     instruction. `tests/test_rzx_player.py` now checks this at every speed.
+  - The player waits for its stream: `hold`, for the CPU's WAIT, while a frame's
+    header or the next port byte has not arrived; a hold of about a second is a
+    desync. No board on this branch wires it yet.
   - Two debugger faults that replay exposed, both in NextTang's own additions: the
     state register write cleared IR at any stop (the first three bytes at a new PC
     were skipped after a multi-cycle instruction), and the CPU's input register
     loaded again between the debugger's release and the CPU's restart (a register
     loaded just before a pause held FF after the resume). `run_pi_debug.sh` has a
     check for each; both fail on the files as they were.
-  - Known and not fixed: at a debugger stop the stopped instruction's last loaded
-    byte is not in its register yet, so a register read there can be one
-    instruction stale.
+  - Known and not fixed: the debugger's view of the registers is one instruction
+    behind. T80 writes an instruction's result into its register during the next
+    opcode fetch (the last loaded byte, and ALU results), and the CPU is stopped
+    before that fetch. In simulation, single-stepping LD A,10 / INC A / INC A / INC A
+    from A = 5A reads 5A, 10, 11, 12 after the four steps. A register the debugger
+    writes at a stop can likewise be overwritten by that pending result when the CPU
+    resumes. So a snapshot taken at an arbitrary stop (`rzx_capture.py`) can be off
+    by the last instruction's result; loading is not affected, because the set-up
+    code stops in HALT, which has no result pending. The fix is to apply the pending
+    result when the debugger's hold is granted (not done).
 
 ## Order
 

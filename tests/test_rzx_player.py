@@ -27,7 +27,7 @@ use ieee.numeric_std.all;
 use std.textio.all;
 
 entity tb is
-   generic (CPU_CLOCKS : positive := 8; STREAM_GAP : natural := 0);
+   generic (CPU_CLOCKS : positive := 8; STREAM_GAP : natural := 0; HOLD_LIMIT : positive := 28000000);
 end entity;
 
 architecture sim of tb is
@@ -42,16 +42,18 @@ architecture sim of tb is
    signal byte_ready : std_logic;
    signal in_data : std_logic_vector(7 downto 0);
    signal int_request : std_logic;
+   signal hold : std_logic;
    signal done : boolean := false;
 begin
    clock <= not clock after 5 ns when not done else '0';
 
    dut : entity work.nexttang_rzx_player
+      generic map (HOLD_LIMIT => HOLD_LIMIT)
       port map (clock => clock, reset => reset, start => start, stop => stop,
                 playing => playing, desync => desync, frames => frames,
                 m1_n => m1_n, iorq_n => iorq_n, rd_n => rd_n,
                 byte_in => byte_in, byte_valid => byte_valid, byte_ready => byte_ready,
-                in_data => in_data, int_request => int_request);
+                in_data => in_data, int_request => int_request, hold => hold);
 
    -- The stream: one byte per line of stream.txt, offered STREAM_GAP clocks
    -- after the previous one was taken.
@@ -95,7 +97,9 @@ begin
          readline(f, l); read(l, op);
          case op is
             when 'F' =>                       -- opcode fetch
-               m1_n <= '0'; tstates(2); m1_n <= '1';
+               m1_n <= '0'; tstates(2);
+               while hold = '1' loop wait until rising_edge(clock); end loop;   -- WAIT at T2
+               m1_n <= '1';
                -- The CPU samples the request on every clock and decides at
                -- the end of the instruction from the sample before, so a
                -- request that was up during M1 and is up at the end must
@@ -113,6 +117,7 @@ begin
             when 'I' =>                       -- port read: report the byte the CPU would latch
                hread(l, v);
                tstates(1); iorq_n <= '0'; rd_n <= '0'; tstates(2);
+               while hold = '1' loop wait until rising_edge(clock); end loop;   -- WAIT in the read
                write(w, string'("I ")); hwrite(w, in_data); writeline(o, w);
                tstates(1); iorq_n <= '1'; rd_n <= '1'; tstates(1);
             when 'E' =>                       -- instruction end: 1 = interrupts enabled
@@ -158,7 +163,7 @@ def build(frames, rng):
     return stream, script, expect_int
 
 
-def run(stream, script, cpu_clocks=8, stream_gap=0):
+def run(stream, script, cpu_clocks=8, stream_gap=0, hold_limit=28000000):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         (root / "tb.vhd").write_text(BENCH, encoding="ascii")
@@ -167,7 +172,7 @@ def run(stream, script, cpu_clocks=8, stream_gap=0):
         for command in (["ghdl", "-a", "--std=08", str(PLAYER), "tb.vhd"],
                         ["ghdl", "-e", "--std=08", "tb"],
                         ["ghdl", "-r", "--std=08", "tb", f"-gCPU_CLOCKS={cpu_clocks}",
-                         f"-gSTREAM_GAP={stream_gap}"]):
+                         f"-gSTREAM_GAP={stream_gap}", f"-gHOLD_LIMIT={hold_limit}"]):
             done = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=600)
             if done.returncode:
                 raise AssertionError(done.stdout + done.stderr)
@@ -217,20 +222,43 @@ class RzxPlayerTest(unittest.TestCase):
             with self.subTest(cpu_clocks=cpu_clocks):
                 self.check(frames, cpu_clocks=cpu_clocks)
 
-    def test_random_frames_at_full_speed(self) -> None:
-        # One clock per T-state (28 MHz). A frame's header takes a few clocks
-        # to arrive, so no frame here is shorter than three instructions, and
-        # a frame that follows a declined interrupt has no port reads: its
-        # first instruction is already under way when its header starts to
-        # arrive, and at this speed a read in that instruction comes before
-        # its byte (a known limit of the player at 28 MHz).
-        rng = random.Random(11)
+    @staticmethod
+    def random_frames(seed, count, most_fetches, most_reads):
+        """Frames of one instruction and up, except straight after a declined
+        interrupt, where a frame has at least two: its first instruction is
+        the one that declined, already past the point where the CPU can be
+        held when the frame's header starts to arrive, so the player cannot
+        end the frame at that very instruction (no real recording does)."""
+        rng = random.Random(seed)
         frames, acked = [], True
-        for _ in range(60):
-            reads = [rng.randrange(256) for _ in range(rng.randrange(0, 5))] if acked else []
+        for _ in range(count):
+            fetches = rng.randrange(1 if acked else 2, most_fetches)
+            reads = [rng.randrange(256) for _ in range(rng.randrange(0, most_reads))]
             acked = rng.random() < 0.6
-            frames.append((rng.randrange(3, 40), reads, acked))
-        self.check(frames, cpu_clocks=1)
+            frames.append((fetches, reads, acked))
+        return frames
+
+    def test_random_frames_at_full_speed(self) -> None:
+        # One clock per T-state (28 MHz), short frames and port reads
+        # straight after a declined interrupt: the player holds the CPU until
+        # each header and byte is in.
+        self.check(self.random_frames(11, 60, 40, 5), cpu_clocks=1)
+
+    def test_slow_stream_holds_the_cpu(self) -> None:
+        # A stream far slower than the CPU (a byte every 60 clocks, the CPU at
+        # one clock per T-state): nothing is lost and nothing goes out of step.
+        frames = self.random_frames(5, 40, 12, 6)
+        self.check(frames, cpu_clocks=1, stream_gap=60)
+        self.check(frames, cpu_clocks=8, stream_gap=300)
+
+    def test_stream_that_stops_is_a_desync(self) -> None:
+        # The stream ends in the middle of frame 1: the hold runs to its
+        # limit and the player lets the machine go.
+        rng = random.Random(1)
+        stream, script, _ = build([(3, [0x11], True), (4, [0x22, 0x33], True), (2, [], True)], rng)
+        _, _, end = run(stream[:4 + 1 + 4 + 1], script, hold_limit=2000)
+        self.assertTrue(end["desync"])
+        self.assertFalse(end["playing"])
 
     def test_read_with_no_byte_left_is_a_desync(self) -> None:
         rng = random.Random(1)
