@@ -19,7 +19,7 @@ module tb;
 
     reg a_request = 0, a_cycle = 0, a_read_n = 1; reg [20:0] a_addr = 0; reg [7:0] a_wdata = 0;
     wire [7:0] a_rdata; wire a_wait;
-    reg c_request = 0, c_read_n = 1; reg [20:0] c_addr = 0; reg [7:0] c_wdata = 0;
+    reg c_request = 0, c_read_n = 1; reg [22:0] c_addr = 0; reg [7:0] c_wdata = 0;
     wire [7:0] c_rdata; wire c_ack, c_busy;
     wire ready, fault;
     wire sclk, cke, cs_n, ras_n, cas_n, we_n; wire [10:0] sa; wire [1:0] sba; wire [3:0] dqm; wire [31:0] dq;
@@ -69,12 +69,12 @@ module tb;
     end
 
     // ---------------- shadow and traffic
-    reg [7:0] shadow [0:2097151];
+    reg [7:0] shadow [0:8388607];
     // keep traffic inside a small window so reads hit written data often
     function [20:0] pick(input integer r); pick = {r[3:0], 3'b000, r[13:0]} ; endfunction
     integer a_ops = 0, c_ops = 0, errors = 0, seed = 1;
     initial begin
-        for (i = 0; i < 2097152; i = i + 1) begin shadow[i] = 8'h00; end
+        for (i = 0; i < 8388608; i = i + 1) begin shadow[i] = 8'h00; end
         for (i = 0; i < 2097152; i = i + 1) mem[i] = 32'h0;
     end
 
@@ -100,8 +100,10 @@ module tb;
     always begin
         @(posedge clk28);
         if (c_run && ($random(seed) & 7) == 0) begin : cdo
-            reg rd; reg [20:0] ad; reg [7:0] wd;
-            rd = $random(seed); ad = pick($random(seed)); ad[20:18] = 3'b111;  // port C keeps to its own region
+            reg rd; reg [22:0] ad; reg [7:0] wd;
+            // port C keeps to its own region of the Next's 2 MiB, and to the
+            // same region of the other three quarters of the die
+            rd = $random(seed); ad = {2'b00, pick($random(seed))}; ad[20:18] = 3'b111; ad[22:21] = $random(seed);
             wd = $random(seed);
             #0.1 c_request = 1; c_read_n = !rd; c_addr = ad; c_wdata = wd;
             #0.1; while (!c_ack) begin @(posedge clk28); #0.1; end

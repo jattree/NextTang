@@ -49,7 +49,10 @@
 //
 // Address map: the core's byte address [20:0] -> word [20:2], lane [1:0].
 // Word address -> column [7:0], bank [9:8], row [20:10] (the top two row bits
-// are zero: the Next's 2 MiB is a quarter of the die).
+// are zero: the Next's 2 MiB is a quarter of the die). Port C alone takes two
+// more address bits, [22:21], as those two row bits: the whole 8 MiB, for a
+// board that keeps something beside the Next's memory there (the rewind
+// ring). A board with only the core on port C ties them to zero.
 
 `default_nettype none
 
@@ -82,7 +85,7 @@ module nexttang_sdr_sdram_service #(
     // port C (machine_clock)
     input  wire        c_request,
     input  wire        c_read_n,
-    input  wire [20:0] c_address,
+    input  wire [22:0] c_address,
     input  wire [7:0]  c_write_data,
     output reg  [7:0]  c_read_data = 8'd0,
     output reg         c_ack = 1'b0,
@@ -157,7 +160,7 @@ module nexttang_sdr_sdram_service #(
     // Port C: same handshake, acknowledged with a one-cycle pulse.
     reg        c_toggle = 1'b0;
     reg        c_op_read_n = 1'b0;
-    reg [20:0] c_op_address = 21'd0;
+    reg [22:0] c_op_address = 23'd0;
     reg [7:0]  c_op_data = 8'd0;
     reg [1:0]  c_lane = 2'd0;
     wire       c_done_toggle;
@@ -425,8 +428,8 @@ module nexttang_sdr_sdram_service #(
                 end else if (c_new) begin
                     c_seen_m <= c_toggle_m;
                     op_refresh <= 1'b0; op_port_c <= 1'b1; op_port_b <= 1'b0;
-                    op_read <= !c_op_read_n; op_address <= c_op_address; op_data <= c_op_data;
-                    command(C_ACT); sdram_ba <= c_op_address[11:10]; sdram_addr <= {2'b00, c_op_address[20:12]};
+                    op_read <= !c_op_read_n; op_address <= c_op_address[20:0]; op_data <= c_op_data;
+                    command(C_ACT); sdram_ba <= c_op_address[11:10]; sdram_addr <= c_op_address[22:12];
                     state <= S_OP;
                 end
             end

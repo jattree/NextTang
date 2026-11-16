@@ -520,7 +520,7 @@ module nexttang_nano20k_zxnext (
         .a_request(ram_a_request), .a_cycle_request(ram_a_cycle_request), .a_read_n(ram_a_read_n),
         .a_address(ram_a_address), .a_write_data(ram_a_write_data),
         .a_read_data(ram_a_read_data), .a_wait(cpu_wait),
-        .c_request(ram_c_request), .c_read_n(ram_c_read_n), .c_address(ram_c_address),
+        .c_request(ram_c_request), .c_read_n(ram_c_read_n), .c_address({2'b00, ram_c_address}),
         .c_write_data(ram_c_write_data), .c_read_data(ram_c_read_data), .c_ack(ram_c_ack), .c_busy(ram_c_busy),
         .fault_timeout(memory_timeout),
         .b_pf_toggle(layer2_prefetch_toggle), .b_pf_address(layer2_prefetch_address),

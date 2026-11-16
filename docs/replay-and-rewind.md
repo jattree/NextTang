@@ -354,8 +354,17 @@ same through the debug interface.
   test fails when the store is broken on purpose. Not on a board: it still needs
   the rest of the SDRAM on a port, banks 5 and 7, the CPU registers and commands
   from the host.
+- 2026-11-16, towards the board: the SDRAM service's port C takes two more address
+  bits and so reaches the whole 8 MB of the Nano's die (the core's port C has them
+  tied to zero). Its simulation runs port C in all four quarters; on the board
+  (wideC-p1r2, 0 setup and 0 hold) the 48K, 128K and archive recordings replay and
+  300 pause/resumes are clean. Nothing uses the upper 6 MB yet.
+- 2026-11-16, black picture: four more placements of the probe image (hunt-p1r0,
+  p1r1, p2r0, p2r1) 0 in 240 loads, and seven earlier probe images 0 in 210 more.
+  About 700 loads of eleven probe images without one; still only rzxS-p0r2.
 - Next: the main branch, the 138K with the recording on the SD card, and putting
-  the rewind store on the board.
+  the rewind store on the board (a mux on port C, banks 5 and 7, the registers,
+  host commands).
 
 ## Order
 
