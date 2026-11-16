@@ -851,7 +851,62 @@ begin
         wait_status("10");
         read_pc(pc_after);
         expect("pc after a written PC (low)", pc_after(7 downto 0), x"46");
+
         set_breakpoint(3, x"0046", '0');
+
+        -- Two faults found on the Nano 20K (2026-11-16), with code of our own
+        -- in RAM at B000 (8K page 05, 2 MB address 04B000):
+        --   B000  JR $
+        --   B010  LD A,5A / LD (B100),A / LD HL,1234 / NOP / JR $
+        command((x"AB", x"55", x"00", x"00"));
+        expect("slot 5 page", reply(3), x"05");
+        command((x"A8", x"04", x"B0", x"00", x"00", x"02", x"18", x"FE"));
+        command((x"A8", x"04", x"B0", x"10", x"00", x"05", x"3E", x"5A", x"32", x"00", x"B1"));
+        command((x"A8", x"04", x"B0", x"15", x"00", x"06", x"21", x"34", x"12", x"00", x"18", x"FE"));
+        command((x"A8", x"04", x"B1", x"00", x"00", x"01", x"00"));
+        command((x"AE", x"1B", x"00", x"00"));
+        command((x"AE", x"16", x"B0", x"00"));
+        command((x"AE", x"17", x"00", x"00"));
+        command((0 => x"A5"));
+        wait_status("00");
+        command((0 => x"A4"));
+        wait_status("10");
+        read_pc(pc_after);
+        expect("stopped in the JR $ loop (high)", pc_after(15 downto 8), x"B0");
+        expect("stopped in the JR $ loop (low)", pc_after(7 downto 0), x"00");
+        -- 1. As a host does before it loads a snapshot: write the state
+        -- register, then a new PC. The CPU is held at the end of JR, a
+        -- three-cycle instruction, whose IR is still being decoded; the state
+        -- write once cleared IR there and the first three bytes at the new PC
+        -- were skipped (here LD A,5A and the first byte of the store).
+        command((x"AE", x"00", x"00", x"00"));
+        command((x"AE", x"1B", x"00", x"00"));
+        command((x"AE", x"16", x"B0", x"00"));
+        command((x"AE", x"17", x"10", x"00"));
+        set_breakpoint(3, x"B018", '1');
+        command((0 => x"A5"));
+        wait_breakpoint;
+        wait_status("10");
+        read_pc(pc_after);
+        expect("pc after the first instructions at a new PC (low)", pc_after(7 downto 0), x"18");
+        command((x"AD", x"00", x"00", x"00"));
+        expect("A loaded by the first instruction at the new PC", reply(3), x"5A");
+        command((x"A7", x"04", x"B1", x"00", x"00", x"01", x"00", x"00"));
+        expect("and stored by the second", reply(7), x"5A");
+        set_breakpoint(3, x"B018", '0');
+        -- 2. The CPU is now held at the end of LD HL,1234. Its last byte, 12,
+        -- is still in the CPU's input register: it goes into H during the
+        -- next fetch. Between the debugger's release and the CPU's next
+        -- clock enable that register once loaded again, from a bus nobody
+        -- drove, and H ended up FF.
+        command((0 => x"A5"));
+        wait_status("00");
+        command((0 => x"A4"));
+        wait_status("10");
+        command((x"AD", x"06", x"00", x"00"));
+        expect("H after a resume from the end of LD HL,nn", reply(3), x"12");
+        command((x"AD", x"07", x"00", x"00"));
+        expect("L after a resume from the end of LD HL,nn", reply(3), x"34");
 
         command((0 => x"A5"));
         wait_status("00");

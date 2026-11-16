@@ -156,6 +156,24 @@ same through the debug interface.
   that also holds opcode bytes for the recorder, the Nano build option and the two host
   tools are on the `boards` line only so far; the player, the play link and the CPU-side
   byte swap are here.
+- 2026-11-16, from the Nano 20K work (branch `boards`, hardware-verified there; here
+  simulation-verified with `tests/sim/zxnext/run_rzx_check.sh` and the new
+  `tests/sim/zxnext/run_pi_debug.sh`):
+  - The replay byte is back on `cpu_di` in `zxnext.vhd`, among the port data sources;
+    `t80na.vhd` has no RZX change. Where the byte goes in did not decide the Nano's
+    timing after all.
+  - Player: the interrupt request no longer drops for one clock when the last
+    fetch's M1 ends; at 28 MHz the CPU missed the interrupt after a four-T-state
+    instruction. `tests/test_rzx_player.py` now checks this at every speed.
+  - Two debugger faults that replay exposed, both in NextTang's own additions: the
+    state register write cleared IR at any stop (the first three bytes at a new PC
+    were skipped after a multi-cycle instruction), and the CPU's input register
+    loaded again between the debugger's release and the CPU's restart (a register
+    loaded just before a pause held FF after the resume). `run_pi_debug.sh` has a
+    check for each; both fail on the files as they were.
+  - Known and not fixed: at a debugger stop the stopped instruction's last loaded
+    byte is not in its register yet, so a register read there can be one
+    instruction stale.
 
 ## Order
 
