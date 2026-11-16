@@ -1,10 +1,10 @@
 # RZX replay, recording and rewind
 
-Status: **recording and playback hardware-verified on the Nano 20K** for 48K programs
+Status: **recording and playback hardware-verified on the Nano 20K** for 48K programs, playback also for 128K, +2 and +3
 (owner request 2026-11-14; results under Progress). The input recorder
 (`rtl/debug/nexttang_rzx_logger.v`) and player (`rtl/debug/nexttang_rzx_player.vhd`)
 are in the Nano 20K build as an option, fed over the debug UART by host tools. Not
-done: 128K and Next-mode recordings, recordings on the SD card, the rewind ring, and
+done: Next-mode recordings, recordings on the SD card, the rewind ring, and
 the 138K. The official Next has
 no input recording, no RZX support and no rewind; NextZXOS 26.11 loads SNA/Z80/SNX/NEX
 snapshots and the NMI menu can save state by hand. This is a NextTang addition, inside
@@ -165,10 +165,38 @@ same through the debug interface.
   monitor is steady at 60 Hz. Build results: four of four place-and-route runs meet
   timing without the replay option, none of six with `--rzx 3` (the replay byte choice
   in `t80na.vhd` is on a half-cycle path); that clash is open.
-- Next: make the replay option and the exact frame meet timing together, 128K and +2
-  recordings (the play tool loads the user's ROM files into the alternate ROM pages
-  through the debugger; +2A/+3 need the four normal ROM pages), then the main branch,
-  the 138K with the recording on the SD card, and rewind.
+- 2026-11-16, 128K recordings on the Nano 20K, hardware-verified: `rzx_play.py --roms
+  DIR` plays a 128K or +2 recording. The Next does not run those machines' ROMs, so the
+  tool writes the two 16K ROM files (the user's own; none are in this repository) into
+  the Next's alternate ROM pages through the debugger (2 MB addresses 0x18000 and
+  0x1C000), switches them in for reads (NextREG 0x8C = 0x80), selects 128K timing,
+  turns divMMC, Multiface and ports 1FFD and DFFD off, unlocks port 7FFD, and runs a
+  few instructions in RAM that set the interrupt mode, the sound chip's sixteen
+  registers and port 7FFD from the snapshot, none of which the debugger can write.
+  Then it loads the eight RAM banks and the registers and plays as before. The tool
+  reads 128K and +2 .z80 (versions 2 and 3) and .szx snapshots. A recording made in
+  Fuse 1.6.0 from a 128K's power-on (its RAM test, the menu, 128 BASIC, typed lines; 905
+  frames) plays in full, three runs of three, and to frame 400 at 14 MHz with the
+  machine live afterwards. The machine stays that 128K until it is reset.
+  - +2A and +3 recordings have four ROMs and there are two alternate pages, so for
+    those the tool writes the four ROM files over the Next's own ROM pages (the first
+    64K of the 2 MB memory), leaves the alternate ROM off and turns port 1FFD on; the
+    Next's machine type already pages four ROMs from 1FFD and 7FFD. NextZXOS is then
+    gone from memory until the board is restarted. A Fuse-made +3 recording from
+    power-on (901 frames, into +3 BASIC) plays in full, one run. A snapshot in the
+    +3's all-RAM paging mode is refused.
+  - The set-up instructions end in HALT, for both 48K and 128K, because of a fault in
+    NextTang's debugger support found here: writing the CPU state register while the
+    CPU was held at the end of a multi-cycle instruction (a jump, say) cleared its
+    instruction register, and the first bytes at the new PC were then skipped. Held in
+    HALT that write is harmless. The first 128K runs went out of step at the first
+    frame with a port read for this reason (the ROM's first instructions were
+    skipped, so every later frame ended somewhere else). The 48K recordings were
+    re-checked with the HALT set-up: BEEP 705 of 705, Fuse-made 520 of 520, Jackal
+    22,453 of 22,453.
+- Next: the fix for that fault in `t80n.vhd`, the replay option and the exact frame
+  meeting timing together, 28 MHz replay, then the main branch, the 138K with the
+  recording on the SD card, and rewind.
 
 ## Order
 

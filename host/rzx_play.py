@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Play an RZX file on a NextTang board in 48K Spectrum mode.
+"""Play an RZX file on a NextTang board as a 48K, 128K, +2, +2A or +3 Spectrum.
 
 Needs an image built with the RZX player (Nano 20K: build_zxnext.sh --rzx 2
 or 3) and the debugger on the debug UART (--pi-pins 0). The board must
@@ -27,8 +27,26 @@ getting to a far frame quick.
 
 divMMC automapping is turned off for the replay (see rzx_capture.py) and put
 back afterwards. The interrupt mode cannot be written through the debugger,
-so if the board's differs from the snapshot's the tool runs an IM instruction
-in RAM first.
+so the tool first runs a few instructions in RAM that set it and end in
+HALT, which also leaves the CPU stopped where it starts cleanly at the
+snapshot's PC.
+
+A 128K or +2 recording needs that machine's two ROMs, which the Next does
+not run: give the folder that holds them with --roms (128-0.rom and
+128-1.rom, or plus2-0.rom and plus2-1.rom, 16K each, as an emulator ships
+them). Starting from the same 48K BASIC, the tool writes them into the
+Next's two alternate ROM pages through the debugger and switches those in
+(NextREG 0x8C), selects 128K timing, turns divMMC and the +3 and extended
+paging ports off, runs a few instructions in RAM that set the interrupt
+mode, the sound chip's registers and port 7FFD as the snapshot has them
+(the debugger cannot write those), then loads the eight RAM banks. The
+machine stays that 128K afterwards, until it is reset.
+
+A +2A or +3 recording has four ROMs (plus3-0.rom to plus3-3.rom). There are
+only two alternate ROM pages, so the tool writes these over the Next's own
+four ROM pages instead, and turns port 1FFD on. NextZXOS is then gone from
+memory until the board is restarted (reloaded or power-cycled; the SD card
+is not touched). A snapshot in the +3's all-RAM paging mode is refused.
 """
 
 from __future__ import annotations
@@ -41,12 +59,13 @@ import sys
 import termios
 import zlib
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "host/debug"))
-from nexttang_debug.protocol import CMD_CPU_RESUME, CPU_STATE_WRITE, PiDebug, Z80Memory  # noqa: E402
+from nexttang_debug.protocol import CMD_CPU_RESUME, CPU_STATE_WRITE, PiDebug, Z80Memory, z80_target  # noqa: E402
 from nexttang_debug.uart import UartLink  # noqa: E402
 from tools.rzx import Frame, read  # noqa: E402
 
@@ -73,6 +92,126 @@ def _z80_unpack(data: bytes, length: int | None = None) -> bytes:
             out.append(data[at])
             at += 1
     return bytes(out)
+
+
+@dataclass
+class Snapshot128:
+    """A 128K, +2, +2A or +3 snapshot: what the board needs to become that
+    machine."""
+    model: str                 # "128", "plus2" or "plus3" (+2A and +3)
+    regs: dict[str, int]
+    banks: list[bytes]         # RAM banks 0 to 7, 16K each
+    port_7ffd: int
+    ay: bytes                  # the sound chip's 16 registers
+    ay_register: int           # the register last selected at FFFD
+    port_1ffd: int = 0         # +2A and +3 only
+
+
+ROM_FILES = {"128": ("128-0.rom", "128-1.rom"), "plus2": ("plus2-0.rom", "plus2-1.rom"),
+             "plus3": ("plus3-0.rom", "plus3-1.rom", "plus3-2.rom", "plus3-3.rom")}   # +2A and +3
+SZX_MODELS = {0: "48", 1: "48", 2: "128", 3: "plus2", 4: "plus3", 5: "plus3", 6: "plus3"}
+
+
+def z80_model(data: bytes) -> str:
+    """The machine a .z80 is for: "48", "128", "plus2", "plus3" or "other"."""
+    if len(data) < 30:
+        raise ValueError("not a .z80 snapshot")
+    if data[6] | data[7]:                          # version 1: PC is in the first header
+        return "48"
+    extra, hardware = struct.unpack_from("<H", data, 30)[0], data[34]
+    modified = len(data) > 37 and bool(data[37] & 0x80)
+    if hardware in ((0, 1) if extra == 23 else (0, 1, 3)):
+        return "other" if modified else "48"       # modified: a 16K
+    if hardware in ((3, 4) if extra == 23 else (4, 5, 6)):
+        return "plus2" if modified else "128"
+    if hardware == 12:
+        return "plus2"
+    if hardware in (7, 8, 13):
+        return "plus3"
+    return "other"
+
+
+def _z80_registers(data: bytes) -> dict[str, int]:
+    (a, f, bc, hl, pc, sp, i, r, flags, de, bc_, de_, hl_, a_, f_, iy, ix,
+     iff1, iff2, mode) = struct.unpack("<BBHHHHBBBHHHHBBHHBBB", data[:30])
+    if flags == 0xFF:
+        flags = 1
+    if pc == 0:
+        pc = struct.unpack_from("<H", data, 32)[0]
+    return {"AF": a << 8 | f, "BC": bc, "DE": de, "HL": hl, "AF'": a_ << 8 | f_, "BC'": bc_,
+            "DE'": de_, "HL'": hl_, "IX": ix, "IY": iy, "SP": sp, "PC": pc, "I": i,
+            "R": r & 0x7F | (flags & 1) << 7, "IFF1": 1 if iff1 else 0, "IFF2": 1 if iff2 else 0,
+            "IM": mode & 3}
+
+
+def _z80_pages(data: bytes) -> dict[int, bytes]:
+    pages: dict[int, bytes] = {}
+    at = 32 + struct.unpack_from("<H", data, 30)[0]
+    while at + 3 <= len(data):
+        size, page = struct.unpack_from("<HB", data, at)
+        at += 3
+        if size == 0xFFFF:
+            pages[page] = data[at:at + 0x4000]
+            at += 0x4000
+        else:
+            pages[page] = _z80_unpack(data[at:at + size], 0x4000)
+            at += size
+    return pages
+
+
+def parse_z80_128(data: bytes) -> Snapshot128:
+    """A 128K or +2 .z80 (version 2 or 3)."""
+    model = z80_model(data)
+    if model not in ROM_FILES:
+        raise ValueError(f"the .z80 is not for a 128K, +2, +2A or +3 Spectrum ({model})")
+    pages = _z80_pages(data)
+    if any(len(pages.get(n + 3, b"")) != 0x4000 for n in range(8)):
+        raise ValueError("the .z80 lacks one of the eight RAM banks")
+    port_1ffd = data[86] if model == "plus3" and struct.unpack_from("<H", data, 30)[0] >= 55 else 0
+    return Snapshot128(model, _z80_registers(data), [pages[n + 3] for n in range(8)], data[35],
+                       bytes(data[39:55]), data[38] & 0x0F, port_1ffd)
+
+
+def parse_szx_128(data: bytes) -> Snapshot128:
+    """A 128K or +2 .szx (ZX-State)."""
+    if data[:4] != b"ZXST":
+        raise ValueError("not an .szx snapshot")
+    model = SZX_MODELS.get(data[6], "other")
+    if model not in ROM_FILES:
+        raise ValueError(f"the .szx is not for a 128K, +2, +2A or +3 Spectrum (machine {data[6]})")
+    regs = None
+    port_7ffd = None
+    port_1ffd = 0
+    ay, ay_register = bytes(16), 0
+    pages: dict[int, bytes] = {}
+    at = 8
+    while at + 8 <= len(data):
+        name, size = data[at:at + 4], struct.unpack_from("<I", data, at + 4)[0]
+        body = data[at + 8:at + 8 + size]
+        at += 8 + size
+        if name == b"Z80R":
+            regs = _szx_registers(body)
+        elif name == b"SPCR":
+            port_7ffd, port_1ffd = body[1], body[2] if model == "plus3" else 0
+        elif name == b"AY\x00\x00":
+            ay_register, ay = body[1] & 0x0F, bytes(body[2:18])
+        elif name == b"RAMP":
+            flags, page = struct.unpack_from("<HB", body)
+            raw = body[3:]
+            pages[page] = zlib.decompress(raw) if flags & 1 else raw
+    if regs is None or port_7ffd is None or any(len(pages.get(n, b"")) != 0x4000 for n in range(8)):
+        raise ValueError("the .szx lacks the registers, the paging port or one of the eight RAM banks")
+    return Snapshot128(model, regs, [pages[n] for n in range(8)], port_7ffd, ay, ay_register, port_1ffd)
+
+
+def _szx_registers(body: bytes) -> dict[str, int]:
+    (af, bc, de, hl, af_, bc_, de_, hl_, ix, iy, sp, pc, i, r, iff1, iff2, mode) = \
+        struct.unpack_from("<12H5B", body)
+    if body[34] & 2:
+        raise ValueError("the snapshot's CPU is halted; not supported yet")
+    return {"AF": af, "BC": bc, "DE": de, "HL": hl, "AF'": af_, "BC'": bc_, "DE'": de_,
+            "HL'": hl_, "IX": ix, "IY": iy, "SP": sp, "PC": pc, "I": i, "R": r,
+            "IFF1": 1 if iff1 else 0, "IFF2": 1 if iff2 else 0, "IM": mode & 3}
 
 
 def parse_z80(data: bytes) -> tuple[dict[str, int], bytes]:
@@ -130,13 +269,7 @@ def parse_szx_48k(data: bytes) -> tuple[dict[str, int], bytes]:
         body = data[at + 8:at + 8 + size]
         at += 8 + size
         if name == b"Z80R":
-            (af, bc, de, hl, af_, bc_, de_, hl_, ix, iy, sp, pc, i, r, iff1, iff2, mode) = \
-                struct.unpack_from("<12H5B", body)
-            if body[34] & 2:
-                raise ValueError("the snapshot's CPU is halted; not supported yet")
-            regs = {"AF": af, "BC": bc, "DE": de, "HL": hl, "AF'": af_, "BC'": bc_, "DE'": de_,
-                    "HL'": hl_, "IX": ix, "IY": iy, "SP": sp, "PC": pc, "I": i, "R": r,
-                    "IFF1": 1 if iff1 else 0, "IFF2": 1 if iff2 else 0, "IM": mode & 3}
+            regs = _szx_registers(body)
         elif name == b"RAMP":
             flags, page = struct.unpack_from("<HB", body)
             raw = body[3:]
@@ -149,17 +282,142 @@ def parse_szx_48k(data: bytes) -> tuple[dict[str, int], bytes]:
 IM_OPCODES = {0: b"\xed\x46", 1: b"\xed\x56", 2: b"\xed\x5e"}
 
 
-def set_interrupt_mode(debug: PiDebug, memory: Z80Memory, mode: int, scratch: int = 0xC000) -> None:
-    """The debugger cannot write the interrupt mode, so run an IM instruction:
-    put it in RAM, point PC at it and single-step. The caller writes RAM and
-    the registers afterwards, so nothing needs putting back."""
-    memory.write(scratch, IM_OPCODES[mode] + b"\x00\x00")
-    debug.set_register("PC", scratch)
-    for _ in range(2):                      # a step may stop between ED and the opcode
-        debug.step()
-        if debug.registers()["IM"] == mode:
-            return
-    raise RuntimeError(f"could not put the CPU in IM {mode}")
+SLED = 8
+
+
+def setup_routine(mode: int, outs: list[tuple[int, int]], copy_to: int) -> tuple[bytes, int]:
+    """Z80 code for what the debugger cannot write: a few NOPs, DI, the
+    interrupt mode, then each (port, value) as LD BC / LD A / OUT (C),A in
+    order, then the first 16 bytes at address 0 copied to copy_to (to show
+    which ROM is in), then HALT. Returns the code and the offset of the
+    HALT; the CPU must be found halted just past it afterwards.
+
+    The NOPs and the HALT are for the board's sake. A CPU that the debugger
+    stopped at a jump does not start cleanly at a new PC: its first few
+    bytes there can be skipped (a fault in the debugger support, fixed in
+    t80n.vhd after it was found here; older images still have it).
+    Stopped in HALT it does, so the code ends in HALT, and the next start,
+    into the snapshot, is clean."""
+    code = bytearray(bytes(SLED) + b"\xf3" + IM_OPCODES[mode])
+    for port, value in outs:
+        code += bytes([0x01, port & 0xFF, port >> 8, 0x3E, value & 0xFF, 0xED, 0x79])
+    code += bytes([0x21, 0x00, 0x00, 0x11, copy_to & 0xFF, copy_to >> 8, 0x01, 0x10, 0x00, 0xED, 0xB0])
+    return bytes(code) + b"\x76", len(code)
+
+
+def run_setup(debug: PiDebug, memory: Z80Memory, at: int, mode: int, outs: list[tuple[int, int]]) -> dict[str, int]:
+    """Run setup_routine at `at` (RAM) and return the registers afterwards.
+    Raises RuntimeError if the CPU does not end halted at its HALT with the
+    interrupt mode set, after three tries."""
+    code, halt = setup_routine(mode, outs, at + 0x200)
+    now: dict[str, int] = {}
+    for _ in range(3):
+        memory.write(at, code)
+        debug.set_cpu_register(CPU_STATE_WRITE, 0)
+        debug.set_register("PC", at)
+        debug.resume()
+        time.sleep(0.05)
+        debug.pause()
+        now = debug.registers()
+        if now["HALT"] and now["PC"] == at + halt + 1 and now["IM"] == mode:
+            return now
+    raise RuntimeError(f"the set-up code did not run to its end (PC {now['PC']:04X}, IM {now['IM']})")
+
+
+ALT_ROM0 = 0x18000       # the Next's alternate ROM pages in the 2 MB memory:
+ALT_ROM1 = 0x1C000       # ROM 0 (port 7FFD bit 4 clear) and ROM 1 (bit 4 set)
+SCRATCH_128 = 0x8000     # RAM bank 2, at 0x8000 whatever port 7FFD says
+
+
+def write_page(debug: PiDebug, page: int, data: bytes) -> None:
+    kind, bank, where = z80_target(page, 0)
+    if kind == "bram":
+        debug.write_bank_ram(bank, where, data)
+    else:
+        debug.write_memory(where, data)
+
+
+def read_page(debug: PiDebug, page: int, offset: int, length: int) -> bytes:
+    kind, bank, where = z80_target(page, offset)
+    return debug.read_bank_ram(bank, where, length) if kind == "bram" else debug.read_memory(where, length)
+
+
+def prepare_128k(debug: PiDebug, memory: Z80Memory, snap: Snapshot128, roms: list[bytes],
+                 say=print) -> None:
+    """Make the paused board the snapshot's 128K, +2, +2A or +3: ROMs,
+    timing, ports, interrupt mode, sound chip, paging and RAM. The CPU
+    registers are the caller's to write afterwards. Raises RuntimeError if a
+    step did not take.
+
+    Two ROMs go into the alternate ROM pages. A +2A's or +3's four go over
+    the Next's own four ROM pages (the first 64K of the 2 MB memory), where
+    ports 1FFD and 7FFD choose among them as on the real machine; NextZXOS
+    is then gone until the board is restarted."""
+    four = len(roms) == 4
+    if four and snap.port_1ffd & 0x01:
+        raise RuntimeError("the snapshot is in the +3's all-RAM paging mode; not handled")
+    nr03 = debug.nextreg(0x03)
+    if four and nr03 & 0x07 not in (3, 4):
+        raise RuntimeError(f"the board's machine type ({nr03 & 7}) does not page four ROMs")
+    if four:
+        for number, rom in enumerate(roms):
+            debug.write_memory(number * 0x4000, rom)
+        if any(debug.read_memory(number * 0x4000, 0x4000) != rom for number, rom in enumerate(roms)):
+            raise RuntimeError("the ROMs did not go into the ROM pages")
+        debug.set_nextreg(0x8C, 0x00)        # no alternate ROM
+    else:
+        debug.write_memory(ALT_ROM0, roms[0])
+        debug.write_memory(ALT_ROM1, roms[1])
+        if debug.read_memory(ALT_ROM0, 0x4000) != roms[0] or debug.read_memory(ALT_ROM1, 0x4000) != roms[1]:
+            raise RuntimeError("the ROMs did not go into the alternate ROM pages")
+        debug.set_nextreg(0x8C, 0x80)        # alternate ROM for reads, not locked to either
+    if nr03 & 0x08:                          # display timing locked by the user: unlock
+        debug.set_nextreg(0x03, 0x08)
+    debug.set_nextreg(0x03, 0xB0 if four else 0xA0)   # +3 or 128K timing, machine type as it is
+    ports = debug.nextreg(0x82) | 0x02       # 7FFD on, DFFD off, 1FFD only for four ROMs
+    debug.set_nextreg(0x82, (ports | 0x08 if four else ports & ~0x08) & ~0x04 & 0xFF)
+    debug.set_nextreg(0x83, debug.nextreg(0x83) & ~0x03 & 0xFF)            # divMMC, Multiface off
+    debug.set_nextreg(0x84, debug.nextreg(0x84) | 0x01)                    # the sound chip's ports on
+    debug.set_nextreg(0x69, 0x00)            # no Layer 2, no Timex mode
+    debug.set_nextreg(0x08, debug.nextreg(0x08) & 0x3F | 0x80)   # 7FFD unlocked, contention on
+    debug.set_nextreg(0x8E, 0x08)            # bank 0, ROM 0, normal paging, extended bank bits clear
+    say("four ROMs over the Next's ROM pages; +3 timing; divMMC and DFFD off" if four else
+        "ROMs in the alternate ROM pages; 128K timing; divMMC, 1FFD and DFFD off")
+
+    outs = []
+    for register in range(16):
+        outs += [(0xFFFD, register), (0xBFFD, snap.ay[register])]
+    outs += [(0xFFFD, snap.ay_register), (0x123B, 0x00)]
+    if four:
+        outs += [(0x1FFD, snap.port_1ffd)]   # before 7FFD, which may lock both
+    outs += [(0x7FFD, snap.port_7ffd)]
+    now = run_setup(debug, memory, SCRATCH_128, snap.regs["IM"], outs)
+    bank = snap.port_7ffd & 7
+    top = [debug.nextreg(0x56), debug.nextreg(0x57)]
+    seen = memory.read(SCRATCH_128 + 0x200, 16)
+    rom = (snap.port_1ffd >> 1 & 2 if four else 0) | snap.port_7ffd >> 4 & 1
+    want = roms[rom][:16]
+    locked = not debug.nextreg(0x08) & 0x80
+    problems = []
+    if top != [bank * 2, bank * 2 + 1]:
+        problems.append(f"bank at C000 is pages {top[0]:02X} {top[1]:02X}")
+    if seen != want:
+        problems.append(f"ROM reads {seen[:4].hex()}, not {want[:4].hex()}")
+    if locked != bool(snap.port_7ffd & 0x20):
+        problems.append("the paging lock differs")
+    if problems:
+        raise RuntimeError("the board did not become the snapshot's 128K: " + "; ".join(problems))
+    say(f"port 7FFD {snap.port_7ffd:02X}{f', 1FFD {snap.port_1ffd:02X}' if four else ''}: bank {bank} at C000, ROM {rom}, "
+        f"screen {5 if not snap.port_7ffd & 8 else 7}{', locked' if locked else ''}; IM {now['IM']}")
+
+    for number, data in enumerate(snap.banks):
+        write_page(debug, number * 2, data[:0x2000])
+        write_page(debug, number * 2 + 1, data[0x2000:])
+    for number, data in enumerate(snap.banks):
+        if read_page(debug, number * 2, 0, 0x80) != data[:0x80] or \
+                read_page(debug, number * 2 + 1, 0x1F80, 0x80) != data[-0x80:]:
+            raise RuntimeError(f"RAM bank {number} did not go in")
+    say("eight RAM banks in")
 
 
 def frame_bytes(frame: Frame) -> bytes:
@@ -182,6 +440,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--speed", choices=sorted(SPEEDS, key=float), default=None,
                         help="CPU speed in MHz while playing (the replay does not depend on it); "
                              "put back afterwards")
+    parser.add_argument("--roms", type=Path, default=os.environ.get("NEXTTANG_ROM_DIR"),
+                        help="folder with the 128K or +2 ROM files, for a recording of those machines "
+                             "(default: NEXTTANG_ROM_DIR)")
     parser.add_argument("--keep-divmmc", action="store_true",
                         help="leave divMMC automapping as it is")
     args = parser.parse_args(argv)
@@ -191,14 +452,32 @@ def main(argv: list[str] | None = None) -> int:
         print("the recording has no embedded snapshot", file=sys.stderr)
         return 1
     first = rzx.snapshots[0]
+    snap128 = None
+    ram = b""
     try:
-        if first.extension.upper() == "SZX":
-            regs, ram = parse_szx_48k(first.data)
-        elif first.extension.upper() == "Z80":
-            regs, ram = parse_z80(first.data)
+        kind = first.extension.upper()
+        if kind == "SZX":
+            model = SZX_MODELS.get(first.data[6], "other") if first.data[:4] == b"ZXST" else "48"
+            if model in ROM_FILES:
+                snap128 = parse_szx_128(first.data)
+            else:
+                regs, ram = parse_szx_48k(first.data)
+        elif kind == "Z80":
+            if z80_model(first.data) in ROM_FILES:
+                snap128 = parse_z80_128(first.data)
+            else:
+                regs, ram = parse_z80(first.data)
         else:
             raise ValueError(f"no reader for a .{first.extension.lower()} snapshot")
-    except ValueError as error:
+        if snap128 is not None:
+            regs = snap128.regs
+            if args.roms is None:
+                raise ValueError(f"a {snap128.model} recording: give the folder with "
+                                 f"{', '.join(ROM_FILES[snap128.model])} with --roms")
+            roms = [(Path(args.roms) / name).read_bytes() for name in ROM_FILES[snap128.model]]
+            if any(len(rom) != 0x4000 for rom in roms):
+                raise ValueError("a ROM file is not 16K")
+    except (ValueError, OSError) as error:
         print(error, file=sys.stderr)
         return 1
     frames = rzx.frames()
@@ -225,7 +504,7 @@ def main(argv: list[str] | None = None) -> int:
         pages = memory.pages()
         now = debug.registers()
         problem = None
-        if pages != PAGES_48K:
+        if pages[:6] != PAGES_48K[:6] or (snap128 is None and pages != PAGES_48K):
             problem = f"not the 48K memory map: MMU {' '.join(f'{p:02X}' for p in pages)}"
         if problem:
             debug.resume()
@@ -234,17 +513,29 @@ def main(argv: list[str] | None = None) -> int:
             print(problem, file=sys.stderr)
             return 1
 
-        if now["IM"] != regs["IM"]:
-            set_interrupt_mode(debug, memory, regs["IM"])
-            print(f"interrupt mode set: IM {now['IM']} -> IM {regs['IM']}")
-        memory.write(0x4000, ram)
+        if snap128 is not None:
+            try:
+                prepare_128k(debug, memory, snap128, roms)
+            except RuntimeError as error:
+                print(error, file=sys.stderr)
+                return 1
+        else:
+            try:
+                run_setup(debug, memory, 0xC000, regs["IM"], [])
+            except RuntimeError as error:
+                print(error, file=sys.stderr)
+                return 1
+            if now["IM"] != regs["IM"]:
+                print(f"interrupt mode set: IM {now['IM']} -> IM {regs['IM']}")
+            memory.write(0x4000, ram)
         for name in ("AF", "BC", "DE", "HL", "AF'", "BC'", "DE'", "HL'", "IX", "IY", "SP", "PC", "I", "R"):
             debug.set_register(name, regs[name])
         debug.set_cpu_register(CPU_STATE_WRITE, regs["IFF2"] << 1 | regs["IFF1"])   # not halted
         check = debug.registers()
         wrong = [n for n in ("AF", "BC", "DE", "HL", "IX", "IY", "SP", "PC", "I", "IM", "IFF1", "IFF2", "HALT")
                  if check[n] != (regs[n] if n != "HALT" else 0)]
-        if wrong or memory.read(0x4000, 0x100) != ram[:0x100] or memory.read(0xFF00, 0x100) != ram[-0x100:]:
+        if wrong or (snap128 is None and (memory.read(0x4000, 0x100) != ram[:0x100] or
+                                          memory.read(0xFF00, 0x100) != ram[-0x100:])):
             debug.resume()
             print(f"the snapshot did not go in (registers that differ: {wrong})", file=sys.stderr)
             return 1
@@ -315,7 +606,7 @@ def main(argv: list[str] | None = None) -> int:
     # divMMC automapping unless the machine was handed over mid-recording,
     # where the program now running is the recording's, not NextZXOS's.
     restore_speed = args.speed is not None and SPEEDS[args.speed] != nr07
-    restore_divmmc = bool(nr0a & 0x10) and not args.keep_divmmc and args.until is None
+    restore_divmmc = bool(nr0a & 0x10) and not args.keep_divmmc and args.until is None and snap128 is None
     if restore_speed or restore_divmmc:
         time.sleep(0.05)
         with UartLink(args.port, 115200, timeout=2.0) as link:
@@ -327,7 +618,10 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(0.5)
                 debug.set_nextreg(0x0A, nr0a)
                 print(f"NextREG 0x0A restored to {nr0a:02X}")
-    if nr0a & 0x10 and not args.keep_divmmc and args.until is not None:
+    if snap128 is not None:
+        print(f"the machine stays a {snap128.model} with its own ROMs (divMMC off) until it is "
+              f"{'restarted' if len(roms) == 4 else 'reset'}")
+    elif nr0a & 0x10 and not args.keep_divmmc and args.until is not None:
         print(f"divMMC automap left off (NextREG 0x0A was {nr0a:02X}): the machine is live in the recording")
 
     if result is None:
