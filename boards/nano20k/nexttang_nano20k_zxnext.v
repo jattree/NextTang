@@ -124,11 +124,28 @@ module nexttang_nano20k_zxnext (
         .CLKOUT(memory_clock), .LOCK(machine_pll_lock),
         .CLKOUTP(), .CLKOUTD(), .CLKOUTD3(clock_28)
     );
+    // The two dividers start in the same 28 MHz cycle: their release is a
+    // register on clock_28's falling edge, half a cycle from the edge the
+    // dividers count. Released by the PLL's lock itself (until 2026-11-16),
+    // which rises whenever it likes, one divider could start a cycle before
+    // the other, and nothing but a reload would bring them back together.
+    // That turned out not to matter to the picture or the machine, and it is
+    // not the cause of the rare black picture: with DIVIDER_SKEW (diagnostic,
+    // build_zxnext.sh --divider-skew) 1, 2 or 3 the 7 MHz divider is released
+    // that many 28 MHz cycles after the 14 MHz one, and with 4 the 14 MHz one
+    // a cycle after the 7 MHz one; all four images boot to a normal picture
+    // (2026-11-16), and with 1 a recording replays. Kept so that every load
+    // starts the same way.
+    localparam integer DIVIDER_SKEW = 0;
+    reg [4:0] divider_release = 5'd0;
+    always @(negedge clock_28 or negedge machine_pll_lock)
+        if (!machine_pll_lock) divider_release <= 5'd0;
+        else divider_release <= {divider_release[3:0], 1'b1};
     wire clock_14, clock_7;
     CLKDIV #(.DIV_MODE("2"), .GSREN("false")) divide_14 (
-        .HCLKIN(clock_28), .RESETN(machine_pll_lock), .CALIB(1'b0), .CLKOUT(clock_14));
+        .HCLKIN(clock_28), .RESETN(divider_release[DIVIDER_SKEW == 4 ? 2 : 1]), .CALIB(1'b0), .CLKOUT(clock_14));
     CLKDIV #(.DIV_MODE("4"), .GSREN("false")) divide_7 (
-        .HCLKIN(clock_28), .RESETN(machine_pll_lock), .CALIB(1'b0), .CLKOUT(clock_7));
+        .HCLKIN(clock_28), .RESETN(divider_release[DIVIDER_SKEW == 4 ? 1 : 1 + DIVIDER_SKEW]), .CALIB(1'b0), .CLKOUT(clock_7));
     wire clock_28_n = ~clock_28;
 
     wire serial_clock;      // 135 MHz
