@@ -260,6 +260,13 @@ same through the debug interface.
   state, and counts of the core's frame locks, lines and lit lines in and out), for
   the loads that come up black with sync and sound present (about 1 in 50 of the
   `--rzx 3` image; none in 60 of the everyday image built from the same source).
+  The black picture has so far shown on one build only (rzxS-p0r2: 4 in 139 loads)
+  and on none of nine later images (about 400 loads), none of which is that build
+  with the probe. Caught again on 2026-11-16 and read through the debugger: NextREGs
+  and palettes are the same as on a good load, and Layer 2 switched on, a white
+  palette, a display-timing change and a refresh-rate change all leave it black, so
+  the fault is after the layer mix (the core's last output stage, or the line buffer
+  and what follows). Cause unknown.
 - 2026-11-16, rewind on the Nano 20K, hardware-verified (`--rzx 3` image rzxZ-p0r2;
   three placements met timing): `host/rzx_session.py` records a 48K program from a
   snapshot and, on a rewind, cuts the recording at the frame to go back to, puts the
@@ -282,8 +289,11 @@ same through the debug interface.
     on the board (the ring below) remove that; they are not built.
   - The frame at a join is short (the live frame interrupt arrives wherever it is
     when the replay ends); frame counts are therefore not exact time across a join.
-  - Not tried: sessions of minutes; a USB keyboard (the `--companion 1` image) in
-    place of keys sent from the PC.
+  - The image with the USB keyboard as well (`--rzx 3 --companion 1`, rzxK-p1r2; two
+    of three placements met timing) runs the same BASIC rewind session, and its
+    recording plays to the end in Fuse. Its keys were sent from the PC; a real USB
+    keyboard during a session has not been tried.
+  - Not tried: sessions of minutes.
 - Next: the main branch, the 138K with the recording on the SD card, and the rewind
   ring.
 
