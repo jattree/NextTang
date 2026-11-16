@@ -35,7 +35,15 @@ entity hdmi_frame is
       -- relock below), at a line boundary in the vertical back porch, so
       -- frames gain or lose a few lines but every line keeps its length.
       -- Off by default: the official behaviour.
-      G_RELOCK         : boolean := false
+      G_RELOCK         : boolean := false;
+      -- NextTang: with G_RELOCK, leave the frame alone while the core's frame
+      -- start stays within a line of where the re-lock wants it and moved by
+      -- no more than a line since the last frame. For a core whose frame is
+      -- exactly one HDMI frame on average but a few clocks longer or shorter
+      -- from frame to frame (zxula_timing's i_frame_exact): without this, a
+      -- frame start that falls near a line boundary reads as a line's
+      -- movement and the re-lock answers with two.
+      G_RELOCK_STEADY  : boolean := false
    );
    port
    (
@@ -293,7 +301,10 @@ begin
                      event_seen <= '1';
                      event_idx <= to_signed(-1, 12);
                   end if;
-                  if q_ok and q_prev_valid = '1' then
+                  if G_RELOCK_STEADY and q_ok and q_prev_valid = '1' and
+                     q + RELOCK_LAG >= -1 and q + RELOCK_LAG <= 1 and q - q_prev >= -1 and q - q_prev <= 1 then
+                     extra := fp_extra;   -- NextTang: G_RELOCK_STEADY
+                  elsif q_ok and q_prev_valid = '1' then
                      extra := (q + RELOCK_LAG) + (q - q_prev) + fp_extra;
                   elsif q_ok then
                      extra := q + RELOCK_LAG;

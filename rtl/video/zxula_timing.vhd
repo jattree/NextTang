@@ -43,6 +43,17 @@ entity zxula_timing is
       i_timing           : in std_logic_vector(2 downto 0);   -- 1XX = pentagon, 010 = 128K, 011 = +3, else 48K
       
       i_cu_offset        : in std_logic_vector(7 downto 0);   -- offset applied to ula vertical pixel count for copper and line int
+
+      -- NextTang: 1 makes every frame (48K, 128K and +3 timing; not Pentagon)
+      -- exactly one CEA HDMI frame long on a board whose 28 MHz is 25/24 of
+      -- its 27 MHz pixel clock: 625 lines of 864 at 50 Hz, 525 of 858 at
+      -- 60 Hz. The frame keeps its line length and gets a different number
+      -- of lines with a short last one, all after the picture and before the
+      -- frame interrupt; frames are two 7 MHz pixels longer now and then so
+      -- the average is exact and the CPU's clock phase never moves. The
+      -- machine's T-states per frame are then not the original's (70312.5
+      -- at 50 Hz against 69888 or 70908).
+      i_frame_exact      : in std_logic := '0';
       
       -- 7 MHz doman
    
@@ -122,6 +133,15 @@ architecture rtl of zxula_timing is
    signal hsync_n              : std_logic := '1';
    signal vsync_n              : std_logic := '1';
    signal frame_sync           : std_logic := '0';
+   -- NextTang: i_frame_exact
+   signal x_on                 : std_logic;
+   signal x_max_vc             : unsigned(8 downto 0);    -- the frame's last line
+   signal x_last_hc            : unsigned(8 downto 0);    -- that line's last position, short frame
+   signal x_step               : unsigned(4 downto 0);    -- thirty-seconds of two pixels added per frame
+   signal x_acc                : unsigned(4 downto 0) := (others => '0');
+   signal x_long               : std_logic := '0';        -- this frame is two pixels longer
+   signal eff_max_vc           : unsigned(8 downto 0);
+   signal eff_max_hc           : unsigned(8 downto 0);
    signal hdmi_pixel_en        : std_logic := '0';
    signal hdmi_frame_lock      : std_logic := '0';
    
@@ -358,7 +378,46 @@ begin
 
    -- frame counter
    
-   max_hc <= '1' when hc = c_max_hc else '0';
+   -- NextTang: i_frame_exact. 50 Hz: 140625 pixels a frame (140624 and
+   -- 140626 in turn); 60 Hz: 117304.6875 (117304, and 117306 for 11 frames
+   -- in 32). In whole lines and a last line:
+   --   48K 50 Hz       313 x 448 + 400      128K/+3 50 Hz   308 x 456 + 176
+   --   48K 60 Hz       261 x 448 + 376      128K/+3 60 Hz   257 x 456 + 112
+   x_on <= i_frame_exact and not i_timing(2);
+   process (i_timing, i_50_60)
+   begin
+      if i_50_60 = '0' then
+         x_step <= to_unsigned(16, 5);
+         if i_timing(1) = '1' then
+            x_max_vc <= to_unsigned(308, 9); x_last_hc <= to_unsigned(175, 9);
+         else
+            x_max_vc <= to_unsigned(313, 9); x_last_hc <= to_unsigned(399, 9);
+         end if;
+      else
+         x_step <= to_unsigned(11, 5);
+         if i_timing(1) = '1' then
+            x_max_vc <= to_unsigned(257, 9); x_last_hc <= to_unsigned(111, 9);
+         else
+            x_max_vc <= to_unsigned(261, 9); x_last_hc <= to_unsigned(375, 9);
+         end if;
+      end if;
+   end process;
+   eff_max_vc <= x_max_vc when x_on = '1' else c_max_vc;
+   eff_max_hc <= c_max_hc when x_on = '0' or vc /= x_max_vc else
+                 x_last_hc + 2 when x_long = '1' else x_last_hc;
+   process (i_CLK_7)
+      variable sum : unsigned(5 downto 0);
+   begin
+      if rising_edge(i_CLK_7) then
+         if max_hc = '1' and max_vc = '1' then
+            sum := resize(x_acc, 6) + resize(x_step, 6);
+            x_acc <= sum(4 downto 0);
+            x_long <= sum(5);
+         end if;
+      end if;
+   end process;
+
+   max_hc <= '1' when hc = eff_max_hc else '0';
    
    process (i_CLK_7)
    begin
@@ -371,7 +430,7 @@ begin
       end if;
    end process;
    
-   max_vc <= '1' when vc = c_max_vc else '0';
+   max_vc <= '1' when vc = eff_max_vc else '0';
    
    process (i_CLK_7)
    begin
@@ -512,7 +571,7 @@ begin
          if ula_max_hc = '1' then
             if ula_min_vactive = '1' then
                cvc <= unsigned ('0' & i_cu_offset);
-            elsif cvc = c_max_vc then
+            elsif cvc = eff_max_vc then
                cvc <= (others => '0');
             else
                cvc <= cvc + 1;
@@ -647,7 +706,7 @@ begin
    begin
       if rising_edge(i_CLK_7) then
          if i_int_line = 0 then
-            int_line_num <= c_max_vc;
+            int_line_num <= eff_max_vc;
          else
             int_line_num <= unsigned(i_int_line) - 1;
          end if;

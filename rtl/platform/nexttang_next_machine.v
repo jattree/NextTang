@@ -162,7 +162,11 @@ module nexttang_next_machine #(
     parameter integer SPI_MISO_LATE = 0,
     // Bit 0: the RZX input recorder on the debug UART (Z / z, above).
     // Bit 1: the RZX player on the debug UART (P, above).
-    parameter integer RZX = 0
+    parameter integer RZX = 0,
+    // 1: every frame exactly one HDMI frame long (zxula_timing's
+    // i_frame_exact), for a board with a 27 MHz pixel clock that is 24/25 of
+    // its 28 MHz and no other video output.
+    parameter integer FRAME_EXACT = 0
 ) (
     // clocks and resets
     input  wire        clock_28,
@@ -524,6 +528,7 @@ module nexttang_next_machine #(
         .o_CPU_STOPPED(cpu_stopped),
         .i_CPU_BREAK(cpu_break),
         .o_MMU(core_mmu),
+        .i_FRAME_EXACT(FRAME_EXACT != 0),
         .i_RZX_PLAY(rzx_playing),
         .i_RZX_INT(rzx_play_int),
         .i_RZX_IN_DATA(rzx_play_data),

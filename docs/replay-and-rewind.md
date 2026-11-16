@@ -1,9 +1,11 @@
-# RZX replay, recording and rewind (planned)
+# RZX replay, recording and rewind
 
-Status: **recorder and player simulation-verified** (owner request 2026-11-14). The
-input recorder (`rtl/debug/nexttang_rzx_logger.v`) and player
-(`rtl/debug/nexttang_rzx_player.vhd`) are checked in simulation against the real core;
-neither is in any build yet, and nothing has run on hardware. The official Next has
+Status: **recording and playback hardware-verified on the Nano 20K** for 48K programs
+(owner request 2026-11-14; results under Progress). The input recorder
+(`rtl/debug/nexttang_rzx_logger.v`) and player (`rtl/debug/nexttang_rzx_player.vhd`)
+are in the Nano 20K build as an option, fed over the debug UART by host tools. Not
+done: 128K and Next-mode recordings, recordings on the SD card, the rewind ring, and
+the 138K. The official Next has
 no input recording, no RZX support and no rewind; NextZXOS 26.11 loads SNA/Z80/SNX/NEX
 snapshots and the NMI menu can save state by hand. This is a NextTang addition, inside
 the Next core, for the 138K and, where it fits, the Nano 20K. cpcnext plans the same
@@ -147,8 +149,26 @@ same through the debug interface.
   - Limits: 48K programs; about 230 bytes of recording per frame on average over the
     UART (the 1024-byte buffer takes single busier frames; Jackal's busiest has 284
     port reads).
-- Next: the same changes in the main branch, then the 138K with the recording on the SD
-  card, 128K recordings, and rewind.
+  - Taking over: `rzx_play.py --until FRAME` ends the replay after that frame and
+    leaves the machine running live (frame 300 of the BEEP recording: the keyboard
+    works at once). divMMC automap stays off afterwards.
+  - Turbo: `--speed 7` and `--speed 14` replay the 3.5 MHz recordings correctly at
+    those CPU speeds. `--speed 28` desyncs at frame 72 every time; cause not known.
+- 2026-11-15, exact-frame video on the Nano 20K, hardware-verified on one monitor: with
+  `FRAME_EXACT` (on in the Nano top) the 48K and 128K/+3 frames are exactly one HDMI
+  frame long, so the HDMI total never changes: 313 lines of 448 plus 400 at 50 Hz and
+  261 plus 376 at 60 Hz for 48K, 308 of 456 plus 176 and 257 plus 112 for 128K/+3, the
+  last line two pixels longer in 16 frames of 32 (50 Hz) or 11 of 32 (60 Hz). Pentagon
+  timing is unchanged. 48K at 50 Hz is 70312.5 T-states a frame, not 69888. Before
+  this the HDMI side followed the machine by whole front-porch lines, which a capture
+  box accepted and a 60 Hz-only monitor did not (shaking, blanking); with it that
+  monitor is steady at 60 Hz. Build results: four of four place-and-route runs meet
+  timing without the replay option, none of six with `--rzx 3` (the replay byte choice
+  in `t80na.vhd` is on a half-cycle path); that clash is open.
+- Next: make the replay option and the exact frame meet timing together, 128K and +2
+  recordings (the play tool loads the user's ROM files into the alternate ROM pages
+  through the debugger; +2A/+3 need the four normal ROM pages), then the main branch,
+  the 138K with the recording on the SD card, and rewind.
 
 ## Order
 

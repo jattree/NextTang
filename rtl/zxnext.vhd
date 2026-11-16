@@ -306,6 +306,10 @@ entity zxnext is
       -- inside the CPU, after its input register (t80na.vhd), so the bus
       -- itself still carries the live port's byte.
       i_RZX_PLAY           : in std_logic := '0';
+      -- NextTang: frames exactly one HDMI frame long (zxula_timing's
+      -- i_frame_exact), for boards whose only output is HDMI from a 27 MHz
+      -- pixel clock that is 24/25 of the 28 MHz.
+      i_FRAME_EXACT        : in std_logic := '0';
       i_RZX_INT            : in std_logic := '0';
       i_RZX_IN_DATA        : in std_logic_vector(7 downto 0) := (others => '1');
       -- NextTang: for the RZX recorder (rtl/debug/nexttang_rzx_logger.v), the
@@ -7669,6 +7673,7 @@ end generate;
       i_timing           => eff_nr_03_machine_timing,
       
       i_cu_offset        => nr_64_copper_offset,
+      i_frame_exact      => i_FRAME_EXACT,   -- NextTang
       
       -- 7 MHz doman
    

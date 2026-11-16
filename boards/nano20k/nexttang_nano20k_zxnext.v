@@ -264,6 +264,13 @@ module nexttang_nano20k_zxnext (
     // RZX: 1 adds the RZX input recorder on the debug UART (Z starts, z
     // stops), 2 the RZX player (P), 3 both (docs/replay-and-rewind.md).
     localparam integer RZX = 0;
+    // FRAME_EXACT: 1 makes the core's frame exactly one HDMI frame (625 lines
+    // at 50 Hz, 525 at 60 Hz), so the output is plain CEA 576p50 or 480p60
+    // with every frame alike. With 0 the core keeps the original machines'
+    // frame lengths and the HDMI frame follows them by a line more or less
+    // from frame to frame, which a capture box accepts but a monitor showed
+    // as a shaking picture that blanked every so often (2026-11-15).
+    localparam integer FRAME_EXACT = 1;
 
     // keys and F1-F10 held from the host over the debug UART
     reg [39:0] keys_meta = 40'd0, keys_sync = 40'd0;
@@ -389,6 +396,7 @@ module nexttang_nano20k_zxnext (
         .BREAKPOINT_SLOTS(2),
         .PI_SPI_PINS(PI_SPI_PINS),
         .RZX(RZX),
+        .FRAME_EXACT(FRAME_EXACT),
         // SD MISO sampled half a CPU clock later: SCK leaves through an
         // I/O-cell register half a clock after the core moves it, so with the
         // official sampling point the card had 7.4 ns of the SD spec's 14 at
@@ -547,7 +555,7 @@ module nexttang_nano20k_zxnext (
         if (frame_reset_async) frame_reset_sync <= 3'b111;
         else if (video_60_change) frame_reset_sync <= 3'b111;
         else frame_reset_sync <= {frame_reset_sync[1:0], 1'b0};
-    hdmi_frame #(.G_RELOCK(1)) frame (
+    hdmi_frame #(.G_RELOCK(1), .G_RELOCK_STEADY(FRAME_EXACT)) frame (
         .i_reset_async_n(!frame_reset_sync[2]),
         .i_scanlines(2'b00),
         .i_CLK_RGB(clock_14), .i_CLK_RGB_EN(core_hdmi_pixel),
