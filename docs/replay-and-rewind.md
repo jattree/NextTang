@@ -64,6 +64,38 @@ specification only; no emulator code is reused.
    frame interrupt) a copy engine on the debug memory port saves registers and only the
    dirty blocks into an SDRAM ring. Rewind = restore + replay forward from the log.
 
+   Worked out on 2026-11-16 (the tracker exists and is measured; the rest is design):
+
+   - **Store: a copy plus undo records**, not a chain of saved blocks. Saving only
+     the blocks written since the last checkpoint cannot be undone once the older
+     checkpoints that held a block's earlier content have left the ring. So spare
+     memory holds a full copy of the 2 MB as of the last checkpoint, and each
+     checkpoint writes, for every dirty block, the copy's old content into the ring
+     (an undo record: what the block held at the checkpoint before) and then brings
+     the copy up to date. Going back to checkpoint k: put the copy into the live
+     memory for the blocks dirty now, then apply the undo records of the later
+     checkpoints, newest first, to both. On the Nano's 8 MB: 2 MB live, 2 MB copy,
+     4 MB of ring (about 16,000 undo records; at the 41 blocks a second measured,
+     several minutes of history). The SDRAM service addresses only the Next's 2 MB
+     today; the copy engine needs the rest of the die on a port of its own or on
+     port C through a mux.
+   - **Banks 5 and 7.** The core keeps bank 5 and the first half of bank 7 only in
+     block RAM (the screen and the 48K system variables live there), reached by the
+     debug slave's own interface inside the core (`bram_debug_*`). The copy engine
+     must read and write those three 8K pages that way, so the core needs a second,
+     fabric-side way in beside the slave's.
+   - **CPU registers** have to be captured on the board: while a recording runs the
+     recorder owns the UART's transmit line, so a host cannot read them. That is a
+     fabric-side reader on the CPU's debug register port, beside the slave's.
+   - **A checkpoint need not wait for a frame's end.** Stop the CPU anywhere and note
+     the recorder's frame number and how many fetches and port reads the frame under
+     way has had. To resume a replay from there the host gives the player a first
+     frame shortened by those counts; the player needs no change. (The same idea as
+     the hand-over from replay to recording, the other way round.)
+   - **Cost.** Through a byte port each dirty block is 1,024 accesses (old copy out
+     to the ring, live into the copy). At four or five machine clocks an access, 41
+     blocks is about 7 ms with the CPU stopped, once a second. Unmeasured.
+
 ## Control and files
 
 File I/O stays with NextZXOS (it owns the SD card): dot commands such as `.RZXREC`,
