@@ -285,6 +285,7 @@ module nexttang_nano20k_zxnext (
     // picture path (rtl/debug/nexttang_video_probe.v), for hunting the loads
     // that come up black.
     localparam integer VIDEO_PROBE = 0;
+    localparam integer DIRTY_PROBE = 0;
     // FRAME_EXACT: 1 makes the core's frame exactly one HDMI frame (625 lines
     // at 50 Hz, 525 at 60 Hz), so the output is plain CEA 576p50 or 480p60
     // with every frame alike. With 0 the core keeps the original machines'
@@ -711,7 +712,22 @@ module nexttang_nano20k_zxnext (
         assign probe_tx = 1'b1;
     end
     endgenerate
-    assign debug_uart_tx = uart_tx & report_tx & probe_tx;
+    // DIRTY_PROBE: d on the debug UART returns how many 256-byte blocks of
+    // main memory were written since the last d (rtl/debug/nexttang_dirty_probe.v),
+    // to size the rewind ring's checkpoints.
+    wire dirty_tx;
+    generate
+    if (DIRTY_PROBE != 0) begin : dirty_probe
+        nexttang_dirty_probe probe (
+            .clock(clock_28), .reset(machine_reset),
+            .request(board_command_valid && board_command_byte == "d"),
+            .write_valid(ram_a_request && ram_a_read_n), .write_address(ram_a_address),
+            .tx(dirty_tx));
+    end else begin : no_dirty_probe
+        assign dirty_tx = 1'b1;
+    end
+    endgenerate
+    assign debug_uart_tx = uart_tx & report_tx & probe_tx & dirty_tx;
     assign companion_irq_n = companion_seen ? 1'b1 : uart_tx;   // BL616 serial RX (debugger firmware); Companion IRQ idle
     // ------------------------------------------------------------- audio
     // AUDIO bit 1: the core's mixed stereo to the on-board MAX98357A over I2S: signed,

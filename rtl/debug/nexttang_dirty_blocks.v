@@ -32,8 +32,8 @@ module nexttang_dirty_blocks #(
     input  wire                  clock,
     input  wire                  reset,
 
-    input  wire                  write_valid,
-    input  wire [BLOCK_BITS-1:0] write_block,
+    input  wire                  write_valid_in,
+    input  wire [BLOCK_BITS-1:0] write_block_in,
 
     input  wire                  scan_start,
     output wire                  block_valid,
@@ -44,11 +44,18 @@ module nexttang_dirty_blocks #(
 );
     localparam BLOCKS = 1 << BLOCK_BITS;
     reg bits [0:BLOCKS-1];
-    integer i;
-    initial for (i = 0; i < BLOCKS; i = i + 1) bits[i] = 1'b1;
 
-    // After a reset the bits are set again one a clock; a scan waits for it.
-    reg                  filling = 1'b0;
+    // The write is registered on the way in: a board's write strobe comes
+    // late in the cycle (the Next's is made from a half-cycle path), and a
+    // clock's delay only makes the set later, which the clear already allows
+    // for.
+    reg                  write_valid = 1'b0;
+    reg [BLOCK_BITS-1:0] write_block = 0;
+
+    // At power-up and after a reset every bit is set, one a clock; a scan
+    // waits for that. (No initial values for the RAM: Gowin's synthesis will
+    // not run an 8,192-step initial loop.)
+    reg                  filling = 1'b1;
     reg [BLOCK_BITS-1:0] fill_at = 0;
 
     localparam S_IDLE = 3'd0, S_READ = 3'd1, S_LOOK = 3'd2, S_OFFER = 3'd3, S_CLEAR = 3'd4;
@@ -66,6 +73,8 @@ module nexttang_dirty_blocks #(
 
     always @(posedge clock) begin
         scan_done <= 1'b0;
+        write_valid <= write_valid_in;
+        write_block <= write_block_in;
 
         // The one write port: a fill, a set, or a clear.
         if (filling)
@@ -131,6 +140,7 @@ module nexttang_dirty_blocks #(
             state <= S_IDLE;
             start_pending <= 1'b0;
             scan_done <= 1'b0;
+            write_valid <= 1'b0;
         end
     end
 endmodule

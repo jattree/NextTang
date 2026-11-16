@@ -23,7 +23,7 @@ module testbench;
     integer seed = SEED;
 
     nexttang_dirty_blocks #(.BLOCK_BITS(BLOCK_BITS)) dut (
-        .clock(clock), .reset(reset), .write_valid(write_valid), .write_block(write_block),
+        .clock(clock), .reset(reset), .write_valid_in(write_valid), .write_block_in(write_block),
         .scan_start(scan_start), .block_valid(block_valid), .block(block), .block_ready(block_ready),
         .scan_done(scan_done), .scanning(scanning));
 

@@ -294,8 +294,25 @@ same through the debug interface.
     recording plays to the end in Fuse. Its keys were sent from the PC; a real USB
     keyboard during a session has not been tried.
   - Not tried: sessions of minutes.
-- Next: the main branch, the 138K with the recording on the SD card, and the rewind
-  ring.
+- 2026-11-16, first piece of the rewind ring: `rtl/debug/nexttang_dirty_blocks.v`
+  keeps a bit per 256-byte block of the 2 MB, set by every write, and hands the dirty
+  blocks to a checkpoint in a scan, clearing each as it is taken (unit tests: no
+  write lost under random traffic with a stalling consumer). Nothing is copied yet.
+  `build_zxnext.sh --dirty-probe 1` puts it on the CPU's memory writes with a count
+  on the debug UART (`d`), to size the checkpoints:
+  - on the board (image dirtyC-p1r2; one setup violation of 0.24 ns in the sprite
+    line buffer, not in this logic): 48K BASIC at its prompt writes 3 blocks a
+    second; a game standing still writes 9;
+  - real play, counted by replaying board-made recordings of the game in a software
+    Z80 on the PC: 41 blocks in a typical second (10 KB), 63 at most, and 61 to 68
+    over 5 seconds, in three recordings of 8 to 10 s. One game only; a game that
+    scrolls the whole screen will write more (the screen alone is 27 blocks).
+  So a checkpoint every second copies tens of blocks, not thousands. The plan this
+  points to for the Nano's 8 MB: 2 MB live, a 2 MB copy as of the last checkpoint,
+  and 4 MB of undo records (for each dirty block, its content at the checkpoint
+  before), so that going back is the copy plus the undo records in reverse.
+- Next: the main branch, the 138K with the recording on the SD card, and the rest
+  of the rewind ring (the copy engine and its store).
 
 ## Order
 
