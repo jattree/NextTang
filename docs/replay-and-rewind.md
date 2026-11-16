@@ -194,9 +194,48 @@ same through the debug interface.
     skipped, so every later frame ended somewhere else). The 48K recordings were
     re-checked with the HALT set-up: BEEP 705 of 705, Fuse-made 520 of 520, Jackal
     22,453 of 22,453.
-- Next: the fix for that fault in `t80n.vhd`, the replay option and the exact frame
-  meeting timing together, 28 MHz replay, then the main branch, the 138K with the
-  recording on the SD card, and rewind.
+- 2026-11-16, core changes found through this work, hardware-verified on the Nano 20K
+  (image `--rzx 3` with the exact frame, place 0 / route 2, `rzxV`):
+  - The replay byte is back on `cpu_di` in `zxnext.vhd`, in the branch that chooses
+    among port data, and `t80na.vhd` has no RZX change. (Where the byte goes in turned
+    out not to decide timing: this is where the first version had it. The design's
+    half-cycle paths are at the limit and results swing with placement.)
+  - Timing constraints: the zxnDMA's data latch is no longer timed from the CPU's
+    address and bus-grant registers (`nano20k_zxnext.sdc`); the DMA uses that byte
+    only while it owns the bus. Builds with the replay option and the exact frame:
+    5 of 6 placements met timing with this (`rzxU`), 1 of 3 after the last CPU change
+    (`rzxV`, two more timed out). Still marginal.
+  - Debugger, `t80n.vhd`: the state register write clears IR only when the CPU is
+    halted (the fault above). Restarting from a `JR $` stop at a new PC ran the
+    first instructions correctly 12 times of 12; before, never.
+  - Debugger, `t80na.vhd`: the CPU's input register is kept from the moment the bus
+    is given away until the CPU is in the first T-state of its next cycle
+    (`Bus_Held`). The debugger's release shows on BUSAK at once but the CPU stays
+    stopped a clock enable or two longer; stopped in T-state 3, the register loaded
+    again from an undriven bus, and the stopped instruction's last byte, which
+    reaches its register only during the next fetch, was lost. After a pause and
+    resume right behind LD r,n, LD rr,nn, POP and the like, that register held FF.
+    A program that checks its own registers failed at the first such pause; with the
+    change it survives 1,000 pauses. Any program paused and resumed by the debugger
+    was exposed to this, not only replays.
+  - Player: the interrupt request no longer drops for one clock between the last
+    fetch's M1 ending and the fetch count catching up. At 28 MHz the CPU samples the
+    request on every clock and, after a four-T-state instruction, decided from that
+    sample and missed the interrupt; this stopped 28 MHz replay at frame 72 of the
+    BEEP recording. With it the BEEP, Fuse-made 48K and 128K recordings replay in
+    full at 28 MHz (705 frames in 3.2 s).
+  - Recordings on that image: BEEP at 3.5 and 28 MHz, Fuse-made 48K, take-over at
+    frame 300 at 14 MHz, 128K at 3.5 and 28 MHz, +3: all in full, no desync.
+  - Limits at 28 MHz: the UART. The archive game needs about 24 KB/s of recording in
+    its busiest stretch at 28 MHz and the link carries 11.5; the replay stops with a
+    desync at frame 328. The player should hold the CPU when it runs dry instead
+    (not done). And a port read in the first instruction after a declined interrupt
+    comes before the next frame's header and byte have arrived.
+  - Known and not fixed: at a debugger stop the stopped instruction's last loaded
+    byte is not in its register yet, so a register read there can be one instruction
+    stale, and a snapshot taken at an arbitrary stop (`rzx_capture.py`) can carry
+    that. Loading is not affected: the set-up code stops in HALT.
+- Next: the main branch, the 138K with the recording on the SD card, and rewind.
 
 ## Order
 

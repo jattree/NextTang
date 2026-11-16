@@ -94,6 +94,7 @@ architecture rtl of nexttang_rzx_player is
    signal io_rd, m1_end, io_start, io_end : std_logic;
    signal take        : std_logic;
    signal in_last_fetch : std_logic;
+   signal last_fetch_ending : std_logic;
 begin
    io_rd    <= '1' when iorq_n = '0' and rd_n = '0' and m1_n = '1' else '0';
    m1_end   <= '1' when m1_n_q = '0' and m1_n = '1' else '0';
@@ -108,8 +109,15 @@ begin
 
    in_last_fetch <= '1' when m1_n = '0' and ack_seen = '0' and target /= 0 and
                              fetches = target - 1 else '0';
+   -- The request must not drop between the last fetch's M1 going high and
+   -- the count catching up one clock later: at 28 MHz the CPU samples it on
+   -- every clock and, after a four-T-state instruction, decides from that
+   -- very sample, so it would miss the interrupt.
+   last_fetch_ending <= '1' when m1_end = '1' and ack_seen = '0' and target /= 0 and
+                                 fetches = target - 1 else '0';
    int_request <= '1' when play_r = '1' and header_left = 0 and
-                           ((fetches = target and m1_n = '1') or in_last_fetch = '1') else '0';
+                           ((fetches = target and m1_n = '1') or in_last_fetch = '1' or
+                            last_fetch_ending = '1') else '0';
 
    in_data <= next_byte;
    playing <= play_r;

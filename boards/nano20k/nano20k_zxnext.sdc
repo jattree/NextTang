@@ -27,6 +27,14 @@ set_clock_groups -asynchronous -group [get_clocks {clock_27}] -group [get_clocks
 // the status UART's flag synchronisers the same way.)
 set_false_path -to [get_regs {machine/status_uart/shift_message*}]
 set_false_path -to [get_regs {machine/status_uart/flags_meta*}]
+// The zxnDMA latches the data bus on every falling edge but uses the byte
+// only while it owns the bus, when the address is its own and the CPU's
+// address and bus-grant registers have been still for cycles. The tool
+// otherwise times CPU address -> memory decode -> data bus -> DMA latch as a
+// half-cycle path, the longest in the design, and spends its effort there.
+set_false_path -from [get_regs {machine/core/gen_cpu_10.cpu_mod/cpu/z80n/A_*}] -to [get_regs {machine/core/gen_dma.dma_mod/dma_d_n_s*}]
+set_false_path -from [get_regs {machine/core/gen_cpu_10.cpu_mod/cpu/z80n/BusAck*}] -to [get_regs {machine/core/gen_dma.dma_mod/dma_d_n_s*}]
+set_false_path -from [get_regs {machine/core/gen_cpu_10.cpu_mod/cpu/z80n/Debug_Release*}] -to [get_regs {machine/core/gen_dma.dma_mod/dma_d_n_s*}]
 
 
 // The BL616's FPGA-Companion SPI clock (about 20 MHz; 25 MHz allowed here), the

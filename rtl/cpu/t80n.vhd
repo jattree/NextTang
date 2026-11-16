@@ -1515,7 +1515,12 @@ begin
                -- NextTang: taking the CPU out of HALT (Halt_FF is written in the
                -- state machine) also forgets the HALT opcode in IR, which would
                -- otherwise hold PC on the next fetch.
-               when '1' & X"B" => if i_debug_dat(2) = '0' then IR <= x"00"; end if;
+               -- Only when it is halted: IR is still decoded while the CPU is
+               -- held at the end of any other instruction, and clearing it
+               -- there (a jump's third M-cycle, say) sends the state machine
+               -- through cycles of a NOP that do not exist, so the first
+               -- bytes at the new PC were skipped.
+               when '1' & X"B" => if i_debug_dat(2) = '0' and Halt_FF = '1' then IR <= x"00"; end if;
                when others => null;
             end case;
 

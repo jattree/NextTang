@@ -81,6 +81,7 @@ begin
       variable op : character;
       variable v : std_logic_vector(7 downto 0);
       variable n : integer;
+      variable dipped : boolean;
       procedure tstates(count : natural) is
       begin
          for k in 1 to count * CPU_CLOCKS loop wait until rising_edge(clock); end loop;
@@ -94,7 +95,21 @@ begin
          readline(f, l); read(l, op);
          case op is
             when 'F' =>                       -- opcode fetch
-               m1_n <= '0'; tstates(2); m1_n <= '1'; tstates(2);
+               m1_n <= '0'; tstates(2); m1_n <= '1';
+               -- The CPU samples the request on every clock and decides at
+               -- the end of the instruction from the sample before, so a
+               -- request that was up during M1 and is up at the end must
+               -- have been up on every clock in between.
+               dipped := false;
+               n := 0;
+               if int_request = '1' then n := 1; end if;
+               for k in 1 to 2 * CPU_CLOCKS loop
+                  wait until rising_edge(clock);
+                  if int_request = '0' and n = 1 then dipped := true; end if;
+               end loop;
+               if dipped and int_request = '1' then
+                  write(w, string'("G")); writeline(o, w);
+               end if;
             when 'I' =>                       -- port read: report the byte the CPU would latch
                hread(l, v);
                tstates(1); iorq_n <= '0'; rd_n <= '0'; tstates(2);
@@ -160,7 +175,8 @@ def run(stream, script, cpu_clocks=8, stream_gap=0):
     reads = [int(line.split()[1], 16) for line in lines if line.startswith("I ")]
     ints = [line.split()[1] == "'1'" for line in lines if line.startswith("E ")]
     end = lines[-1].split()
-    return reads, ints, {"frames": int(end[2]), "playing": end[4] == "'1'", "desync": end[6] == "'1'"}
+    return reads, ints, {"frames": int(end[2]), "playing": end[4] == "'1'", "desync": end[6] == "'1'",
+                         "request dips": sum(line == "G" for line in lines)}
 
 
 @unittest.skipUnless(shutil.which("ghdl"), "ghdl not installed")
@@ -171,7 +187,7 @@ class RzxPlayerTest(unittest.TestCase):
         reads, ints, end = run(stream, script, **options)
         self.assertEqual(ints, expect_int)
         self.assertEqual(reads, [b for _, ins, _ in frames for b in ins])
-        self.assertEqual(end, {"frames": len(frames), "playing": True, "desync": False})
+        self.assertEqual(end, {"frames": len(frames), "playing": True, "desync": False, "request dips": 0})
 
     def test_acknowledged_frames(self) -> None:
         self.check([(5, [0xBF, 0x1F], True), (1, [], True), (7, [0x00], True), (3, [], True)])
@@ -201,13 +217,28 @@ class RzxPlayerTest(unittest.TestCase):
             with self.subTest(cpu_clocks=cpu_clocks):
                 self.check(frames, cpu_clocks=cpu_clocks)
 
+    def test_random_frames_at_full_speed(self) -> None:
+        # One clock per T-state (28 MHz). A frame's header takes a few clocks
+        # to arrive, so no frame here is shorter than three instructions, and
+        # a frame that follows a declined interrupt has no port reads: its
+        # first instruction is already under way when its header starts to
+        # arrive, and at this speed a read in that instruction comes before
+        # its byte (a known limit of the player at 28 MHz).
+        rng = random.Random(11)
+        frames, acked = [], True
+        for _ in range(60):
+            reads = [rng.randrange(256) for _ in range(rng.randrange(0, 5))] if acked else []
+            acked = rng.random() < 0.6
+            frames.append((rng.randrange(3, 40), reads, acked))
+        self.check(frames, cpu_clocks=1)
+
     def test_read_with_no_byte_left_is_a_desync(self) -> None:
         rng = random.Random(1)
         stream, script, _ = build([(3, [0x11], True), (4, [0x22, 0x33], True), (2, [], True)], rng)
         del stream[4 + 1 + 4 + 1]            # frame 1's last byte
         stream[4 + 1 + 2] = 1                # and its count: the CPU's second read has none
         _, _, end = run(stream, script)
-        self.assertEqual(end, {"frames": 1, "playing": False, "desync": True})
+        self.assertEqual(end, {"frames": 1, "playing": False, "desync": True, "request dips": 0})
 
     def test_unused_byte_at_a_declined_interrupt_is_a_desync(self) -> None:
         rng = random.Random(1)

@@ -157,12 +157,15 @@ release moves the same way: `scripts/merge_official_core.py --upstream DIR
   0xA0, grant the slave's pause only at an instruction end, catch a
   single-step release at full clock rate, and export the CPU's next fetch
   address and the MMU for hardware breakpoints.
-- **RZX replay in the CPU wrapper** (2026-11-15, marked `NextTang` in
-  `t80na.vhd`): inputs `RZX_PLAY` and `RZX_DATA`; during an I/O read while a
-  recording plays, the recorded byte is latched beside `DI_Reg` and passed to
-  the CPU core in its place. `t80n.vhd`'s debug state register reports
-  `IStatus`, the CPU's interrupt mode, where the official file reports the
-  decoder's `IMode`.
+- **RZX replay** (marked `NextTang` in `zxnext.vhd`): during a CPU I/O read
+  while a recording plays, `cpu_di` carries the recorded byte in place of the
+  port data. (From 2026-11-15 to 2026-11-16 the byte was instead swapped in
+  inside `t80na.vhd`; that file no longer has an RZX change.) `t80n.vhd`'s
+  debug state register reports `IStatus`, the CPU's interrupt mode, where the
+  official file reports the decoder's `IMode`, and its write clears IR only
+  when the CPU is halted. `t80na.vhd` keeps `DI_Reg` from a bus grant until
+  the CPU's next cycle has begun (`Bus_Held`), so a debugger pause and resume
+  cannot lose the stopped instruction's last byte.
 - `spi_master.vhd` remains MiSTer's; the official 3.02.04 change to it
   (`spi_active`) is not taken yet.
 - **Bank 5's CPU-port write is registered** (RetroSilicon/NextNano issue

@@ -152,13 +152,7 @@ entity T80Na is
       o_debug_lastM     : out std_logic;
       i_debug_pause     : in std_logic := '0';   -- NextTang
       o_debug_next_pc   : out std_logic_vector(15 downto 0);   -- NextTang
-      i_debug_break     : in std_logic := '0';   -- NextTang
-
-      -- NextTang: RZX replay. While RZX_PLAY is high, the byte the CPU takes
-      -- from an I/O read is RZX_DATA as it stood when the read's data was
-      -- latched, not the byte on the bus.
-      RZX_PLAY          : in std_logic := '0';
-      RZX_DATA          : in std_logic_vector(7 downto 0) := (others => '1')
+      i_debug_break     : in std_logic := '0'   -- NextTang
    );
 end T80Na;
 
@@ -191,11 +185,9 @@ architecture rtl of T80Na is
    signal A_i           : std_logic_vector(15 downto 0);
    signal DO            : std_logic_vector(7 downto 0);
    signal DI_Reg        : std_logic_vector (7 downto 0); -- Input synchroniser
-   -- NextTang: RZX replay. The recorded byte is latched beside DI_Reg and
-   -- chosen after it, so the bus's path into DI_Reg is no longer than before.
-   signal RZX_Reg       : std_logic_vector (7 downto 0) := (others => '1');
-   signal RZX_Sel       : std_logic := '0';
-   signal DI_Core       : std_logic_vector (7 downto 0);
+   -- NextTang: the bus is, or has just been, given away and the CPU has not
+   -- yet started its next cycle (see the Bus_Held process).
+   signal Bus_Held      : std_logic := '0';
    signal MCycle        : std_logic_vector(2 downto 0);
    signal TState        : std_logic_vector(2 downto 0);
 
@@ -258,7 +250,7 @@ begin
          A => A_i,
 --       DInst => D,
          DInst => D_i,
-         DI => DI_Core,   -- NextTang: was DI_Reg
+         DI => DI_Reg,
          DO => DO,
          MC => MCycle,
          TS => TState,
@@ -311,16 +303,32 @@ begin
    process (CLK_n)
    begin
       if CLK_n'event and CLK_n = '0' and CEN_F = '1' then
-         if TState = "011" and BUSAK_n_i = '1' then
+         if TState = "011" and BUSAK_n_i = '1' and Bus_Held = '0' then   -- NextTang: Bus_Held
 --          DI_Reg <= to_x01(D);
             DI_Reg <= D_i;
-            -- NextTang: an I/O read while a recording plays
-            RZX_Reg <= RZX_DATA;
-            RZX_Sel <= RZX_PLAY and IORQ_rw and not RD_n_i;
          end if;
       end if;
    end process;
-   DI_Core <= RZX_Reg when RZX_Sel = '1' else DI_Reg;   -- NextTang
+
+   -- NextTang: the debugger's release shows on BUSAK_n at once (t80n.vhd),
+   -- but the CPU stays where it stopped for a clock enable or two more (the
+   -- bus request itself falls a step later and holds it once again). If it
+   -- stopped in T-state 3, DI_Reg would load again in between, from a bus
+   -- nobody is driving, and the stopped instruction's last byte, which goes
+   -- from DI_Reg into its register during the next fetch, would be lost
+   -- (LD r,n, LD rr,nn, POP and the like left FF in the register after a
+   -- pause and resume). Bus_Held keeps DI_Reg from the moment the bus is
+   -- given away until the CPU is in the first T-state of its next cycle.
+   process (CLK_n)
+   begin
+      if CLK_n'event and CLK_n = '1' then
+         if BUSAK_n_i = '0' then
+            Bus_Held <= '1';
+         elsif TState = "001" then
+            Bus_Held <= '0';
+         end if;
+      end if;
+   end process;
 
 -- 30/10/19 Charlie Ingley - Generate WR_t2 to correct MREQ/WR timing
    process (Reset_s,CLK_n) 
