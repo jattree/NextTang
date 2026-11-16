@@ -343,8 +343,19 @@ same through the debug interface.
   points to for the Nano's 8 MB: 2 MB live, a 2 MB copy as of the last checkpoint,
   and 4 MB of undo records (for each dirty block, its content at the checkpoint
   before), so that going back is the copy plus the undo records in reverse.
-- Next: the main branch, the 138K with the recording on the SD card, and the rest
-  of the rewind ring (the copy engine and its store).
+- 2026-11-16, second piece of the rewind ring: `rtl/debug/nexttang_rewind_store.v`
+  is the store described under piece 4 (the copy as of the last checkpoint, undo
+  records in a ring, a table of the checkpoints held): prime, checkpoint, and rewind
+  by a number of checkpoints, through one byte-wide memory port. Simulation only: with
+  the tracker and a memory model, after random machine writes, checkpoints and
+  rewinds the live memory is always what it was at the checkpoint gone back to,
+  with a roomy ring, with one of seven records (old checkpoints dropped, and a
+  checkpoint too big for the ring given up cleanly) and with a table of two; the
+  test fails when the store is broken on purpose. Not on a board: it still needs
+  the rest of the SDRAM on a port, banks 5 and 7, the CPU registers and commands
+  from the host.
+- Next: the main branch, the 138K with the recording on the SD card, and putting
+  the rewind store on the board.
 
 ## Order
 
