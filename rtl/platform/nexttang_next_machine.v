@@ -128,7 +128,9 @@
 // and the first part of the recording, and resumes. From that resume until
 // playing ends, every byte received is the recording, the CPU's port reads
 // and maskable interrupt come from it, and the UART's transmit side carries
-// the player's progress.
+// the player's progress. With both bits, a recording the host ends with FE 02
+// hands over to the recorder as playing ends and stops the CPU there: the
+// recording carries on from the frame the replay reached (a rewind).
 //
 // The SD card is on the core's SPI master (spi_clock, spi_mosi,
 // spi_sd0_select_n, spi_sd_miso). With SD_MONITOR set, every byte the card
@@ -349,6 +351,9 @@ module nexttang_next_machine #(
     wire [7:0]  rzx_play_data;
     wire        rzx_play_taking;
     wire        rzx_play_hold;
+    wire        rzx_play_record_after, rzx_play_desync, rzx_play_busy;
+    wire [15:0] rzx_play_fetches;
+    wire        rzx_takeover;        // a replay has just handed over to the recorder
     wire [7:0]  rzx_in_data;
 
     wire        core_m1_n;
@@ -855,7 +860,7 @@ module nexttang_next_machine #(
         .bp_address(bp_address),
         .bp_paged(bp_paged),
         .bp_page(bp_page),
-        .inject_pause(bp_hit)
+        .inject_pause(bp_hit | rzx_takeover)
     );
 
     nexttang_breakpoints #(
@@ -1027,10 +1032,27 @@ module nexttang_next_machine #(
         wire command_start = board_command_valid && command_byte == "Z";
         wire command_stop = board_command_valid && command_byte == "z";
         wire resumed = stopped_q && !cpu_stopped;
-        wire start = (command_start && !cpu_stopped && !recording) || (armed && resumed);
+        // A replay that the host ended with FE 02 hands over to the recorder:
+        // recording starts on the clock playing ends, already as many fetches
+        // into its first frame as the player had counted since the last
+        // frame it played, so the two recordings join without a seam. The
+        // CPU is stopped there too (as at a breakpoint), for the host to put
+        // the CPU speed back and resume when the player is ready. The marker
+        // and the first words wait for the play link's last bytes to leave.
+        reg  playing_q = 1'b0;
+        reg  begin_wait = 1'b0;
+        assign rzx_takeover = playing_q && !rzx_playing && rzx_play_record_after &&
+                              !rzx_play_desync && !recording;
+        wire start = (command_start && !cpu_stopped && !recording) || (armed && resumed) || rzx_takeover;
+        wire begin_stream = (start && !rzx_takeover) || (begin_wait && !rzx_play_busy);
         reg  stop_q = 1'b0;
 
         always @(posedge clock_28) begin
+            playing_q <= rzx_playing;
+            if (rzx_takeover)
+                begin_wait <= 1'b1;
+            else if (!rzx_play_busy || !machine_locked)
+                begin_wait <= 1'b0;
             stopped_q <= cpu_stopped;
             stop_q <= command_stop && recording;
             if (command_start && cpu_stopped && !recording)
@@ -1045,6 +1067,7 @@ module nexttang_next_machine #(
             .clock(clock_28),
             .reset(!machine_locked),
             .start(start),
+            .start_fetches(rzx_takeover ? rzx_play_fetches : 16'd0),
             .stop(command_stop),
             .recording(recording),
             .m1_n(rzx_m1_n),
@@ -1068,7 +1091,7 @@ module nexttang_next_machine #(
         ) sender (
             .clock(clock_28),
             .reset(!machine_locked),
-            .begin_stream(start),
+            .begin_stream(begin_stream),
             .end_stream(stop_q),
             .end_flags({overflow, saturated}),
             .end_frames(frames),
@@ -1081,15 +1104,16 @@ module nexttang_next_machine #(
     end else begin : no_rzx
         assign rzx_busy = 1'b0;
         assign rzx_tx = 1'b1;
+        assign rzx_takeover = 1'b0;
     end
     endgenerate
 
     // RZX player (RZX bit 1).
-    wire rzx_play_busy;
     wire rzx_play_tx;
     generate
     if ((RZX & 2) != 0) begin : rzx_play
-        wire play_start, play_stop, desync;
+        wire play_start, play_stop;
+        wire desync = rzx_play_desync;
         wire [15:0] frames;
         wire [7:0] stream_byte;
         wire stream_valid, stream_ready;
@@ -1107,6 +1131,7 @@ module nexttang_next_machine #(
             .cpu_stopped(cpu_stopped),
             .play_start(play_start),
             .play_stop(play_stop),
+            .record_after(rzx_play_record_after),
             .playing(rzx_playing),
             .desync(desync),
             .frames(frames),
@@ -1123,8 +1148,9 @@ module nexttang_next_machine #(
             .start(play_start),
             .stop(play_stop),
             .playing(rzx_playing),
-            .desync(desync),
+            .desync(rzx_play_desync),
             .frames(frames),
+            .fetch_count(rzx_play_fetches),
             .m1_n(rzx_m1_n),
             .iorq_n(rzx_iorq_n),
             .rd_n(rzx_rd_n),
@@ -1143,6 +1169,9 @@ module nexttang_next_machine #(
         assign rzx_play_hold = 1'b0;
         assign rzx_play_busy = 1'b0;
         assign rzx_play_tx = 1'b1;
+        assign rzx_play_record_after = 1'b0;
+        assign rzx_play_desync = 1'b0;
+        assign rzx_play_fetches = 16'd0;
     end
     endgenerate
 

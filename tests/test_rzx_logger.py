@@ -18,6 +18,7 @@ module testbench;
     reg clock = 0;
     always #5 clock = ~clock;
     reg reset = 1, start = 0, stop = 0;
+    reg [15:0] start_fetches = 16'd0;
     reg m1_n = 1, iorq_n = 1, rd_n = 1, int_n = 1;
     reg [7:0] data = 8'hff;
     reg ready = 1;
@@ -29,7 +30,7 @@ module testbench;
     reg [8:0] seen [0:65535];
 
     nexttang_rzx_logger #(.FIFO_BITS(FIFO_BITS)) dut (
-        .clock(clock), .reset(reset), .start(start), .stop(stop),
+        .clock(clock), .reset(reset), .start(start), .start_fetches(start_fetches), .stop(stop),
         .recording(recording), .m1_n(m1_n), .iorq_n(iorq_n), .rd_n(rd_n),
         .data(data), .int_n(int_n), .word(word), .word_valid(valid), .word_ready(ready),
         .frames(frames), .saturated(saturated), .overflow(overflow));
@@ -136,6 +137,32 @@ def frame_words(in_bytes: list[int], fetches: int) -> list[int]:
 
 @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "iverilog not installed")
 class RzxLoggerTest(unittest.TestCase):
+    def test_start_part_way_into_a_frame(self) -> None:
+        # A recording that carries on where a replay ended starts with the
+        # player's count of the fetches already made in the frame under way.
+        body = ["        fetch; fetch; fetch;",
+                "        start_fetches <= 16'd3; start <= 1; @(posedge clock); start <= 0; start_fetches <= 16'd0;",
+                "        fetch; in_read(8'h5a); fetch;",
+                "        ack;",
+                "        fetch; fetch; ack;"]
+        status, words = run_bench("\n".join(body) + "\n")
+        self.assertEqual(words, frame_words([0x5A], 5) + frame_words([], 2))
+        self.assertEqual(status["frames"], 2)
+
+    def test_start_on_the_clock_a_fetch_ends(self) -> None:
+        # The fetch whose M1 rises on the start's own clock belongs to the
+        # recording: the player stopped counting a clock earlier.
+        for cpu_clocks in (1, 8):
+            with self.subTest(cpu_clocks=cpu_clocks):
+                body = ["        fetch;",
+                        "        m1_n <= 0; tstates(2);",
+                        "        m1_n <= 1; data <= 8'h00; start_fetches <= 16'd1; start <= 1;",
+                        "        @(posedge clock); start <= 0; start_fetches <= 16'd0;",
+                        "        tstates(2); fetch; ack;"]
+                status, words = run_bench("\n".join(body) + "\n", cpu_clocks=cpu_clocks)
+                # one before the start (given), the one ending with it, one after
+                self.assertEqual(words, frame_words([], 3))
+
     def test_random_frames_with_backpressure(self) -> None:
         rng = random.Random(1982)
         body = ["        start <= 1; @(posedge clock); start <= 0;",

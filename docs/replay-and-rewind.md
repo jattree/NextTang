@@ -1,11 +1,12 @@
 # RZX replay, recording and rewind
 
-Status: **recording and playback hardware-verified on the Nano 20K** for 48K programs, playback also for 128K, +2 and +3
+Status: **recording and playback hardware-verified on the Nano 20K** for 48K programs, playback also for 128K, +2 and +3,
+and **rewind by replay from the PC** for 48K programs
 (owner request 2026-11-14; results under Progress). The input recorder
 (`rtl/debug/nexttang_rzx_logger.v`) and player (`rtl/debug/nexttang_rzx_player.vhd`)
 are in the Nano 20K build as an option, fed over the debug UART by host tools. Not
-done: Next-mode recordings, recordings on the SD card, the rewind ring, and
-the 138K. The official Next has
+done: Next-mode recordings, recordings on the SD card, the rewind ring (checkpoints
+on the board, so a rewind does not replay the whole session), and the 138K. The official Next has
 no input recording, no RZX support and no rewind; NextZXOS 26.11 loads SNA/Z80/SNX/NEX
 snapshots and the NMI menu can save state by hand. This is a NextTang addition, inside
 the Next core, for the 138K and, where it fits, the Nano 20K. cpcnext plans the same
@@ -259,7 +260,32 @@ same through the debug interface.
   state, and counts of the core's frame locks, lines and lit lines in and out), for
   the loads that come up black with sync and sound present (about 1 in 50 of the
   `--rzx 3` image; none in 60 of the everyday image built from the same source).
-- Next: the main branch, the 138K with the recording on the SD card, and rewind.
+- 2026-11-16, rewind on the Nano 20K, hardware-verified (`--rzx 3` image rzxZ-p0r2;
+  three placements met timing): `host/rzx_session.py` records a 48K program from a
+  snapshot and, on a rewind, cuts the recording at the frame to go back to, puts the
+  snapshot back, replays the cut recording at 28 MHz and carries on recording from
+  there. What makes the join exact is in the board: a replay the host ends with
+  FE 02 (instead of FE 01) hands over to the recorder on the clock playing ends,
+  the recorder's first frame starting as many fetches long as the player had
+  counted since the last frame it played (0 after an acknowledge, 1 or more after a
+  declined interrupt), and the CPU is stopped there as at a breakpoint, until the
+  host has put the CPU speed back and resumes.
+  - In 48K BASIC: 1 typed, a rewind to before it, 2 typed: the screen shows only the
+    2; the saved session (252 frames) plays to its end in Fuse 1.6.0 and on the
+    board.
+  - In the middle of a game (the archive recording played to frame 6,000 and taken
+    over): a session with keys and three rewinds (back 2 s, 5 s and 1 s; replays of
+    0.5, 0.8 and 1.4 s) saved as 505 frames, which play to their end in Fuse and on
+    the board.
+  - Cost: a rewind replays everything before the target at eight times real speed,
+    so it takes an eighth of the session so far plus the snapshot write. Checkpoints
+    on the board (the ring below) remove that; they are not built.
+  - The frame at a join is short (the live frame interrupt arrives wherever it is
+    when the replay ends); frame counts are therefore not exact time across a join.
+  - Not tried: sessions of minutes; a USB keyboard (the `--companion 1` image) in
+    place of keys sent from the PC.
+- Next: the main branch, the 138K with the recording on the SD card, and the rewind
+  ring.
 
 ## Order
 
