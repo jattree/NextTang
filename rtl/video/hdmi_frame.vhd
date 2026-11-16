@@ -70,6 +70,10 @@ entity hdmi_frame is
       o_hsync_n        : out std_logic;
       
       o_rgb            : out std_logic_vector(8 downto 0);
+
+      -- NextTang: the state machine's state, for diagnostics: 0 reset, 1
+      -- waiting for i_rgb_sync, 2 waiting for the frame's end, 3 running
+      o_debug_state    : out std_logic_vector(1 downto 0);
       
       -- hdmi configuration
       
@@ -216,6 +220,8 @@ begin
    end process;
    
    running <= '1' when state = S_RUNNING else '0';
+   o_debug_state <= "00" when state = S_ASYNC_RESET else "01" when state = S_RGB_SYNC else
+                    "10" when state = S_FRAME_WAIT else "11";   -- NextTang
 
    -- NextTang: G_RELOCK. While running, each frame start re-aligns the read
    -- side as the first lock did: the counters go to the start of the first

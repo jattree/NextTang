@@ -348,6 +348,7 @@ module nexttang_next_machine #(
     wire        rzx_playing, rzx_play_int;
     wire [7:0]  rzx_play_data;
     wire        rzx_play_taking;
+    wire        rzx_play_hold;
     wire [7:0]  rzx_in_data;
 
     wire        core_m1_n;
@@ -468,7 +469,7 @@ module nexttang_next_machine #(
         .i_RAM_A_DI(ram_a_read_data),
         .o_RAM_A_DO(ram_a_write_data),
         // Active high. The port defaults to '1', which would hold the CPU.
-        .i_CPU_WAIT(cpu_wait),
+        .i_CPU_WAIT(cpu_wait | rzx_play_hold),   // the RZX player waits for its stream
 
         .o_RAM_B_ADDR(layer2_address),
         .o_RAM_B_REQ_T(layer2_request_toggle),
@@ -1131,13 +1132,15 @@ module nexttang_next_machine #(
             .byte_valid(stream_valid),
             .byte_ready(stream_ready),
             .in_data(rzx_play_data),
-            .int_request(rzx_play_int)
+            .int_request(rzx_play_int),
+            .hold(rzx_play_hold)
         );
     end else begin : no_rzx_play
         assign rzx_playing = 1'b0;
         assign rzx_play_int = 1'b0;
         assign rzx_play_data = 8'hff;
         assign rzx_play_taking = 1'b0;
+        assign rzx_play_hold = 1'b0;
         assign rzx_play_busy = 1'b0;
         assign rzx_play_tx = 1'b1;
     end

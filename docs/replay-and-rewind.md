@@ -226,15 +226,25 @@ same through the debug interface.
     full at 28 MHz (705 frames in 3.2 s).
   - Recordings on that image: BEEP at 3.5 and 28 MHz, Fuse-made 48K, take-over at
     frame 300 at 14 MHz, 128K at 3.5 and 28 MHz, +3: all in full, no desync.
-  - Limits at 28 MHz: the UART. The archive game needs about 24 KB/s of recording in
-    its busiest stretch at 28 MHz and the link carries 11.5; the replay stops with a
-    desync at frame 328. The player should hold the CPU when it runs dry instead
-    (not done). And a port read in the first instruction after a declined interrupt
-    comes before the next frame's header and byte have arrived.
+  - The player waits for its stream (image `rzxW`, place 0 / route 2). Its `hold`
+    output goes to the CPU's WAIT while a frame's header or the next port byte has
+    not arrived, so the stream no longer has to keep up; a hold of about a second
+    ends the replay with a desync, so a dead host cannot hang the machine. Before
+    this the archive game stopped at frame 328 at 28 MHz (its busiest stretch needs
+    about 24 KB/s of recording there and the UART carries 11.5), and a port read in
+    the first instruction after a declined interrupt came before its byte. With it
+    the archive game replays in full at 28 MHz: 22,453 frames in 91 s, against 448 s
+    at 3.5 MHz. One limit is left by design: a frame of a single instruction
+    straight after a declined interrupt (no real recording has one).
   - Known and not fixed: at a debugger stop the stopped instruction's last loaded
     byte is not in its register yet, so a register read there can be one instruction
     stale, and a snapshot taken at an arbitrary stop (`rzx_capture.py`) can carry
     that. Loading is not affected: the set-up code stops in HALT.
+- 2026-11-16, `build_zxnext.sh --video-probe 1`: H on the debug UART returns a line
+  about the HDMI picture path (`rtl/debug/nexttang_video_probe.v`: hdmi_frame's
+  state, and counts of the core's frame locks, lines and lit lines in and out), for
+  the loads that come up black with sync and sound present (about 1 in 50 of the
+  `--rzx 3` image; none in 60 of the everyday image built from the same source).
 - Next: the main branch, the 138K with the recording on the SD card, and rewind.
 
 ## Order

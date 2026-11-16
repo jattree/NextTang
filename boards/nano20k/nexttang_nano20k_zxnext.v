@@ -264,6 +264,10 @@ module nexttang_nano20k_zxnext (
     // RZX: 1 adds the RZX input recorder on the debug UART (Z starts, z
     // stops), 2 the RZX player (P), 3 both (docs/replay-and-rewind.md).
     localparam integer RZX = 0;
+    // VIDEO_PROBE: 1 adds H on the debug UART, a line about the HDMI
+    // picture path (rtl/debug/nexttang_video_probe.v), for hunting the loads
+    // that come up black.
+    localparam integer VIDEO_PROBE = 0;
     // FRAME_EXACT: 1 makes the core's frame exactly one HDMI frame (625 lines
     // at 50 Hz, 525 at 60 Hz), so the output is plain CEA 576p50 or 480p60
     // with every frame alike. With 0 the core keeps the original machines'
@@ -526,6 +530,7 @@ module nexttang_nano20k_zxnext (
     // numbers).
     wire        hdmi_blank, hdmi_hsync_n, hdmi_vsync_n;
     wire [8:0]  hdmi_rgb;
+    wire [1:0]  frame_state;   // hdmi_frame's state machine, for the video probe
     // video_60 (NextREG 05 bit 2) is a clock_28 signal; two registers bring it
     // into the pixel clock's domain before it picks the timing numbers below.
     reg  [1:0]  video_60_sync = 2'b00;
@@ -562,6 +567,7 @@ module nexttang_nano20k_zxnext (
         .i_rgb_sync(core_hdmi_lock), .i_rgb(core_rgb),
         .i_CLK_HDMI(pixel_clock),
         .o_blank(hdmi_blank), .o_vsync_n(hdmi_vsync_n), .o_hsync_n(hdmi_hsync_n), .o_rgb(hdmi_rgb),
+        .o_debug_state(frame_state),
         .i_HACTIVE(video_60 ? 10'd138 : 10'd144),
         .i_HSYNC_BEG(video_60 ? 10'd16 : 10'd12),
         .i_HSYNC_END(video_60 ? 10'd77 : 10'd75),
@@ -675,7 +681,20 @@ module nexttang_nano20k_zxnext (
     assign sd_dat1 = 1'b1;
     assign sd_dat2 = 1'b1;
 
-    assign debug_uart_tx = uart_tx & report_tx;
+    wire probe_tx;
+    generate
+    if (VIDEO_PROBE != 0) begin : video_probe
+        nexttang_video_probe probe (
+            .clock(clock_28), .request(board_command_valid && board_command_byte == "H"),
+            .core_lock(core_hdmi_lock), .core_pixel_enable(core_hdmi_pixel), .core_rgb(core_rgb),
+            .pixel_clock(pixel_clock), .frame_state(frame_state), .hdmi_blank(hdmi_blank),
+            .hdmi_vsync_n(hdmi_vsync_n), .hdmi_rgb(hdmi_rgb),
+            .video_60(video_60), .video_pll_lock(video_pll_lock), .tx(probe_tx));
+    end else begin : no_video_probe
+        assign probe_tx = 1'b1;
+    end
+    endgenerate
+    assign debug_uart_tx = uart_tx & report_tx & probe_tx;
     assign companion_irq_n = companion_seen ? 1'b1 : uart_tx;   // BL616 serial RX (debugger firmware); Companion IRQ idle
     // ------------------------------------------------------------- audio
     // AUDIO bit 1: the core's mixed stereo to the on-board MAX98357A over I2S: signed,
