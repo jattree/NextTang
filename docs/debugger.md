@@ -90,6 +90,14 @@ there. A breakpoint DeZog gives a bank fires only while that 8K page is mapped
 at the address. Conditions and log points are evaluated by DeZog. Watchpoints
 and state save/restore are not available on hardware yet.
 
+A board built with fewer comparators must say so: `--breakpoint-slots 2` for the
+Nano 20K images. With fewer than four, none are kept back for stepping: DeZog's
+breakpoints and its temporary ones share what is free, and a step with none free
+is done as one hardware single step (so a step over a CALL goes into it). Without
+the option the bridge writes its temporary breakpoints to comparators 8 and 9,
+which such a board does not have, and a step never stops (found 2026-11-17 with
+OverSpec's probe, review-tools/dzrp_probe.py --place-loop).
+
 ## Limits
 
 - Pausing stops the CPU only. Video, sound, timers and the copper carry on,

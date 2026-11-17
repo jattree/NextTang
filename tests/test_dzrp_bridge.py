@@ -908,5 +908,59 @@ class BridgeCommandsTest(unittest.TestCase):
         self.assertEqual(self.model.slots, {})
 
 
+
+class TwoSlotBoardTest(unittest.TestCase):
+    """A board with two comparators (the Nano 20K): nothing is kept back for
+    temporary breakpoints, and a step with none free is one hardware step."""
+
+    def setUp(self) -> None:
+        self.model = FakePiDebug()
+        self.bridge = DzrpBridge(self.model, Breakpoints(self.model), 2)
+        self.bridge.command(1, bytes([2, 2, 0]) + b"test\0")
+
+    def add(self, address: int) -> int:
+        return int.from_bytes(self.bridge.command(40, struct.pack("<HB", address, 0) + b"\0").payload, "little")
+
+    def test_the_client_may_use_both_comparators_and_no_more(self) -> None:
+        self.assertEqual((self.add(0x8000), self.add(0x9000)), (1, 2))
+        self.assertEqual(self.model.slots, {0: 0x8000, 1: 0x9000})
+        self.assertEqual(self.add(0xA000), 0)
+        self.assertTrue(all(frame[1] < 2 for frame in self.model.frames), "a comparator the board does not have was written")
+
+    def test_a_step_uses_the_two_free_comparators_and_gives_them_back(self) -> None:
+        self.assertEqual(self.bridge.command(6, continue_payload(0x8001, 0x8003)).payload, b"")
+        self.assertEqual(self.model.slots, {0: 0x8001, 1: 0x8003})
+        self.assertFalse(self.model.paused)
+        self.model.run_to(0x8001)
+        self.assertEqual(self.bridge.poll(), b"\x01\x00" + struct.pack("<HB", 0x8001, 5) + b"\0")
+        self.assertEqual(self.model.slots, {})
+        self.assertEqual(self.add(0x8000), 1)
+
+    def test_one_breakpoint_and_one_temporary_share_the_two(self) -> None:
+        self.add(0x9000)
+        self.bridge.command(6, continue_payload(0x8001))
+        self.assertEqual(self.model.slots, {0: 0x9000, 1: 0x8001})
+        self.model.run_to(0x9000)
+        self.assertEqual(self.bridge.poll()[1], 2, "the client's breakpoint is reason 2")
+        self.assertEqual(self.model.slots, {0: 0x9000})
+
+    def test_a_step_with_no_comparator_free_is_one_hardware_step(self) -> None:
+        self.add(0x9000); self.add(0xA000)
+        frames = len(self.model.frames)
+        before = self.model.registers()["PC"]
+        reply = self.bridge.command(6, continue_payload(0x8001, 0x8003))
+        self.assertEqual(reply.notification[:2], b"\x01\x00", "reported as a temporary breakpoint")
+        self.assertTrue(self.model.paused)
+        self.assertNotEqual(self.model.registers()["PC"], before, "the CPU did not step")
+        self.assertEqual(len(self.model.frames), frames, "no comparator was touched")
+        self.assertEqual(self.model.slots, {0: 0x9000, 1: 0xA000})
+
+    def test_close_clears_only_the_boards_comparators(self) -> None:
+        self.add(0x9000)
+        self.bridge.finish()
+        self.assertEqual(self.model.slots, {})
+        self.assertTrue(all(frame[1] < 2 for frame in self.model.frames))
+
+
 if __name__ == "__main__":
     unittest.main()

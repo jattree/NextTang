@@ -82,8 +82,7 @@ RAM_BASE = 0x40000
 RAM_PAGES = (0x200000 - RAM_BASE) // PAGE_SIZE
 MAX_COMMAND = 0x10000 + 4
 MAX_RESPONSE = 0x100000
-USER_SLOTS = range(8)
-TEMP_SLOTS = range(8, 10)
+DEFAULT_SLOTS = 10       # comparators in the gateware build (BREAKPOINT_SLOTS); the Nano 20K has 2
 REGISTER_PAIRS = ("PC", "SP", "AF", "BC", "DE", "HL", "IX", "IY",
                   "AF'", "BC'", "DE'", "HL'")
 REGISTER_NAMES = dict(enumerate(REGISTER_PAIRS)) | dict(enumerate(
@@ -118,6 +117,7 @@ class DebugBackend(Protocol):
     def status(self) -> Status: ...
     def pause(self, timeout: float = 1.0) -> Status: ...
     def resume(self) -> None: ...
+    def step(self, timeout: float = 1.0) -> Status: ...
     def registers(self) -> dict[str, int]: ...
     def set_register(self, name: str, value: int) -> None: ...
     def nextreg(self, register: int) -> int: ...
@@ -167,6 +167,14 @@ class DzrpBridge:
 
     debug: DebugBackend
     breakpoints: BreakpointBackend
+    # How many comparators the board has. With four or more, the last two are
+    # kept for CONTINUE's temporary breakpoints and the rest are the client's.
+    # With fewer (the Nano 20K's two) there is nothing to keep back: the
+    # client's breakpoints and the temporary ones share what is free, and a
+    # CONTINUE that cannot get the comparators it needs is done as one
+    # hardware single step, which is what a step into the next instruction is.
+    slots: int = DEFAULT_SLOTS
+    temporary: set[int] = field(default_factory=set, init=False)        # slots holding temporary breakpoints
     initialized: bool = field(default=False, init=False)
     running: bool = field(default=False, init=False)
     legacy: bool = field(default=False, init=False)        # a 2.0/2.1 client
@@ -184,11 +192,21 @@ class DzrpBridge:
         if self.running or not self.debug.status().paused:
             raise DebugError("pause the CPU before accessing registers or memory")
 
-    def _clear(self, slots: range) -> None:
-        for slot in slots:
+    def _clear(self, slots) -> None:
+        for slot in list(slots):
             self.breakpoints.clear(slot)
             self.active.pop(slot, None)
             self.pages.pop(slot, None)
+            self.temporary.discard(slot)
+
+    def _user_slots(self) -> range:
+        return range(self.slots - 2) if self.slots >= 4 else range(self.slots)
+
+    def _temporary_slots(self, wanted: int) -> list[int] | None:
+        """Comparators for `wanted` temporary breakpoints, or None if there are not enough free."""
+        pool = range(self.slots - 2, self.slots) if self.slots >= 4 else range(self.slots)
+        free = [slot for slot in pool if slot not in self.active]
+        return free[:wanted] if len(free) >= wanted else None
 
     def finish(self, resume: bool = True) -> None:
         """Detach cleanly: breakpoints cleared and the machine running again,
@@ -196,7 +214,7 @@ class DzrpBridge:
         if not self.initialized:
             return
         self.debug.pause()
-        self._clear(range(10))
+        self._clear(range(self.slots))
         self.ids.clear()
         if resume:
             self.debug.resume()
@@ -209,14 +227,14 @@ class DzrpBridge:
         if reason is None:
             # A banked breakpoint counts only with its page mapped, as the
             # hardware decides.
-            if any(self.active.get(slot) == pc for slot in TEMP_SLOTS):
+            if any(self.active.get(slot) == pc for slot in self.temporary):
                 reason = REASON_STEP
             elif any(self.active.get(slot) == pc and self.pages.get(slot, page) == page
-                     for slot in USER_SLOTS):
+                     for slot in self.active if slot not in self.temporary):
                 reason = REASON_BREAKPOINT
             else:
                 reason = REASON_MANUAL
-        self._clear(TEMP_SLOTS)
+        self._clear(self.temporary)
         self.running = False
         # bank + 1 of the page at the PC; ROM (FF) does not fit and reads 0.
         return struct.pack("<BBHB", NTF_PAUSE, reason, pc, (page + 1) & 0xFF) + b"\0"
@@ -295,7 +313,7 @@ class DzrpBridge:
                 self.initialized = True  # Ensure cleanup even if a UART command fails.
                 self.debug.pause()
                 self.running = False
-                self._clear(range(10))
+                self._clear(range(self.slots))
                 self.ids.clear()
                 self.next_id = 1
             return Reply(bytes([error]) + VERSION + bytes([MACHINE_ZXNEXT]) + PROGRAM_NAME,
@@ -346,12 +364,22 @@ class DzrpBridge:
             if enabled1 > 1 or enabled2 > 1 or alternate > 2:
                 raise ValueError("invalid CONTINUE flags")
             # Alternates are optional optimizations; use the supplied breakpoints.
-            for slot, enabled, address in ((8, enabled1, address1), (9, enabled2, address2)):
-                if enabled:
-                    self.breakpoints.set(slot, address)
-                    self.active[slot] = address
-                else:
-                    self._clear(range(slot, slot + 1))
+            self._clear(self.temporary)
+            wanted = [address for enabled, address in ((enabled1, address1), (enabled2, address2)) if enabled]
+            chosen = self._temporary_slots(len(wanted))
+            if chosen is None:
+                # Not enough comparators free (a small build with the client's
+                # breakpoints in them): one hardware single step, reported as
+                # the temporary breakpoint a step expects. A step over a CALL
+                # becomes a step into it.
+                logging.warning("CONTINUE: %d temporary breakpoints wanted and too few comparators free; "
+                                "single-stepping instead", len(wanted))
+                self.debug.step()
+                return Reply(notification=self._stop_notification(REASON_STEP))
+            for slot, address in zip(chosen, wanted):
+                self.breakpoints.set(slot, address)
+                self.active[slot] = address
+                self.temporary.add(slot)
             self.debug.resume()
             self.running = True
         elif command == CMD_PAUSE:
@@ -364,7 +392,7 @@ class DzrpBridge:
             # The condition string is DeZog's to evaluate (as JNext). A bank
             # byte other than 0 makes the comparator page-qualified. ID 0 is
             # the refusal when all eight user comparators are taken.
-            slot = next((slot for slot in USER_SLOTS if slot not in self.active), None)
+            slot = next((slot for slot in self._user_slots() if slot not in self.active), None)
             if slot is None or self.next_id > 0xFFFF:
                 # Ids are never reused within a session (JNext 3.1).
                 return Reply(b"\0\0")
@@ -568,12 +596,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--listen", default="127.0.0.1", help="TCP bind address")
     parser.add_argument("--tcp-port", type=int, default=11000)   # CSpect's and JNext's port
     parser.add_argument("--poll-interval", type=float, default=0.03, help="status poll interval in seconds")
+    parser.add_argument("--breakpoint-slots", type=int, default=DEFAULT_SLOTS,
+                        help="comparators in the board's build (default 10; the Nano 20K images have 2)")
     args = parser.parse_args(argv)
     try:
         with UartLink(args.port, args.baud) as link:
             if not callable(getattr(link, "write", None)) or not callable(getattr(link, "read_reply", None)):
                 raise DebugError("UartLink needs write(data) and read_reply(header, length); see dzrp.RawLink")
-            bridge = DzrpBridge(PiDebug(link), Breakpoints(cast(RawLink, link)))
+            if not 1 <= args.breakpoint_slots <= 10:
+                raise ValueError("--breakpoint-slots: 1 to 10")
+            bridge = DzrpBridge(PiDebug(link), Breakpoints(cast(RawLink, link)), args.breakpoint_slots)
             with DzrpServer(bridge, args.listen, args.tcp_port, args.poll_interval) as server:
                 print(f"NextTang DZRP listening on {server.address[0]}:{server.address[1]}", flush=True)
                 server.serve_forever()
