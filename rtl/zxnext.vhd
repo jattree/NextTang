@@ -7760,10 +7760,22 @@ end generate;
       end if;
    end process;
 
+   -- NextTang: these settings are taken on every 14 MHz edge. The official
+   -- line is "if sc(0) = '1' then". sc is a 28 MHz counter whose bit 0 is 1
+   -- just before every rising edge of i_CLK_14 when the clocks are in phase,
+   -- as the official boards' PLLs make them, so there the test is always
+   -- true. On a board whose 14 MHz clock comes from a divider and arrives a
+   -- little after the 28 MHz edge (Tang Nano 20K: about 1.1 ns), each of
+   -- these registers read sc(0) either before or after it changed, by its
+   -- own routing, and some never loaded: LoRes, sprites or the tilemap could
+   -- not be switched on, or the fallback colour not changed, in some builds
+   -- (2026-11-17). The values are NextREG settings that hold for many
+   -- clocks, so taking them every edge changes nothing where the test was
+   -- true.
    process (i_CLK_14)
    begin
       if rising_edge(i_CLK_14) then
-         if sc(0) = '1' then
+         if true then   -- NextTang (official: sc(0) = '1')
             
             ula_en_0 <= nr_68_ula_en;
             ula_stencil_mode_0 <= nr_68_ula_stencil_mode;
