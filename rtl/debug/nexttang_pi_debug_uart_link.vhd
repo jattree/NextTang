@@ -84,9 +84,18 @@ architecture rtl of nexttang_pi_debug_uart_link is
 
    -- Transmit queue. Replies arrive no faster than the host's bytes, at the
    -- same baud rate, so the queue only ever holds the header and a few bytes.
+   -- One byte goes in per clock, through one write: a reply header's three
+   -- bytes go in on three clocks. (Written three bytes in a clock, the queue
+   -- was built as 128 registers and their muxes, not as distributed RAM;
+   -- 2026-11-17.)
    type queue_t is array (0 to 15) of std_logic_vector(7 downto 0);
    signal queue      : queue_t;
    signal head, tail : unsigned(3 downto 0) := (others => '0');
+   signal header_left : natural range 0 to 3 := 0;     -- header bytes still to queue
+   signal header_tag  : std_logic_vector(7 downto 0) := (others => '0');
+   signal header_arg  : std_logic_vector(7 downto 0) := (others => '0');
+   signal held        : std_logic := '0';              -- a reply byte that arrived during a header
+   signal held_byte   : std_logic_vector(7 downto 0) := (others => '0');
 
    signal tx_busy    : std_logic := '0';
    signal tx_shift   : std_logic_vector(9 downto 0) := (others => '1');
@@ -109,6 +118,8 @@ begin
    process (clock)
       variable push      : boolean;
       variable push_byte : std_logic_vector(7 downto 0);
+      variable enqueue      : boolean;
+      variable enqueue_byte : std_logic_vector(7 downto 0);
    begin
       if rising_edge(clock) then
          push := false;
@@ -224,20 +235,48 @@ begin
                end if;
          end case;
 
-         -- Header, queued as the length arrives.
+         -- A header (01, x and the length, or 01, b and the slot) is asked
+         -- for as the length or the last breakpoint byte arrives.
          if frame = F_LENGTH and rx_valid = '1' then
-            queue(to_integer(tail)) <= x"01";
-            queue(to_integer(tail + 1)) <= x"78";             -- 'x'
-            queue(to_integer(tail + 2)) <= rx_byte;
-            tail <= tail + 3;
-         elsif push then
-            queue(to_integer(tail)) <= push_byte;
-            tail <= tail + 1;
+            header_left <= 3;
+            header_tag <= x"78";                               -- 'x'
+            header_arg <= rx_byte;
          elsif frame = F_BREAKPOINT and rx_valid = '1' and bp_count = 4 then
-            queue(to_integer(tail)) <= x"01";
-            queue(to_integer(tail + 1)) <= x"62";             -- 'b'
-            queue(to_integer(tail + 2)) <= bp_bytes(0);
-            tail <= tail + 3;
+            header_left <= 3;
+            header_tag <= x"62";                               -- 'b'
+            header_arg <= bp_bytes(0);
+         end if;
+
+         -- The queue's one write: header bytes first, then a reply byte.
+         enqueue := false;
+         enqueue_byte := (others => '0');
+         if header_left /= 0 then
+            enqueue := true;
+            case header_left is
+               when 3      => enqueue_byte := x"01";
+               when 2      => enqueue_byte := header_tag;
+               when others => enqueue_byte := header_arg;
+            end case;
+            header_left <= header_left - 1;
+            if push then
+               held <= '1';
+               held_byte <= push_byte;
+            end if;
+         elsif held = '1' then
+            enqueue := true;
+            enqueue_byte := held_byte;
+            held <= '0';
+            if push then
+               held <= '1';
+               held_byte <= push_byte;
+            end if;
+         elsif push then
+            enqueue := true;
+            enqueue_byte := push_byte;
+         end if;
+         if enqueue then
+            queue(to_integer(tail)) <= enqueue_byte;
+            tail <= tail + 1;
          end if;
 
          -- Transmitter: start bit, eight data bits, stop bit.
@@ -269,6 +308,8 @@ begin
             session <= 0;
             head <= (others => '0');
             tail <= (others => '0');
+            header_left <= 0;
+            held <= '0';
             tx_busy <= '0';
             tx_shift <= (others => '1');
          end if;
