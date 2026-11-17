@@ -125,24 +125,33 @@ module nexttang_zxnext_audio_pcm #(
             .B({{8{!base_right[53]}}, ~base_right[53:8]}), .ASIGN(1'b0), .BSIGN(1'b0), .ACCLOAD(1'b1),
             .CASI(55'd0), .CLK(clock), .CE(tick | reset), .RESET(reset), .DOUT(base_right), .CASO());
 
-        // (target - baseline) >>> 16: the target's low 16 bits are zero, so
-        // only the high halves subtract, less one when the baseline's low half
-        // is not zero.
-        wire signed [15:0] out_left = target_left[31:16] - base_left[31:16] - (base_left[15:0] != 16'd0);
-        wire signed [15:0] out_right = target_right[31:16] - base_right[31:16] - (base_right[15:0] != 16'd0);
+        // The samples: (target - baseline) >>> 16, each in a DSP block
+        // (A - B, taken on the tick into the block's output register, which
+        // is the sample register).
+        wire [53:0] out_left, out_right;
+        ALU54D #(.AREG(1'b0), .BREG(1'b0), .ASIGN_REG(1'b0), .BSIGN_REG(1'b0), .ACCLOAD_REG(1'b0),
+                 .OUT_REG(1'b1), .B_ADD_SUB(1'b1), .C_ADD_SUB(1'b0), .ALUD_MODE(0),
+                 .ALU_RESET_MODE("SYNC")) left_out_dsp (
+            .A({{22{target_left[31]}}, target_left}), .B(base_left), .ASIGN(1'b1), .BSIGN(1'b1),
+            .ACCLOAD(1'b0), .CASI(55'd0), .CLK(clock), .CE(tick | reset), .RESET(reset),
+            .DOUT(out_left), .CASO());
+        ALU54D #(.AREG(1'b0), .BREG(1'b0), .ASIGN_REG(1'b0), .BSIGN_REG(1'b0), .ACCLOAD_REG(1'b0),
+                 .OUT_REG(1'b1), .B_ADD_SUB(1'b1), .C_ADD_SUB(1'b0), .ALUD_MODE(0),
+                 .ALU_RESET_MODE("SYNC")) right_out_dsp (
+            .A({{22{target_right[31]}}, target_right}), .B(base_right), .ASIGN(1'b1), .BSIGN(1'b1),
+            .ACCLOAD(1'b0), .CASI(55'd0), .CLK(clock), .CE(tick | reset), .RESET(reset),
+            .DOUT(out_right), .CASO());
+        always @* begin
+            left = out_left[31:16];
+            right = out_right[31:16];
+        end
         always @(posedge clock) begin
             phase_32 <= phase_sum[32];
             if (reset) begin
                 phase_32 <= 1'b0;
                 audio_ce <= 1'b0;
-                left <= 0;
-                right <= 0;
             end else begin
                 audio_ce <= tick;
-                if (tick) begin
-                    left <= out_left;
-                    right <= out_right;
-                end
             end
         end
     end
