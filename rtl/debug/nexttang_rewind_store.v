@@ -78,6 +78,7 @@ module nexttang_rewind_store #(
 );
     localparam RECORD = 258;                           // 256 bytes and the block number
     localparam [RING_BITS:0] RING_BYTES = 1 << RING_BITS;
+    localparam [BLOCK_BITS+2:0] RING_RECORDS = RING_BYTES / RECORD;    // whole records the ring holds
     localparam TABLE = 1 << TABLE_BITS;
 
     // What is being done, and where in it.
@@ -92,14 +93,12 @@ module nexttang_rewind_store #(
 
     // The ring and the table of checkpoints in it.
     reg [RING_BITS-1:0]  head = 0;                     // where the next record goes
-    reg [RING_BITS:0]    used = 0;                     // bytes of records held
+    reg [BLOCK_BITS+2:0] used = 0;                     // records held
     reg [RING_BITS-1:0]  table_start [0:TABLE-1];
     reg [BLOCK_BITS:0]   table_count [0:TABLE-1];
-    reg [RING_BITS:0]    table_bytes [0:TABLE-1];      // count * RECORD, kept to save multiplying
     reg [TABLE_BITS-1:0] table_next = 0;               // where the next checkpoint's entry goes
     reg [RING_BITS-1:0]  this_start = 0;               // the checkpoint being written or undone
     reg [BLOCK_BITS:0]   this_count = 0;
-    reg [RING_BITS:0]    this_bytes = 0;
     reg                  keeping = 1'b0;               // this checkpoint's undo records are being kept
     reg [TABLE_BITS:0]   steps_left = 0;
 
@@ -107,7 +106,6 @@ module nexttang_rewind_store #(
     wire [TABLE_BITS-1:0] newest = table_next - 1'b1;
     reg  [RING_BITS-1:0]  entry_start = 0;             // a table entry, read a clock ahead
     reg  [BLOCK_BITS:0]   entry_count = 0;
-    reg  [RING_BITS:0]    entry_bytes = 0;
     reg  [TABLE_BITS-1:0] entry_at = 0;
 
     // The block and byte under way.
@@ -115,7 +113,6 @@ module nexttang_rewind_store #(
     reg [8:0]            index = 0;                    // byte within the block, 256 = done
     reg [2:0]            phase = 0;                    // accesses within a byte
     reg [7:0]            data = 8'h00;
-    reg [RING_BITS-1:0]  at = 0;                       // ring position being read (rewind)
     reg [BLOCK_BITS:0]   records_left = 0;
     reg                  scan_finished = 1'b0;         // scan_done is one clock; it may come mid-copy
     wire [15:0]          number_out = {{(16 - BLOCK_BITS){1'b0}}, this_block};
@@ -142,7 +139,6 @@ module nexttang_rewind_store #(
             mem_request <= 1'b0;
         entry_start <= table_start[entry_at];
         entry_count <= table_count[entry_at];
-        entry_bytes <= table_bytes[entry_at];
         if (scan_done)
             scan_finished <= 1'b1;
 
@@ -156,7 +152,6 @@ module nexttang_rewind_store #(
                     state <= S_SCAN;
                     this_start <= head;
                     this_count <= 0;
-                    this_bytes <= 0;
                 end
                 if (prime) begin
                     mode <= M_PRIME;
@@ -193,11 +188,11 @@ module nexttang_rewind_store #(
             S_ROOM:
                 if (phase == 0)
                     phase <= 1;                   // entry_at's entry arrives
-                else if (RING_BYTES - used >= RECORD) begin
+                else if (used != RING_RECORDS) begin
                     phase <= 0;
                     state <= S_NUMBER;
                 end else if (held != 0) begin
-                    used <= used - entry_bytes;
+                    used <= used - entry_count;
                     held <= held - 1'b1;
                     entry_at <= entry_at + 1'b1;
                     phase <= 0;
@@ -208,7 +203,6 @@ module nexttang_rewind_store #(
                     used <= 0;
                     this_start <= 0;
                     this_count <= 0;
-                    this_bytes <= 0;
                     phase <= 0;
                     state <= S_BYTE;
                 end
@@ -219,9 +213,8 @@ module nexttang_rewind_store #(
                 if (index[8]) begin
                     phase <= 0;
                     if (mode == M_CHECKPOINT && keeping) begin
-                        used <= used + RECORD;
+                        used <= used + 1'b1;
                         this_count <= this_count + 1'b1;
-                        this_bytes <= this_bytes + RECORD;
                     end
                     state <= S_NEXT;
                 end else if (!mem_request) case (phase)
@@ -289,7 +282,6 @@ module nexttang_rewind_store #(
                     if (mode == M_CHECKPOINT && keeping) begin
                         table_start[table_next] <= this_start;
                         table_count[table_next] <= this_count;
-                        table_bytes[table_next] <= this_bytes;
                         table_next <= table_next + 1'b1;
                         held <= held + 1'b1;
                     end
@@ -301,7 +293,7 @@ module nexttang_rewind_store #(
                 if (phase != 3'd2)
                     phase <= phase + 1'b1;
                 else begin
-                    used <= used - entry_bytes;
+                    used <= used - entry_count;
                     held <= held - 1'b1;
                     phase <= 0;
                     state <= S_CLOSE;
@@ -318,10 +310,10 @@ module nexttang_rewind_store #(
                 end else if (phase == 1)
                     phase <= 2;
                 else begin
-                    at <= entry_start;
+                    this_start <= entry_start;        // head walks the records, then comes back here
                     records_left <= entry_count;
                     head <= entry_start;
-                    used <= used - entry_bytes;
+                    used <= used - entry_count;
                     table_next <= newest;
                     held <= held - 1'b1;
                     steps_left <= steps_left - 1'b1;
@@ -333,16 +325,17 @@ module nexttang_rewind_store #(
             // A record: its block number, then its 256 bytes, read in order.
             S_RECORD:
                 if (records_left == 0) begin
+                    head <= this_start;
                     phase <= 0;
                     state <= S_POP;
                 end else if (!mem_request) begin
                     if (phase == 3'd0) begin
-                        read(ring_address(at));
-                        at <= at + 1'b1;
+                        read(ring_address(head));
+                        head <= head + 1'b1;
                         phase <= 3'd1;
                     end else if (phase == 3'd2) begin
-                        read(ring_address(at));
-                        at <= at + 1'b1;
+                        read(ring_address(head));
+                        head <= head + 1'b1;
                         phase <= 3'd3;
                     end else if (phase == 3'd4) begin
                         this_block <= number_in[BLOCK_BITS-1:0];
@@ -365,7 +358,7 @@ module nexttang_rewind_store #(
                     phase <= 0;
                     state <= S_RECORD;
                 end else if (!mem_request) case (phase)
-                    3'd0: begin read(ring_address(at)); at <= at + 1'b1; phase <= 3'd1; end
+                    3'd0: begin read(ring_address(head)); head <= head + 1'b1; phase <= 3'd1; end
                     3'd2: begin write(live_address, data); phase <= 3'd3; end
                     3'd4: begin write(copy_address, data); phase <= 3'd5; end
                     default: ;

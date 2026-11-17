@@ -1,8 +1,8 @@
 # RZX replay, recording and rewind
 
 Status: **recording and playback hardware-verified on the Nano 20K** for 48K programs, playback also for 128K, +2 and +3,
-and **rewind** for 48K programs, by replay from the PC and, in a test image, from **checkpoints kept on the board**
-(the rewind ring; no image with it has met timing with the final logic yet)
+and **rewind** for 48K programs, by replay from the PC and from **checkpoints kept on the board**
+(the rewind ring; image ringH-p1r2 meets timing)
 (owner request 2026-11-14; results under Progress). The input recorder
 (`rtl/debug/nexttang_rzx_logger.v`) and player (`rtl/debug/nexttang_rzx_player.vhd`)
 are in the Nano 20K build as an option, fed over the debug UART by host tools. Not
@@ -388,14 +388,23 @@ same through the debug interface.
     recorder's stream after each of 13 checkpoints was 20 to 39 ms (59 ms for
     the first after a 28 MHz replay), against 20 ms between frames otherwise.
     The prime at the start takes 2.4 s.
-  - **Timing is not closed.** The image is 96 to 98 % of the device's logic
-    (90 % without the ring), and of 20 place-and-route runs of the final logic
-    none met timing; the best (ringG-p0r2, used for the results above) has 5
-    setup violations, the worst -0.31 ns, in the SDRAM service's Layer 2
-    fetch and the CPU's input register, paths a 48K game does not exercise
-    hard. Three earlier versions of the ring did meet timing (ringB-p0r2,
-    ringC and ringD at p1r2 and p2r2) but had the faults listed next. So the
-    results are from an image that must not be called verified at speed.
+  - **Timing.** The ring takes the image from 90 % to 96 to 98 % of the device's
+    logic, and whether a run meets timing is close to chance: of 20 runs of the
+    logic as first finished none did (the best, ringG-p0r2, had 5 setup
+    violations, worst -0.31 ns, and gave the results above). With the store
+    slimmed (one ring pointer, records counted instead of bytes), 2 of 9 runs
+    meet timing: ringH-p1r2 and p2r2, 0 setup and 0 hold violations. On
+    **ringH-p1r2**: the six-region rewind check passes; the 48K BEEP recording at
+    28 MHz and the Fuse-made 128K recording replay; the same 150 s game session
+    (eight rewinds, 0.8 to 2.5 s each) saved 2,164 frames that play to their end
+    in Fuse and on the board; the silence after each of seven checkpoints was 20
+    to 40 ms.
+  - A longer session (ringG-p0r2): 400 s with keys throughout, 80 checkpoints
+    (the ring's table holds 64) and four rewinds, saved 719 frames that play to
+    the end in Fuse and on the board. The rewind to the very start, back over
+    some thirty checkpoints, took 17.8 s: undoing a checkpoint writes bank 5's
+    blocks back through the debug slave a byte a command, for every checkpoint
+    undone. Rewinds of a few checkpoints took 1.5 to 4 s.
   - Faults found and fixed on the way, each first seen on the board:
     - the ring drove port C's read/write line the wrong way round (0 is a read);
       the simulation's port model had the same mistake and passed;
@@ -419,10 +428,12 @@ same through the debug interface.
       writing the banks back in a rewind).
   - Limits: 48K programs; the interrupt mode is not restored (the tool falls back
     to the long way if it differs); an interrupt is lost whenever a checkpoint's
-    stop covers it; no image with a USB keyboard (`--companion 1`) has been
-    built with the ring, and the device is nearly full.
-- Next: timing for the ring image (free some logic, or find a placement), the
-  main branch, and the 138K with the recording on the SD card.
+    stop covers it; a rewind over many checkpoints is slow (above); the device is
+    nearly full, so any change to this image needs several runs to find one that
+    meets timing.
+- Next: the ring image with the USB keyboard, bank 5 written back once per rewind
+  instead of once per checkpoint undone, the main branch, and the 138K with the
+  recording on the SD card.
 
 ## Order
 
