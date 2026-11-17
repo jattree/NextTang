@@ -5,12 +5,16 @@ board answers 0x01, x, the same length and the bytes its Pi debug slave
 clocked back. Status lines the board was sending before the first frame may
 still arrive, so the reader skips everything up to that header. Standard
 library only: termios sets the port to raw 8N1.
+
+The device may also be "tcp:HOST:PORT": the same byte stream carried over the
+network by a relay that holds the serial line (Project Slipstream's linkd).
 """
 
 from __future__ import annotations
 
 import os
 import select
+import socket
 import termios
 import time
 
@@ -23,6 +27,15 @@ BAUD_RATES = {115200: termios.B115200, 230400: termios.B230400, 460800: termios.
 class UartLink:
     def __init__(self, device: str, baud: int = 115200, timeout: float = 1.0) -> None:
         self.timeout = timeout
+        self.pending = bytearray()
+        self.socket: socket.socket | None = None
+        if device.startswith("tcp:"):
+            host, _, port = device[4:].rpartition(":")
+            self.socket = socket.create_connection((host, int(port)), timeout=timeout)
+            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.socket.setblocking(False)
+            self.fd = self.socket.fileno()
+            return
         self.fd = os.open(device, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         attributes = termios.tcgetattr(self.fd)
         attributes[0] = 0                                   # iflag
@@ -32,10 +45,23 @@ class UartLink:
         attributes[4] = attributes[5] = BAUD_RATES[baud]
         termios.tcsetattr(self.fd, termios.TCSANOW, attributes)
         termios.tcflush(self.fd, termios.TCIOFLUSH)
-        self.pending = bytearray()
 
     def close(self) -> None:
-        os.close(self.fd)
+        if self.socket is not None:
+            self.socket.close()
+        else:
+            os.close(self.fd)
+
+    def _drop_input(self) -> None:
+        """Forget what has arrived and not been read."""
+        if self.socket is None:
+            termios.tcflush(self.fd, termios.TCIFLUSH)
+            return
+        # over the network the relay may still be sending what the board said a
+        # moment ago: give it a moment, then take whatever is there
+        while select.select([self.fd], [], [], 0.02)[0]:
+            if not os.read(self.fd, 4096):
+                raise DebugError("the relay closed the line")
 
     def __enter__(self) -> "UartLink":
         return self
@@ -79,7 +105,7 @@ class UartLink:
             raise ValueError("a command is 1 to 256 bytes")
         length = len(sent) & 0xFF
         self.pending.clear()
-        termios.tcflush(self.fd, termios.TCIFLUSH)
+        self._drop_input()
         os.write(self.fd, b"X" + bytes([length]) + sent)
         deadline = time.monotonic() + self.timeout
         header = bytes([0x01, ord("x"), length])
