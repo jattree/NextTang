@@ -123,8 +123,9 @@ module nexttang_rzx_play_link #(
     // Transmitter: one byte at a time from a three-byte queue (the frame
     // byte, or the three end bytes).
     localparam integer BIT_CLOCKS_I = CLOCK_HZ / BAUD_RATE;
-    localparam [15:0] BIT_CLOCKS = BIT_CLOCKS_I[15:0];
-    reg [15:0] bit_timer = 16'd0;
+    localparam integer BIT_W = $clog2(BIT_CLOCKS_I);          // as wide as its limit, not 16 bits
+    localparam [BIT_W-1:0] BIT_LAST = BIT_CLOCKS_I - 1;
+    reg [BIT_W-1:0] bit_timer = {BIT_W{1'b0}};
     reg [3:0]  bits_left = 4'd0;
     reg [9:0]  shifter = 10'h3ff;
     reg [23:0] queue = 24'd0;
@@ -214,10 +215,10 @@ module nexttang_rzx_play_link #(
         if (playing_q && !playing)
             final_due <= 1'b1;
         if (bits_left != 4'd0) begin
-            if (bit_timer == 16'd0) begin
+            if (bit_timer == {BIT_W{1'b0}}) begin
                 shifter <= {1'b1, shifter[9:1]};
                 bits_left <= bits_left - 1'b1;
-                bit_timer <= BIT_CLOCKS - 1'b1;
+                bit_timer <= BIT_LAST;
             end else
                 bit_timer <= bit_timer - 1'b1;
         end else if (queued != 2'd0) begin
@@ -225,7 +226,7 @@ module nexttang_rzx_play_link #(
             queue <= {8'h00, queue[23:8]};
             queued <= queued - 1'b1;
             bits_left <= 4'd10;
-            bit_timer <= BIT_CLOCKS - 1'b1;
+            bit_timer <= BIT_LAST;
         end else if (final_due) begin
             queue <= {frames[15:8], frames[7:0], 5'b10000, ended_by_host, overflow, desync};
             queued <= 2'd3;

@@ -102,8 +102,12 @@ begin
 
     if (audio_sample_word_transfer_control_synchronizer_chain[0] ^ audio_sample_word_transfer_control_synchronizer_chain[1])
     begin
-        audio_sample_word_buffer[sample_buffer_current][samples_remaining][0] <=  24'(audio_sample_word_transfer_mux[0])<<(24-AUDIO_BIT_WIDTH);
-        audio_sample_word_buffer[sample_buffer_current][samples_remaining][1] <=  24'(audio_sample_word_transfer_mux[1])<<(24-AUDIO_BIT_WIDTH);
+        // NextTang (2026-11-17): written straight from the transfer register. The original went
+        // through audio_sample_word_transfer_mux, whose other arm (the buffer's own contents) can
+        // never be chosen here, since this write happens only under the mux's first condition;
+        // that unused arm cost a read mux over the whole buffer (about 160 logic cells).
+        audio_sample_word_buffer[sample_buffer_current][samples_remaining][0] <=  24'(audio_sample_word_transfer[0])<<(24-AUDIO_BIT_WIDTH);
+        audio_sample_word_buffer[sample_buffer_current][samples_remaining][1] <=  24'(audio_sample_word_transfer[1])<<(24-AUDIO_BIT_WIDTH);
         if (samples_remaining == 2'd3)
         begin
             samples_remaining <= 2'd0;

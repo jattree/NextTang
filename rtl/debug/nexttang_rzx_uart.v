@@ -47,12 +47,14 @@ module nexttang_rzx_uart #(
     output reg        tx = 1'b1
 );
     localparam integer BIT_CLOCKS_I = CLOCK_HZ / BAUD_RATE;
-    localparam [15:0] BIT_CLOCKS = BIT_CLOCKS_I[15:0];
+    // counters only as wide as their limits (16 and 24 bits before 2026-11-17: the unused bits were built)
+    localparam integer BIT_W = $clog2(BIT_CLOCKS_I);
+    localparam [BIT_W-1:0] BIT_LAST = BIT_CLOCKS_I - 1;
 
     // transmitter: one byte at a time
     reg [9:0]  shift = 10'h3ff;
     reg [3:0]  bits_left = 4'd0;
-    reg [15:0] timer = 16'd0;
+    reg [BIT_W-1:0] timer = {BIT_W{1'b0}};
     wire       tx_idle = bits_left == 4'd0;
     reg        send;
     reg [7:0]  send_byte;
@@ -60,7 +62,9 @@ module nexttang_rzx_uart #(
     // what goes next
     localparam S_IDLE = 3'd0, S_HEAD = 3'd1, S_WORDS = 3'd2, S_RAW = 3'd3, S_TAIL = 3'd4, S_LEAD = 3'd5;
     localparam integer LEAD_CLOCKS = BIT_CLOCKS_I * LEAD_BITS;
-    reg [23:0] lead = 24'd0;
+    localparam integer LEAD_W = $clog2(LEAD_CLOCKS + 1);
+    localparam [LEAD_W-1:0] LEAD_FIRST = LEAD_CLOCKS;
+    reg [LEAD_W-1:0] lead = {LEAD_W{1'b0}};
     reg [2:0]  state = S_IDLE;
     reg [1:0]  index = 2'd0;          // byte within the header or tail
     reg [7:0]  raw_byte = 8'h00;      // a byte to send after its marker
@@ -106,14 +110,14 @@ module nexttang_rzx_uart #(
         if (send) begin
             shift <= {1'b1, send_byte, 1'b0};
             bits_left <= 4'd10;
-            timer <= BIT_CLOCKS - 16'd1;
+            timer <= BIT_LAST;
         end else if (!tx_idle) begin
-            if (timer == 16'd0) begin
+            if (timer == {BIT_W{1'b0}}) begin
                 shift <= {1'b1, shift[9:1]};
                 bits_left <= bits_left - 4'd1;
-                timer <= BIT_CLOCKS - 16'd1;
+                timer <= BIT_LAST;
             end else
-                timer <= timer - 16'd1;
+                timer <= timer - 1'b1;
         end
         tx <= tx_idle ? 1'b1 : shift[0];
 
@@ -125,8 +129,8 @@ module nexttang_rzx_uart #(
 
         case (state)
             S_LEAD:
-                if (lead == 24'd0) state <= S_HEAD;
-                else lead <= lead - 24'd1;
+                if (lead == {LEAD_W{1'b0}}) state <= S_HEAD;
+                else lead <= lead - 1'b1;
             S_HEAD:
                 if (send) begin
                     index <= index + 2'd1;
@@ -163,7 +167,7 @@ module nexttang_rzx_uart #(
             busy <= 1'b0;
         if (begin_stream) begin
             state <= S_LEAD;
-            lead <= LEAD_CLOCKS[23:0];
+            lead <= LEAD_FIRST;
             index <= 2'd0;
             tag_pending <= 1'b0;
             ending <= 1'b0;

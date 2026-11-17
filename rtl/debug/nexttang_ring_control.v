@@ -599,7 +599,9 @@ module nexttang_ring_control #(
     // state byte, the dropped flag), newline.
     localparam integer BIT_CLOCKS = CLOCK_HZ / BAUD_RATE;
     reg [4:0]  character = 5'd31;       // 0 to 18 while sending
-    reg [15:0] baud = 16'd0;
+    localparam integer BAUD_W = $clog2(BIT_CLOCKS);            // as wide as its limit, not 16 bits
+    localparam [BAUD_W-1:0] BAUD_LAST = BIT_CLOCKS - 1;
+    reg [BAUD_W-1:0] baud = {BAUD_W{1'b0}};
     reg [3:0]  bits = 4'd0;
     reg [9:0]  shift = 10'h3ff;
     wire [7:0] held_byte = {{(7 - TABLE_BITS){1'b0}}, held};
@@ -610,17 +612,17 @@ module nexttang_ring_control #(
     wire [7:0] character_byte = character == 5'd0 ? "i" : character == 5'd18 ? 8'h0a : hex(nibble);
     always @(posedge clock) begin
         if (bits != 4'd0) begin
-            if (baud == 16'd0) begin
+            if (baud == {BAUD_W{1'b0}}) begin
                 shift <= {1'b1, shift[9:1]};
                 bits <= bits - 4'd1;
-                baud <= BIT_CLOCKS[15:0] - 16'd1;
+                baud <= BAUD_LAST;
             end else
-                baud <= baud - 16'd1;
+                baud <= baud - 1'b1;
         end else if (character <= 5'd18) begin
             shift <= {1'b1, character_byte, 1'b0};
             character <= character == 5'd18 ? 5'd31 : character + 5'd1;
             bits <= 4'd10;
-            baud <= BIT_CLOCKS[15:0] - 16'd1;
+            baud <= BAUD_LAST;
         end else if (report_request)
             character <= 5'd0;
         if (reset) begin

@@ -290,7 +290,9 @@ module nexttang_sdr_sdram_service #(
     reg [15:0] init_count = 16'd0;     // power-up and initialisation waits only
     reg        init_wait = 1'b0;       // init_count still running
     reg [2:0]  step = 3'd0;            // cycles since ACTIVE (or REFRESH)
-    reg [15:0] refresh_count = 16'd0;
+    localparam integer REFRESH_W = $clog2(REFRESH_CYCLES + 1);   // as wide as its limit, not 16 bits
+    localparam [REFRESH_W-1:0] REFRESH_FIRST = REFRESH_CYCLES;
+    reg [REFRESH_W-1:0] refresh_count = {REFRESH_W{1'b0}};
     reg        refresh_tick = 1'b0;
     reg [1:0]  refresh_owed = 2'd0;
     reg        op_refresh = 1'b0, op_port_c = 1'b0, op_port_b = 1'b0, op_read = 1'b0;
@@ -353,8 +355,8 @@ module nexttang_sdr_sdram_service #(
         command(C_NOP);
         dq_oe <= 1'b0;
         // refresh timer, its compare registered
-        refresh_tick <= refresh_count == 16'd1;
-        refresh_count <= (refresh_count == 16'd0) ? REFRESH_CYCLES[15:0] : refresh_count - 16'd1;
+        refresh_tick <= refresh_count == {{(REFRESH_W-1){1'b0}}, 1'b1};
+        refresh_count <= (refresh_count == {REFRESH_W{1'b0}}) ? REFRESH_FIRST : refresh_count - 1'b1;
         if (a_new && a_age != 16'hFFFF) a_age <= a_age + 16'd1;
         if (a_age == TIMEOUT[15:0] * 16'd3) fault_timeout <= 1'b1;
         init_wait <= init_count > 16'd1;
@@ -390,7 +392,7 @@ module nexttang_sdr_sdram_service #(
         if (reset) begin
             state <= S_INIT; init_count <= INIT_CYCLES[15:0]; init_wait <= 1'b1;
             sdram_cke <= 1'b0; ready <= 1'b0;
-            sdram_dqm <= 4'hF; refresh_owed <= 2'd0; refresh_count <= REFRESH_CYCLES[15:0];
+            sdram_dqm <= 4'hF; refresh_owed <= 2'd0; refresh_count <= REFRESH_FIRST;
             a_seen_m <= a_toggle_m; a_done_m <= a_toggle_m; c_seen_m <= c_toggle_m; c_done_m <= c_toggle_m;
             fault_timeout <= 1'b0; a_age <= 16'd0; rd_pipe <= 0;
             b_busy <= 1'b0; b_fetch <= b_head_m; b_done_m <= b_head_m;
