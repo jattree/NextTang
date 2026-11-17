@@ -348,9 +348,17 @@ module nexttang_next_machine #(
         pin_sclk_sync <= {pin_sclk_sync[0], pi_sclk};
         pin_mosi_sync <= {pin_mosi_sync[0], pi_mosi};
     end
-    wire        pi_spi_ce_n = PI_SPI_PINS != 0 ? pin_ce_n_sync[1] : master_spi_ce_n;
-    wire        pi_spi_sclk = PI_SPI_PINS != 0 ? pin_sclk_sync[1] : master_spi_sclk;
-    wire        pi_spi_mosi = PI_SPI_PINS != 0 ? pin_mosi_sync[1] : master_spi_mosi;
+    // With a Pi on the pins the slave is still the FPGA's own while its master
+    // has a transfer under way (the rewind ring's checkpoints, or the debug
+    // UART's bridge): until 2026-11-17 a PI_SPI_PINS build gave the slave to
+    // the pins alone, so the ring's commands went nowhere. The ring waits for
+    // the Pi's chip select to be idle before it starts (spi_free); a Pi that
+    // begins a transfer during one of the FPGA's loses it.
+    wire        own_spi = PI_SPI_PINS == 0 || !master_spi_ce_n;
+    wire        pi_spi_ce_n = own_spi ? master_spi_ce_n : pin_ce_n_sync[1];
+    wire        pi_spi_sclk = own_spi ? master_spi_sclk : pin_sclk_sync[1];
+    wire        pi_spi_mosi = own_spi ? master_spi_mosi : pin_mosi_sync[1];
+    wire        pin_spi_idle = PI_SPI_PINS == 0 || pin_ce_n_sync[1];
     wire [27:0] core_gpio;
     wire [27:0] core_gpio_en;
     reg  [1:0]  pi_uart_txd_meta = 2'b11;
@@ -1307,7 +1315,7 @@ module nexttang_next_machine #(
             .bank_address(bank_address),
             .bank_data(bank_data),
             .c_free(!core_c_request && !ram_c_busy),
-            .spi_free(!pi_frame_active),
+            .spi_free(!pi_frame_active && pin_spi_idle),
             .spi_take(ring_spi_take),
             .spi_select(ring_spi_select),
             .spi_byte_valid(ring_spi_byte_valid),
