@@ -31,24 +31,31 @@
 -- fetch count of 0 is tried as soon as it is known.
 --
 -- At each frame end the frame is checked: exactly its fetches, exactly its
--- IN bytes used. An I/O read when the frame has no byte left, a byte not yet
--- in from the stream when a read starts, or a frame that ends wrongly is a
--- desync: playing drops, so the core goes back to its live ports and
--- interrupts, and desync stays set until the next start. The player cannot
+-- IN bytes used. An I/O read when the frame has no byte left, or a frame
+-- that ends wrongly, is a desync: playing drops, so the core goes back to
+-- its live ports and interrupts, and desync stays set until the next start.
+-- The player cannot
 -- tell a declined interrupt the recording did not have from one it did;
 -- such a replay goes wrong at a later frame's check.
 --
--- The stream must keep up: a frame's header is read after the previous
--- frame end and must be in before the frame's last fetch, and each IN byte
--- before its read starts (one byte is held ready ahead). After a declined
--- interrupt the CPU is already one fetch into the next frame when its
--- header starts to arrive.
+-- The stream need not keep up. While a frame's header, or the IN byte the
+-- CPU will read next, has not arrived, hold is high: the board feeds it to
+-- the CPU's WAIT, which stops the CPU at T2 of its next cycle. A frame's
+-- header is read after the previous frame end, and after a declined
+-- interrupt the CPU is already one fetch into the next frame by then; held
+-- at the next cycle's T2, it cannot run on past the frame's end or reach a
+-- port read before its byte. (hold is registered, so it rises a clock after
+-- a frame end or a port read; the next T2 is at least two clocks away.) A hold that lasts HOLD_LIMIT clocks (the stream
+-- has stopped) is a desync, so a dead host cannot hang the machine.
 
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
 entity nexttang_rzx_player is
+   generic (
+      HOLD_LIMIT : positive := 28000000   -- clocks; about a second
+   );
    port (
       clock       : in  std_logic;
       reset       : in  std_logic;
@@ -58,6 +65,11 @@ entity nexttang_rzx_player is
       playing     : out std_logic;
       desync      : out std_logic;
       frames      : out std_logic_vector(15 downto 0);
+      -- Fetches counted so far in the frame under way. When playing ends at
+      -- the host's stop this is how far the CPU is into the frame after the
+      -- last one played (0 after an acknowledge, 1 or more after a declined
+      -- interrupt), for a recorder that carries on from there.
+      fetch_count : out std_logic_vector(15 downto 0);
 
       m1_n        : in  std_logic;
       iorq_n      : in  std_logic;
@@ -68,7 +80,8 @@ entity nexttang_rzx_player is
       byte_ready  : out std_logic;
 
       in_data     : out std_logic_vector(7 downto 0);
-      int_request : out std_logic
+      int_request : out std_logic;
+      hold        : out std_logic
    );
 end entity;
 
@@ -91,13 +104,16 @@ architecture rtl of nexttang_rzx_player is
    signal have_byte   : std_logic := '0';
    signal next_byte   : std_logic_vector(7 downto 0) := (others => '1');
 
-   signal io_rd, m1_end, io_start, io_end : std_logic;
+   signal io_rd, m1_end, io_end : std_logic;
    signal take        : std_logic;
    signal in_last_fetch : std_logic;
+   signal last_fetch_ending : std_logic;
+   signal hold_i      : std_logic;
+   signal hold_q      : std_logic := '0';
+   signal hold_count  : natural range 0 to HOLD_LIMIT := 0;
 begin
    io_rd    <= '1' when iorq_n = '0' and rd_n = '0' and m1_n = '1' else '0';
    m1_end   <= '1' when m1_n_q = '0' and m1_n = '1' else '0';
-   io_start <= io_rd and not io_rd_q;
    io_end   <= io_rd_q and not io_rd;
 
    -- A header byte, or the next IN byte when none is held, is taken whenever
@@ -108,13 +124,25 @@ begin
 
    in_last_fetch <= '1' when m1_n = '0' and ack_seen = '0' and target /= 0 and
                              fetches = target - 1 else '0';
+   -- The request must not drop between the last fetch's M1 going high and
+   -- the count catching up one clock later: at 28 MHz the CPU samples it on
+   -- every clock and, after a four-T-state instruction, decides from that
+   -- very sample, so it would miss the interrupt.
+   last_fetch_ending <= '1' when m1_end = '1' and ack_seen = '0' and target /= 0 and
+                                 fetches = target - 1 else '0';
    int_request <= '1' when play_r = '1' and header_left = 0 and
-                           ((fetches = target and m1_n = '1') or in_last_fetch = '1') else '0';
+                           ((fetches = target and m1_n = '1') or in_last_fetch = '1' or
+                            last_fetch_ending = '1') else '0';
+
+   hold_i <= '1' when play_r = '1' and
+                      (header_left /= 0 or (have_byte = '0' and loaded /= in_count)) else '0';
+   hold <= hold_q;   -- registered: it feeds the CPU's WAIT, a tight path
 
    in_data <= next_byte;
    playing <= play_r;
    desync  <= desync_r;
    frames  <= std_logic_vector(frames_r);
+   fetch_count <= std_logic_vector(fetches);
 
    process (clock)
       variable bad : boolean;
@@ -129,6 +157,15 @@ begin
          end if;
 
          bad := false;
+
+         hold_q <= hold_i;
+         if hold_i = '0' then
+            hold_count <= 0;
+         elsif hold_count = HOLD_LIMIT then
+            bad := true;      -- the stream has stopped
+         else
+            hold_count <= hold_count + 1;
+         end if;
 
          if take = '1' then
             case to_integer(header_left) is
@@ -147,10 +184,12 @@ begin
          end if;
 
          if play_r = '1' then
-            if io_start = '1' and have_byte = '0' then
-               bad := true;   -- a read with no recorded byte ready
-            end if;
             if io_end = '1' then
+               -- A read that ends without a byte had none recorded: hold
+               -- keeps the CPU in the read while one is still to come.
+               if have_byte = '0' then
+                  bad := true;
+               end if;
                have_byte <= '0';
                used <= used + 1;
             end if;

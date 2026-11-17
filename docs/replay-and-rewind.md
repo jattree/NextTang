@@ -156,6 +156,46 @@ same through the debug interface.
   that also holds opcode bytes for the recorder, the Nano build option and the two host
   tools are on the `boards` line only so far; the player, the play link and the CPU-side
   byte swap are here.
+- 2026-11-16, from the Nano 20K work (branch `boards`, hardware-verified there; here
+  simulation-verified with `tests/sim/zxnext/run_rzx_check.sh` and the new
+  `tests/sim/zxnext/run_pi_debug.sh`):
+  - The replay byte is back on `cpu_di` in `zxnext.vhd`, among the port data sources;
+    `t80na.vhd` has no RZX change. Where the byte goes in did not decide the Nano's
+    timing after all.
+  - Player: the interrupt request no longer drops for one clock when the last
+    fetch's M1 ends; at 28 MHz the CPU missed the interrupt after a four-T-state
+    instruction. `tests/test_rzx_player.py` now checks this at every speed.
+  - The player waits for its stream: `hold`, for the CPU's WAIT, while a frame's
+    header or the next port byte has not arrived; a hold of about a second is a
+    desync. No board on this branch wires it yet.
+  - Two debugger faults that replay exposed, both in NextTang's own additions: the
+    state register write cleared IR at any stop (the first three bytes at a new PC
+    were skipped after a multi-cycle instruction), and the CPU's input register
+    loaded again between the debugger's release and the CPU's restart (a register
+    loaded just before a pause held FF after the resume). `run_pi_debug.sh` has a
+    check for each; both fail on the files as they were.
+  - A third debugger fault, fixed: the debugger's view of the registers was one
+    instruction behind. T80 writes an instruction's result into its register during
+    the next opcode fetch (the last loaded byte, and ALU results), and the CPU is
+    stopped before that fetch: single-stepping LD A,10 / INC A / INC A / INC A from
+    A = 5A read 5A, 10, 11, 12, and a register the debugger wrote at a stop could be
+    overwritten by the pending result at the resume. Now the pending result (register
+    and flags) is applied in the first clock of a debugger hold (`Debug_Flush` in
+    `t80n.vhd`) and not again afterwards, so the registers read at a stop are current
+    and a snapshot taken at any stop is exact. `tests/test_debug_step_registers.py`
+    steps 31 instructions on the CPU alone against a table (17 wrong before the fix),
+    and `run_pi_debug.sh` checks four steps in the whole core.
+    Hardware check: on the Nano 20K, from the boards branch (220 single steps and
+    1,000 pause/resumes, 2026-11-16).
+  - For rewind by replay: a replay can hand over to the recorder at the frame it
+    reaches. The play link takes FE 02 as an end of stream that sets `record_after`;
+    the player reports how many fetches it has counted in the frame under way
+    (`fetch_count`); the recorder takes that as the length its first frame starts
+    with (`start_fetches`). A board that starts the recorder with the player's count
+    on the clock playing ends gets one recording across the join. Unit tests cover
+    each part; the wiring, the host tool (`host/rzx_session.py`) and the hardware
+    check (Nano 20K: sessions with rewinds play to their end in Fuse and on the
+    board, 2026-11-16) are on the boards branch.
 
 ## Order
 

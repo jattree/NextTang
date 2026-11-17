@@ -159,10 +159,15 @@ release moves the same way: `scripts/merge_official_core.py --upstream DIR
   CPU is in (0, 1, 2), in bits 5:4. The official 3.02.05 file reports `IMode`
   there, the instruction decoder's request, which reads 11 except while an IM
   instruction executes. Seen on a Nano 20K: 48K BASIC read as IM 2.
-- **RZX replay in the CPU wrapper** (2026-11-15, marked `NextTang` in
-  `t80na.vhd`): inputs `RZX_PLAY` and `RZX_DATA`; during an I/O read while a
-  recording plays, the recorded byte is latched beside `DI_Reg` and passed to
-  the CPU core in its place.
+- **RZX replay** (marked `NextTang` in `zxnext.vhd`): during a CPU I/O read
+  while a recording plays, `cpu_di` carries the recorded byte in place of the
+  port data. (From 2026-11-15 to 2026-11-16 the byte was instead swapped in
+  inside `t80na.vhd`; that file no longer has an RZX change.) `t80n.vhd`'s
+  debug state register reports `IStatus`, the CPU's interrupt mode, where the
+  official file reports the decoder's `IMode`, and its write clears IR only
+  when the CPU is halted. `t80na.vhd` keeps `DI_Reg` from a bus grant until
+  the CPU's next cycle has begun (`Bus_Held`), so a debugger pause and resume
+  cannot lose the stopped instruction's last byte.
 - `spi_master.vhd` remains MiSTer's; the official 3.02.04 change to it
   (`spi_active`) is not taken yet.
 

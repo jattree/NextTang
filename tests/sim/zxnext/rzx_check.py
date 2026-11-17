@@ -113,7 +113,7 @@ module testbench;
     integer f, out, cycle, now, m1, iorq, rd, di, r, n;
 
     nexttang_rzx_logger dut (
-        .clock(clock), .reset(reset), .start(start), .stop(1'b0),
+        .clock(clock), .reset(reset), .start(start), .start_fetches(16'd0), .stop(1'b0),
         .recording(recording), .m1_n(m1_n), .iorq_n(iorq_n), .rd_n(rd_n),
         .data(data), .int_n(1'b1), .word(word), .word_valid(valid), .word_ready(1'b1),
         .frames(frames), .saturated(saturated), .overflow(overflow));
