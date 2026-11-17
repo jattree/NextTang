@@ -368,6 +368,10 @@ module nexttang_nano20k_zxnext (
     // (nexttang_companion_keyboard). Its keys and F-keys add to the host's.
     wire [39:0] companion_keys;
     wire [10:1] companion_functions;
+    wire [11:0] companion_joystick_left, companion_joystick_right;
+    wire [7:0]  companion_mouse_x, companion_mouse_y;
+    wire [2:0]  companion_mouse_buttons;
+    wire [3:0]  companion_mouse_wheel;
     wire        companion_seen;
     wire        companion_message;
     wire [7:0]  companion_byte;
@@ -381,7 +385,10 @@ module nexttang_nano20k_zxnext (
             .spi_miso(companion_miso),
             .keys(companion_keys), .function_keys(companion_functions),
             .seen(companion_seen), .keyboard_message(companion_message),
-            .message_byte(companion_byte));
+            .message_byte(companion_byte),
+            .joystick_left(companion_joystick_left), .joystick_right(companion_joystick_right),
+            .mouse_x(companion_mouse_x), .mouse_y(companion_mouse_y),
+            .mouse_buttons(companion_mouse_buttons), .mouse_wheel(companion_mouse_wheel));
         always @(posedge clock_28)
             if (companion_message) companion_message_seen <= 1'b1;
         if (COMPANION_REPORT != 0) begin : report
@@ -454,6 +461,12 @@ module nexttang_nano20k_zxnext (
     end else begin : no_companion
         assign companion_keys = 40'd0;
         assign companion_functions = 10'd0;
+        assign companion_joystick_left = 12'd0;
+        assign companion_joystick_right = 12'd0;
+        assign companion_mouse_x = 8'd0;
+        assign companion_mouse_y = 8'd0;
+        assign companion_mouse_buttons = 3'd0;
+        assign companion_mouse_wheel = 4'd0;
         assign companion_seen = 1'b0;
         assign companion_message = 1'b0;
         assign companion_byte = 8'd0;
@@ -544,8 +557,10 @@ module nexttang_nano20k_zxnext (
         .keyboard_rows(keyboard_rows),
         .keyboard_columns(keyboard_columns),
         .function_keys(functions_sync | companion_functions),
-        .left_joystick(12'b0),
-        .right_joystick(12'b0),
+        .left_joystick(companion_joystick_left),
+        .right_joystick(companion_joystick_right),
+        .mouse_x(companion_mouse_x), .mouse_y(companion_mouse_y),
+        .mouse_buttons(companion_mouse_buttons), .mouse_wheel(companion_mouse_wheel),
         .keyboard_connected(companion_seen),                 // status line: the BL616's Companion answered
         .input_active(|all_keys),
         .host_keys(host_keys),

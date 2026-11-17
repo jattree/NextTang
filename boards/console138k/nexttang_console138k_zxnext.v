@@ -300,6 +300,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .function_keys(function_keys),
         .left_joystick(left_joystick),
         .right_joystick(12'b0),
+        .mouse_x(8'b0), .mouse_y(8'b0), .mouse_buttons(3'b0), .mouse_wheel(4'b0),
         .keyboard_connected(keyboard_connected),
         .input_active(input_active),
         .host_keys(host_keys),

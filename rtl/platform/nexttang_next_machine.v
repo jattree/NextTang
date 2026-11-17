@@ -103,8 +103,13 @@
 // keyboard_rows (o_KBD_ROW) select matrix rows; keyboard_columns (i_KBD_COL)
 // answer them, active low. function_keys[10:1] are F10 down to F1 for the
 // core's hot keys. left_joystick and right_joystick are the core's 12-bit
-// joystick words. host_keys and host_functions are keys held from the debug
-// UART (K and J commands, below), which the board ORs into its own.
+// joystick words. mouse_x, mouse_y and mouse_wheel are the Kempston mouse's
+// counters (X up to the right, Y up the screen, wrapping) and mouse_buttons
+// its middle, right and left buttons. host_keys and host_functions are keys
+// held from the debug UART (K and J commands, below), which the board ORs
+// into its own. The debug UART can also hold the left joystick (Y and three
+// hex digits, the core's 12-bit word) and place the mouse (M and five hex
+// digits: buttons, X, Y); both add to the board's own.
 //
 // ---------------------------------------------------------- debug contract
 //
@@ -241,6 +246,10 @@ module nexttang_next_machine #(
     input  wire [10:1] function_keys,
     input  wire [11:0] left_joystick,
     input  wire [11:0] right_joystick,
+    input  wire [7:0]  mouse_x,
+    input  wire [7:0]  mouse_y,
+    input  wire [2:0]  mouse_buttons,
+    input  wire [3:0]  mouse_wheel,
     input  wire        keyboard_connected,
     input  wire        input_active,
     output reg  [39:0] host_keys,
@@ -385,6 +394,14 @@ module nexttang_next_machine #(
     wire        core_iorq_n;
     wire [15:0] core_bus_address;
 
+    // Held from the debug UART (Y and M commands, parsed with K and J below).
+    reg [11:0] host_joystick = 12'b0;
+    reg [18:0] host_mouse = 19'b0;             // buttons, X, Y
+    reg [1:0]  joystick_digits_left = 2'd0;
+    reg [11:0] joystick_command_mask = 12'b0;
+    reg [2:0]  mouse_digits_left = 3'd0;
+    reg [18:0] mouse_command_mask = 19'b0;
+
     zxnext #(
         .g_video_def(3'b000),
         .g_version(8'h32),
@@ -430,16 +447,16 @@ module nexttang_next_machine #(
         .o_KEYMAP_DATA(),
         .o_KEYMAP_WE(),
         .o_JOYMAP_WE(),
-        .i_JOY_LEFT(left_joystick),
+        .i_JOY_LEFT(left_joystick | host_joystick),
         .i_JOY_RIGHT(right_joystick),
         .o_JOY_IO_MODE_EN(),
         .o_JOY_IO_MODE_PIN_7(),
         .o_JOY_LEFT_TYPE(),
         .o_JOY_RIGHT_TYPE(),
-        .i_MOUSE_X(8'b0),
-        .i_MOUSE_Y(8'b0),
-        .i_MOUSE_BUTTON(3'b0),
-        .i_MOUSE_WHEEL(4'b0),
+        .i_MOUSE_X(mouse_x + host_mouse[15:8]),
+        .i_MOUSE_Y(mouse_y + host_mouse[7:0]),
+        .i_MOUSE_BUTTON(mouse_buttons | host_mouse[18:16]),
+        .i_MOUSE_WHEEL(mouse_wheel),
         .o_PS2_MODE(),
         .o_MOUSE_CONTROL(),
 
@@ -945,6 +962,28 @@ module nexttang_next_machine #(
                     host_keys <= {key_command_mask[35:0], command_digit};
             end else begin
                 key_digits_left <= 4'd0;
+            end
+
+            if (command_byte == "Y") begin
+                joystick_digits_left <= 2'd3;
+            end else if (joystick_digits_left != 2'd0 && command_is_digit) begin
+                joystick_command_mask <= {joystick_command_mask[7:0], command_digit};
+                joystick_digits_left <= joystick_digits_left - 2'd1;
+                if (joystick_digits_left == 2'd1)
+                    host_joystick <= {joystick_command_mask[7:0], command_digit};
+            end else begin
+                joystick_digits_left <= 2'd0;
+            end
+
+            if (command_byte == "M") begin
+                mouse_digits_left <= 3'd5;
+            end else if (mouse_digits_left != 3'd0 && command_is_digit) begin
+                mouse_command_mask <= {mouse_command_mask[15:0], command_digit};
+                mouse_digits_left <= mouse_digits_left - 3'd1;
+                if (mouse_digits_left == 3'd1)
+                    host_mouse <= {mouse_command_mask[14:0], command_digit};
+            end else begin
+                mouse_digits_left <= 3'd0;
             end
 
             if (command_byte == "J") begin

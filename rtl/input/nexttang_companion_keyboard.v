@@ -27,7 +27,27 @@
 //                        release; a modifier is 0x68 + its bit in the boot
 //                        report (0x68 left control ... 0x6f right GUI).
 //
-// Only byte 2 is used. Two firmware lines send keys this way: upstream
+//   HID (1) JOYSTICK (3) bytes 2 to 6: which joystick (0, 1, ...), the
+//                        classic byte (bit 0 right, 1 left, 2 down, 3 up,
+//                        4 to 7 fire buttons 1 to 4), analogue X and Y (not
+//                        used here) and eight more buttons. Joystick 0 is
+//                        given as the Next's left port and 1 as its right,
+//                        in the core's order MODE X Z Y START A C B U D L R:
+//                        fire 1 is B (the Kempston fire), fire 2 C, fire 3 A,
+//                        fire 4 START, and the first four extra buttons Y, Z,
+//                        X and MODE.
+//   HID (1) MOUSE (2)    bytes 2 to 4: buttons (bit 0 left, 1 right, 2
+//                        middle), movement right and movement down, signed;
+//                        byte 5, when the mouse has a wheel, its movement.
+//                        Kept here as the Kempston mouse's counters: X counts
+//                        up to the right and Y up the screen, each wrapping
+//                        at 256, and four bits of wheel.
+//
+// Both firmware lines send joystick and mouse messages in this form
+// (FPGA-Companion's SPI.md and hid.c; checked 2026-11-17). Not yet tried
+// with a real pad or mouse.
+//
+// Only byte 2 of a keyboard message is used. Two firmware lines send keys this way: upstream
 // FPGA-Companion since 2026-10 follows byte 2 with a filler and PS/2 set-2
 // codes, while the build NextNano ships for the on-board BL616 (RetroSilicon's
 // FPGA-Companion-wip, from an older upstream) sends byte 2 alone. Reading the
@@ -61,7 +81,15 @@ module nexttang_companion_keyboard (
     output wire [10:1] function_keys,
     output reg         seen = 1'b0,
     output reg         keyboard_message = 1'b0,
-    output wire [7:0]  message_byte            // the usage byte, valid with keyboard_message
+    output wire [7:0]  message_byte,           // the usage byte, valid with keyboard_message
+    // joysticks 0 and 1, active high: MODE X Z Y START A C B U D L R
+    output wire [11:0] joystick_left,
+    output wire [11:0] joystick_right,
+    // the Kempston mouse's counters and buttons (middle, right, left)
+    output reg  [7:0]  mouse_x = 8'd0,
+    output reg  [7:0]  mouse_y = 8'd0,
+    output reg  [2:0]  mouse_buttons = 3'd0,
+    output reg  [3:0]  mouse_wheel = 4'd0
 );
     // ---------------------------------------------------- SPI clock domain
     reg [2:0] bit_count = 3'd0;
@@ -70,7 +98,10 @@ module nexttang_companion_keyboard (
     reg [7:0] target = 8'd0;
     reg [7:0] command = 8'd0;
     reg [7:0] rx_data = 8'd0;
-    reg [1:0] rx_kind = 2'd0;              // 1 usage byte, 3 status answered
+    // what rx_data is: 1 a keyboard usage byte, 3 status answered; joystick
+    // 4 its number, 5 the classic byte, 6 the extra buttons; mouse 8 buttons,
+    // 9 movement right, 10 movement down, 11 wheel
+    reg [3:0] rx_kind = 4'd0;
     reg       rx_toggle = 1'b0;
 
     wire [7:0] byte_in = {shift_in, spi_mosi};
@@ -87,9 +118,16 @@ module nexttang_companion_keyboard (
                 if (byte_count == 4'd1) command <= byte_in;
                 // hand interesting bytes to the machine domain
                 if (target == 8'd1 && command == 8'd1 && byte_count == 4'd2) begin
-                    rx_data <= byte_in; rx_kind <= 2'd1; rx_toggle <= !rx_toggle;
+                    rx_data <= byte_in; rx_kind <= 4'd1; rx_toggle <= !rx_toggle;
                 end else if (target == 8'd0 && command == 8'd0 && byte_count == 4'd6) begin
-                    rx_data <= 8'd0; rx_kind <= 2'd3; rx_toggle <= !rx_toggle;
+                    rx_data <= 8'd0; rx_kind <= 4'd3; rx_toggle <= !rx_toggle;
+                end else if (target == 8'd1 && command == 8'd3 &&
+                             (byte_count == 4'd2 || byte_count == 4'd3 || byte_count == 4'd6)) begin
+                    rx_data <= byte_in; rx_toggle <= !rx_toggle;
+                    rx_kind <= byte_count == 4'd2 ? 4'd4 : byte_count == 4'd3 ? 4'd5 : 4'd6;
+                end else if (target == 8'd1 && command == 8'd2 && byte_count >= 4'd2 && byte_count <= 4'd5) begin
+                    rx_data <= byte_in; rx_toggle <= !rx_toggle;
+                    rx_kind <= 4'd6 + byte_count;       // 8 to 11
                 end
             end
         end
@@ -131,6 +169,16 @@ module nexttang_companion_keyboard (
     integer   slot;
     reg       placed;
     initial for (slot = 0; slot < 6; slot = slot + 1) held[slot] = 7'd0;
+    reg [7:0] joystick_number = 8'd0;
+    reg [7:0] classic_0 = 8'd0, classic_1 = 8'd0;
+    reg [3:0] extra_0 = 4'd0, extra_1 = 4'd0;
+    // extra buttons 3..0 are MODE, X, Z, Y; fire 4..1 are START, A, C, B
+    assign joystick_left = {extra_0[3], extra_0[2], extra_0[1], extra_0[0],
+                            classic_0[7], classic_0[6], classic_0[5], classic_0[4],
+                            classic_0[3], classic_0[2], classic_0[1], classic_0[0]};
+    assign joystick_right = {extra_1[3], extra_1[2], extra_1[1], extra_1[0],
+                             classic_1[7], classic_1[6], classic_1[5], classic_1[4],
+                             classic_1[3], classic_1[2], classic_1[1], classic_1[0]};
 
     assign     message_byte = rx_data;
     wire       release_key = rx_data[7];
@@ -146,9 +194,21 @@ module nexttang_companion_keyboard (
             seen <= 1'b0;
         end else if (toggle_sync[2] != toggle_sync[1]) begin
             // rx_data and rx_kind have been still since the toggle moved
-            if (rx_kind == 2'd3)
+            case (rx_kind)
+                4'd4: joystick_number <= rx_data;
+                4'd5: if (joystick_number == 8'd0) classic_0 <= rx_data;
+                      else if (joystick_number == 8'd1) classic_1 <= rx_data;
+                4'd6: if (joystick_number == 8'd0) extra_0 <= rx_data[3:0];
+                      else if (joystick_number == 8'd1) extra_1 <= rx_data[3:0];
+                4'd8: mouse_buttons <= rx_data[2:0];
+                4'd9: mouse_x <= mouse_x + rx_data;
+                4'd10: mouse_y <= mouse_y - rx_data;
+                4'd11: mouse_wheel <= mouse_wheel + rx_data[3:0];
+                default: ;
+            endcase
+            if (rx_kind == 4'd3)
                 seen <= 1'b1;
-            else if (rx_kind == 2'd1) begin
+            else if (rx_kind == 4'd1) begin
                 keyboard_message <= 1'b1;
                 if (is_modifier)
                     modifiers[usage[2:0]] <= !release_key;

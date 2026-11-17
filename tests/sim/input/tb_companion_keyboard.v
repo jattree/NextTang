@@ -20,7 +20,26 @@ module tb_companion_keyboard;
     nexttang_companion_keyboard dut (
         .clock(clock), .reset(reset),
         .spi_cs_n(cs_n), .spi_sclk(sclk), .spi_mosi(mosi), .spi_miso(miso),
-        .keys(keys), .function_keys(fkeys), .seen(seen), .keyboard_message(kmsg));
+        .keys(keys), .function_keys(fkeys), .seen(seen), .keyboard_message(kmsg),
+        .joystick_left(joy_left), .joystick_right(joy_right),
+        .mouse_x(mouse_x), .mouse_y(mouse_y), .mouse_buttons(mouse_buttons), .mouse_wheel(mouse_wheel));
+    wire [11:0] joy_left, joy_right;
+    wire [7:0]  mouse_x, mouse_y;
+    wire [2:0]  mouse_buttons;
+    wire [3:0]  mouse_wheel;
+    task joystick_message(input [7:0] number, input [7:0] classic, input [7:0] extra);
+        begin
+            begin_msg; send(8'd1); send(8'd3); send(number); send(classic);
+            send(8'h80); send(8'h80); send(extra); end_msg; #600;
+        end
+    endtask
+    task mouse_message(input [7:0] buttons, input [7:0] dx, input [7:0] dy, input integer wheel, input [7:0] dw);
+        begin
+            begin_msg; send(8'd1); send(8'd2); send(buttons); send(dx); send(dy);
+            if (wheel) send(dw);
+            end_msg; #600;
+        end
+    endtask
 
     integer errors = 0;
     reg [7:0] got;
@@ -111,6 +130,24 @@ module tb_companion_keyboard;
         // a message to another target must not disturb the keys
         begin_msg; send(8'd2); send(8'd2); send(8'd0); send(8'h1c); end_msg;
         if (keys !== 40'd0) begin $display("FAIL OSD message reached the keys"); errors = errors + 1; end
+
+        // ---- joysticks: 0 is the left port, 1 the right
+        joystick_message(8'd0, 8'h11, 8'h00);               // right + fire 1
+        if (joy_left !== 12'h011 || joy_right !== 12'h000) begin $display("FAIL joystick 0 right+fire (%h %h)", joy_left, joy_right); errors = errors + 1; end
+        joystick_message(8'd1, 8'h8a, 8'h09);               // left, up, fire 4; extra buttons 0 and 3
+        if (joy_left !== 12'h011 || joy_right !== 12'h98a) begin $display("FAIL joystick 1 (%h %h)", joy_left, joy_right); errors = errors + 1; end
+        joystick_message(8'd0, 8'h00, 8'h00);
+        joystick_message(8'd2, 8'hff, 8'hff);               // a third pad is ignored
+        if (joy_left !== 12'h000 || joy_right !== 12'h98a) begin $display("FAIL joystick release / third pad (%h %h)", joy_left, joy_right); errors = errors + 1; end
+        joystick_message(8'd1, 8'h00, 8'h00);
+        if (keys !== 40'd0) begin $display("FAIL joystick reached the keys"); errors = errors + 1; end
+
+        // ---- mouse: right 5 and down 3, then left 10 and up 4 with a wheel
+        mouse_message(8'h01, 8'd5, 8'd3, 0, 8'd0);
+        if (mouse_x !== 8'd5 || mouse_y !== 8'hfd || mouse_buttons !== 3'b001) begin $display("FAIL mouse 1 (%h %h %b)", mouse_x, mouse_y, mouse_buttons); errors = errors + 1; end
+        mouse_message(8'h06, 8'hf6, 8'hfc, 1, 8'h01);
+        if (mouse_x !== 8'hfb || mouse_y !== 8'h01 || mouse_buttons !== 3'b110 || mouse_wheel !== 4'd1) begin $display("FAIL mouse 2 (%h %h %b %h)", mouse_x, mouse_y, mouse_buttons, mouse_wheel); errors = errors + 1; end
+        if (keys !== 40'd0 || joy_left !== 12'd0) begin $display("FAIL mouse reached keys or joystick"); errors = errors + 1; end
 
         if (errors == 0) $display("PASS"); else $display("FAIL (%0d)", errors);
         $finish;
