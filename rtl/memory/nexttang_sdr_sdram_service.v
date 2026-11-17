@@ -310,6 +310,7 @@ module nexttang_sdr_sdram_service #(
     reg [3:0]  b_fetch_slot = 4'd0;
     reg [31:0] b_last_word_m = 32'd0;
     assign b_done = b_done_m;
+    wire       b_arrived = rd_pipe[CL + 1] && rd_port_b[CL + 1];
     assign b_head_word = b_slot_word[b_head[3:0]];
     // the machine side's pointers, registered here first (related clocks):
     // used straight from the machine domain, they fed this cycle's command
@@ -326,6 +327,7 @@ module nexttang_sdr_sdram_service #(
     wire       b_fetch_stale = (b_fetch - b_head_m) > b_window;   // flushed past
     wire       b_want = !b_fetch_stale && b_fetch != b_tail_m && !b_busy;
     wire       b_want_read = b_want && !b_slot_dup[b_fetch[3:0]];
+    wire       b_repeat = b_want && b_slot_dup[b_fetch[3:0]] && b_done_m == b_fetch && !b_arrived;
 
     // The request toggles are registered in the memory domain before the
     // command decision: read combinationally they had 5.9 ns to get through
@@ -364,7 +366,7 @@ module nexttang_sdr_sdram_service #(
         rd_port_b <= {rd_port_b[CL:0], 1'b0};
         if (rd_pipe[CL + 1]) begin
             if (rd_port_b[CL + 1]) begin
-                b_slot_word[b_fetch_slot] <= dq_read; b_last_word_m <= dq_read;
+                b_last_word_m <= dq_read;
                 b_done_m <= b_done_m + 5'd1; b_busy <= 1'b0;
             end else if (rd_port_c[CL + 1]) begin c_word_m <= dq_read; c_done_m <= !c_done_m; end
             else begin a_word_m <= dq_read; a_done_m <= !a_done_m; end
@@ -373,10 +375,17 @@ module nexttang_sdr_sdram_service #(
         // repeats the previous word takes the last word fetched
         if (b_fetch_stale && !b_busy) begin
             b_fetch <= b_head_m; b_done_m <= b_head_m;
-        end else if (b_want && b_slot_dup[b_fetch[3:0]] && b_done_m == b_fetch) begin
-            b_slot_word[b_fetch[3:0]] <= b_last_word_m;
+        end else if (b_repeat) begin
             b_fetch <= b_fetch + 5'd1; b_done_m <= b_done_m + 5'd1;
         end
+        // The one write into the slot words: a fetched word, or the last
+        // word again for an announcement that repeats it. Written from two
+        // places, the array was built as 512 registers and a mux tree, not
+        // as distributed RAM (2026-11-17); the two never fall on one clock
+        // (a repeat needs every started fetch to be done), and if they did
+        // the repeat would wait a clock.
+        if (b_arrived || b_repeat)
+            b_slot_word[b_arrived ? b_fetch_slot : b_fetch[3:0]] <= b_arrived ? dq_read : b_last_word_m;
 
         if (reset) begin
             state <= S_INIT; init_count <= INIT_CYCLES[15:0]; init_wait <= 1'b1;

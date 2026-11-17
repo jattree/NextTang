@@ -432,12 +432,25 @@ same through the debug interface.
     nearly full, so any change to this image needs several runs to find one that
     meets timing.
   - With the USB keyboard as well (`--rzx 3 --rewind-ring 1 --companion 1`): nine
-    runs, none meets timing (107 to 539 setup violations; three would not route).
-    So the ring image takes its keys from the PC, and the keyboard image
-    (rzxK-p1r2) rewinds by replay from the start.
-- Next: room for the ring and the USB keyboard together, bank 5 written back once per rewind
-  instead of once per checkpoint undone, the main branch, and the 138K with the
-  recording on the SD card.
+    runs of the logic above, none met timing (107 to 539 setup violations; three
+    would not route).
+  - Room found (2026-11-17, from a read-only review by Codex of the synthesis
+    netlist): the SDRAM service's Layer 2 word queue, 16 words of 32 bits meant
+    as distributed RAM, was written from two places and had been built as 512
+    registers with a mux tree. With one write it is RAM. The ring image with the
+    USB keyboard is then 19,832 logic cells (96 %) and meets timing in two of
+    three runs. On **ringL-p1r2** (0 setup, 0 hold): Layer 2 switched on at the
+    NextZXOS welcome screen gives the same picture as before, pixel for pixel;
+    the six-region rewind check passes; the 128K recording replays; the 150 s
+    game session with eight rewinds saved 2,163 frames that play to their end in
+    Fuse and on the board. Its keys were sent from the PC: a real USB keyboard in
+    a ring session is still to be tried.
+  - The same review found the debug UART link's reply queue built as registers for
+    the same reason (three writes in one clock; about 250 to 290 cells), and some
+    oversized counters. Not changed yet.
+- Next: a USB keyboard in a ring session, the UART link's queue, bank 5 written
+  back once per rewind instead of once per checkpoint undone, the main branch,
+  and the 138K with the recording on the SD card.
 
 ## Order
 
