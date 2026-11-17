@@ -448,9 +448,30 @@ same through the debug interface.
   - The same review found the debug UART link's reply queue built as registers for
     the same reason (three writes in one clock; about 250 to 290 cells), and some
     oversized counters. Not changed yet.
-- Next: a USB keyboard in a ring session, the UART link's queue, bank 5 written
-  back once per rewind instead of once per checkpoint undone, the main branch,
-  and the 138K with the recording on the SD card.
+- 2026-11-17: one Nano image with everything, and rewind on a Pi build.
+  - The UART link's queue is RAM (27774b4) and the oversized counters are sized
+    from their limits (8e192c2).
+  - The ring could not work on a `--pi-pins 1` build: the debug slave took its SPI
+    from the Pi's pins alone, so the ring's commands, sent by the FPGA's own SPI
+    master, went nowhere. It had only ever been run on builds without the Pi
+    pins. Since bdf15c6 the slave is the FPGA's own while its master has a
+    transfer under way and the Pi's otherwise, and the ring waits for the Pi's
+    chip select to be idle.
+  - With wide adders moved into the chip's spare DSP blocks (a5e39a3, 31cd66f,
+    10fe281) the image `--pi-pins 1 --rzx 3 --rewind-ring 1 --companion 1 --rtc 1`
+    is 19,954 logic cells and meets timing in two placements of three
+    (**all7-p1r2**, in flash). On it, from flash with the Pi Zero attached: a
+    scripted ring session in 48K BASIC with two rewinds (0.6 s and 0.4 s, each
+    replayed from a checkpoint) saved 842 frames, and they replayed on the board
+    at 28 MHz with no desync; the six-region rewind check passes.
+  - The debug UART's bridge is also what pauses the CPU when a replay hands over
+    to the recorder (inject_pause), so an image without the bridge would lose
+    the hand-over. Leaving the bridge out of a shipped image needs that pause
+    moved first.
+- Next: a USB keyboard in a ring session, bank 5 written back once per rewind
+  instead of once per checkpoint undone, the main branch, the 138K with the
+  recording on the SD card, and the 3.03 core (its blitter writes memory by
+  physical address, which the dirty-block tracker must see).
 
 ## Order
 

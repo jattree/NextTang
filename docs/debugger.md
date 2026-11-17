@@ -98,6 +98,13 @@ the option the bridge writes its temporary breakpoints to comparators 8 and 9,
 which such a board does not have, and a step never stops (found 2026-11-17 with
 OverSpec's probe, review-tools/dzrp_probe.py --place-loop).
 
+Through a Raspberry Pi instead of the serial cable: with Project Slipstream's
+relay running on the Pi (`python3 -m slipstream.linkd --spi /dev/spidev0.0
+--share`), start the bridge with `--port tcp:PI:4700 --breakpoint-slots 0`. The
+Pi's SPI reaches the debug slave but not the comparators, so breakpoints are not
+offered and every step is a hardware single step; everything else is the same
+(the probe passes that way too, 2026-11-17).
+
 ## Limits
 
 - Pausing stops the CPU only. Video, sound, timers and the copper carry on,

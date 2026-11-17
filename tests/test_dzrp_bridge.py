@@ -962,5 +962,32 @@ class TwoSlotBoardTest(unittest.TestCase):
         self.assertTrue(all(frame[1] < 2 for frame in self.model.frames))
 
 
+
+class NoComparatorLinkTest(unittest.TestCase):
+    """A link that cannot reach the comparators (a Pi on the debug slave's SPI)."""
+
+    def setUp(self) -> None:
+        self.model = FakePiDebug()
+        self.bridge = DzrpBridge(self.model, Breakpoints(self.model), 0)
+        self.bridge.command(1, bytes([2, 2, 0]) + b"test\0")
+
+    def test_breakpoints_are_not_offered_and_are_answered_bare(self) -> None:
+        offered = int.from_bytes(self.bridge.command(24, b"").payload, "little")
+        self.assertFalse(offered >> 40 & 1 or offered >> 41 & 1)
+        self.assertTrue(offered >> 6 & 1 and offered >> 3 & 1 and offered >> 28 & 1)
+        self.assertEqual(self.bridge.command(40, struct.pack("<HB", 0x8000, 0) + b"\0").payload, b"")
+        self.assertEqual(self.model.frames, [])
+
+    def test_a_step_is_a_hardware_step_and_a_plain_run_runs(self) -> None:
+        before = self.model.registers()["PC"]
+        reply = self.bridge.command(6, continue_payload(0x8001, 0x8003))
+        self.assertEqual(reply.notification[:2], b"\x01\x00")
+        self.assertNotEqual(self.model.registers()["PC"], before)
+        self.assertEqual(self.bridge.command(6, continue_payload()).payload, b"")
+        self.assertFalse(self.model.paused)
+        self.bridge.finish()
+        self.assertEqual(self.model.frames, [], "no comparator frame may be sent on this link")
+
+
 if __name__ == "__main__":
     unittest.main()

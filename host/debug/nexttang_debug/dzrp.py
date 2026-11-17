@@ -322,6 +322,11 @@ class DzrpBridge:
             # Before INIT, or after CLOSE on a connection that stays open.
             logging.getLogger(__name__).warning("DZRP command %d before INIT", command)
             return Reply()
+        if self.slots == 0 and command in (CMD_ADD_BREAKPOINT, CMD_REMOVE_BREAKPOINT):
+            # No comparators can be reached (the Pi's SPI link carries none of
+            # the debug UART's breakpoint frames): not offered, answered bare.
+            logging.getLogger(__name__).warning("DZRP command %d: this link has no breakpoints", command)
+            return Reply()
         if command not in SUPPORTED_COMMANDS and command not in LEGACY_COMMANDS:
             # As JNext: the frame is consumed, the reply carries only the
             # sequence number, and the log names the command.
@@ -335,6 +340,9 @@ class DzrpBridge:
             self.finish(resume=True)
             return Reply()
         if command == CMD_GET_SUPPORTED_COMMANDS:
+            if self.slots == 0:
+                offered = SUPPORTED_COMMANDS - {CMD_ADD_BREAKPOINT, CMD_REMOVE_BREAKPOINT}
+                return Reply(sum(1 << one for one in offered).to_bytes(6, "little"))
             return Reply(SUPPORTED_BITMAP)
         if command == CMD_LOOPBACK:
             if len(data) > 8192:
@@ -597,14 +605,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tcp-port", type=int, default=11000)   # CSpect's and JNext's port
     parser.add_argument("--poll-interval", type=float, default=0.03, help="status poll interval in seconds")
     parser.add_argument("--breakpoint-slots", type=int, default=DEFAULT_SLOTS,
-                        help="comparators in the board's build (default 10; the Nano 20K images have 2)")
+                        help="comparators in the board's build (default 10; the Nano 20K images have 2); "
+                             "0 when the link cannot reach them (a tcp: link to a Pi on the debug slave's SPI): "
+                             "breakpoints are then not offered and every step is a hardware single step")
     args = parser.parse_args(argv)
     try:
         with UartLink(args.port, args.baud) as link:
             if not callable(getattr(link, "write", None)) or not callable(getattr(link, "read_reply", None)):
                 raise DebugError("UartLink needs write(data) and read_reply(header, length); see dzrp.RawLink")
-            if not 1 <= args.breakpoint_slots <= 10:
-                raise ValueError("--breakpoint-slots: 1 to 10")
+            if not 0 <= args.breakpoint_slots <= 10:
+                raise ValueError("--breakpoint-slots: 0 to 10")
             bridge = DzrpBridge(PiDebug(link), Breakpoints(cast(RawLink, link)), args.breakpoint_slots)
             with DzrpServer(bridge, args.listen, args.tcp_port, args.poll_interval) as server:
                 print(f"NextTang DZRP listening on {server.address[0]}:{server.address[1]}", flush=True)
