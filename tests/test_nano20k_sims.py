@@ -144,5 +144,46 @@ class RtcTest(unittest.TestCase):
             self.assertIn("PASS", output, output)
 
 
+
+GOWIN_PRIMITIVES = Path("/opt/gowin/1.9.12.03/simlib/gw2a/prim_sim.v")
+
+
+def alu54d_model(directory: str) -> Path:
+    """Gowin's own ALU54D model, cut out of its simulation library (not kept in the repository)."""
+    text = GOWIN_PRIMITIVES.read_text()
+    start = text.index("module ALU54D")
+    model = Path(directory) / "alu54d.v"
+    model.write_text(text[start:text.index("endmodule", start) + len("endmodule")] + "\n")
+    return model
+
+
+@unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp") and GOWIN_PRIMITIVES.exists(),
+                     "iverilog or the Gowin simulation library not installed")
+class DspBlockFormsTest(unittest.TestCase):
+    """Modules with a DSP-block form must behave as their ordinary form does."""
+
+    def test_audio_pcm_samples_equal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sim.vvp"
+            run(["iverilog", "-g2005", "-o", str(image),
+                 str(SIM / "audio" / "tb_audio_pcm_dsp_equal.v"),
+                 str(REPO_ROOT / "rtl" / "audio" / "nexttang_zxnext_audio_pcm.v"),
+                 str(alu54d_model(directory))], REPO_ROOT)
+            output = run(["vvp", "-n", str(image)], REPO_ROOT)
+            self.assertIn("PASS", output, output)
+
+    def test_rtc_with_dsp_prescaler(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bench = Path(directory) / "tb_rtc_dsp.v"
+            bench.write_text((SIM / "peripherals" / "tb_rtc.v").read_text().replace(
+                "CLOCK_HZ(20000)", "CLOCK_HZ(20000), .DSP_PRESCALER(1)") + "\nmodule GSR; wire GSRO = 1'b1; endmodule\n")
+            image = Path(directory) / "sim.vvp"
+            run(["iverilog", "-g2005", "-o", str(image), str(bench),
+                 str(REPO_ROOT / "rtl" / "peripherals" / "nexttang_rtc.v"),
+                 str(alu54d_model(directory))], REPO_ROOT)
+            output = run(["vvp", "-n", str(image)], REPO_ROOT)
+            self.assertIn("PASS", output, output)
+
+
 if __name__ == "__main__":
     unittest.main()

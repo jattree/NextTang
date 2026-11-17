@@ -498,6 +498,7 @@ module nexttang_nano20k_zxnext (
         .PI_SPI_PINS(PI_SPI_PINS),
         .RZX(RZX),
         .RTC(RTC),
+        .RTC_DSP(1),                      // this part has ALU54D blocks, nearly all unused
         .REWIND_RING(REWIND_RING),
         .FRAME_EXACT(FRAME_EXACT),
         // SD MISO sampled half a CPU clock later: SCK leaves through an
@@ -696,7 +697,7 @@ module nexttang_nano20k_zxnext (
         // 264 Hz, scales clean; 10 of 10 boots.
         wire hdmi_audio_ce;
         wire signed [15:0] hdmi_left, hdmi_right;
-        nexttang_zxnext_audio_pcm #(.PHASE_INCREMENT(32'd7635497)) hdmi_audio_pcm (
+        nexttang_zxnext_audio_pcm #(.PHASE_INCREMENT(32'd7635497), .DSP(1)) hdmi_audio_pcm (
             .core_clock(clock_28), .core_left(core_audio_left), .core_right(core_audio_right),
             .clock(pixel_clock), .reset(pixel_reset), .audio_ce(hdmi_audio_ce),
             .left(hdmi_left), .right(hdmi_right));

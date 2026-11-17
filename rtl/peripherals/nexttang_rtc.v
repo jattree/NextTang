@@ -26,7 +26,10 @@
 `default_nettype none
 
 module nexttang_rtc #(
-    parameter integer CLOCK_HZ = 28000000
+    parameter integer CLOCK_HZ = 28000000,
+    // 1: the one-second counter in a Gowin GW2A DSP block (ALU54D), which
+    // frees its logic cells; 0: ordinary logic, for simulation and other parts.
+    parameter integer DSP_PRESCALER = 0
 ) (
     input  wire       clock,
     input  wire       reset,
@@ -47,7 +50,27 @@ module nexttang_rtc #(
 
     reg [24:0] prescale = 25'd0;
     reg        tick_waiting = 1'b0;
-    wire       second = prescale == CLOCK_HZ - 1;
+    wire       second;
+    wire       restart;                  // the seconds register is being written
+    generate
+    if (DSP_PRESCALER != 0) begin : dsp_prescaler
+        // Counts up from PRESET; bit 25 of the sum marks the second, and the
+        // count starts again from PRESET then or at a restart: CLOCK_HZ clocks
+        // from one mark to the next.
+        localparam [25:0] PRESET = 26'd33554432 - CLOCK_HZ + 26'd1;
+        wire [53:0] sum;
+        wire        again = sum[25] | restart;
+        ALU54D #(.AREG(1'b0), .BREG(1'b0), .ASIGN_REG(1'b0), .BSIGN_REG(1'b0), .ACCLOAD_REG(1'b0),
+                 .OUT_REG(1'b1), .B_ADD_SUB(1'b0), .C_ADD_SUB(1'b0), .ALUD_MODE(0),
+                 .ALU_RESET_MODE("SYNC")) counter (
+            .A(again ? {28'd0, PRESET} : 54'd1), .B(54'd0), .ASIGN(1'b0), .BSIGN(1'b0),
+            .ACCLOAD(!again), .CASI(55'd0), .CLK(clock), .CE(1'b1), .RESET(1'b0),
+            .DOUT(sum), .CASO());
+        assign second = sum[25];
+    end else begin : logic_prescaler
+        assign second = prescale == CLOCK_HZ - 1;
+    end
+    endgenerate
 
     // last day of the month, BCD
     wire leap = year[4] ? (year[3:0] == 4'd2 || year[3:0] == 4'd6)
@@ -93,6 +116,7 @@ module nexttang_rtc #(
     reg       write = 1'b0;
     reg [2:0] write_index = 3'd0;
     reg [7:0] write_value = 8'd0;
+    assign    restart = write && write_index == 3'd0;
 
     // C and fourteen decimal digits
     reg [3:0] digits_left = 4'd0;
@@ -110,7 +134,7 @@ module nexttang_rtc #(
         write <= 1'b0;
 
         // ---- time keeping; a tick waits while a transfer is under way
-        prescale <= second ? 25'd0 : prescale + 25'd1;
+        if (DSP_PRESCALER == 0) prescale <= second ? 25'd0 : prescale + 25'd1;
         if (second) tick_waiting <= 1'b1;
         if (tick_waiting && !active && !write) begin
             tick_waiting <= 1'b0;
@@ -147,7 +171,11 @@ module nexttang_rtc #(
         if (write) begin
             valid <= 1'b1;
             case (write_index)
-                3'd0: begin seconds <= write_value[6:0]; prescale <= 25'd0; tick_waiting <= 1'b0; end
+                3'd0: begin
+                    seconds <= write_value[6:0];
+                    if (DSP_PRESCALER == 0) prescale <= 25'd0;
+                    tick_waiting <= 1'b0;
+                end
                 3'd1: minutes <= write_value[6:0];
                 3'd2: hours <= write_value[5:0];
                 3'd3: weekday <= write_value[2:0];

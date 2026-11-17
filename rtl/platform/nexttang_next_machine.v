@@ -183,7 +183,9 @@ module nexttang_next_machine #(
     // 1: a real-time clock in fabric at the DS1307's I2C address
     // (nexttang_rtc), set from the debug UART (C and fourteen digits) or by
     // NextZXOS; nothing keeps the time while the board is off.
-    parameter integer RTC = 0
+    parameter integer RTC = 0,
+    // 1: that clock's one-second counter in a GW2A DSP block (see nexttang_rtc).
+    parameter integer RTC_DSP = 0
 ) (
     // clocks and resets
     input  wire        clock_28,
@@ -943,7 +945,7 @@ module nexttang_next_machine #(
 
     generate
     if (RTC != 0) begin : rtc
-        nexttang_rtc #(.CLOCK_HZ(28000000)) clock_chip (
+        nexttang_rtc #(.CLOCK_HZ(28000000), .DSP_PRESCALER(RTC_DSP)) clock_chip (
             .clock(clock_28), .reset(!machine_locked),
             .scl(i2c_scl), .sda_in(i2c_sda), .sda_out(rtc_sda),
             .command_valid(board_command_valid), .command_byte(command_byte),
