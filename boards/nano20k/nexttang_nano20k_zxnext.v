@@ -124,28 +124,84 @@ module nexttang_nano20k_zxnext (
         .CLKOUT(memory_clock), .LOCK(machine_pll_lock),
         .CLKOUTP(), .CLKOUTD(), .CLKOUTD3(clock_28)
     );
-    // The two dividers start in the same 28 MHz cycle: their release is a
-    // register on clock_28's falling edge, half a cycle from the edge the
-    // dividers count. Released by the PLL's lock itself (until 2026-11-16),
-    // which rises whenever it likes, one divider could start a cycle before
-    // the other, and nothing but a reload would bring them back together.
-    // That turned out not to matter to the picture or the machine, and it is
-    // not the cause of the rare black picture: with DIVIDER_SKEW (diagnostic,
-    // build_zxnext.sh --divider-skew) 1, 2 or 3 the 7 MHz divider is released
-    // that many 28 MHz cycles after the 14 MHz one, and with 4 the 14 MHz one
-    // a cycle after the 7 MHz one; all four images boot to a normal picture
-    // (2026-11-16), and with 1 a recording replays. Kept so that every load
-    // starts the same way.
+    // 14 and 7 MHz come from two dividers on clock_28, and the core needs
+    // them lined up: a 7 MHz edge on a 14 MHz rising edge. Released together
+    // they should be, but the release reaches the two dividers along
+    // different routes, and in some builds one started a cycle after the
+    // other for good: the machine ran, and sprites never showed (they are
+    // drawn but not displayed; found 2026-11-17 with a sprite test, images
+    // rzxZ-p0r2 and ringL-p1r2; forcing the offset with DIVIDER_SKEW 1, 3
+    // or 4 does the same, 0 and 2 are fine).
+    //
+    // So the line-up is measured and put right. A toggle on each divided
+    // clock is sampled on clock_28: lined up, the 7 MHz toggle changes in a
+    // cycle where the 14 MHz one changes too. If it does not, the 7 MHz
+    // divider is reset and released again a cycle later, until it does. The
+    // machine stays in reset until then (dividers_aligned).
+    //
+    // DIVIDER_SKEW (diagnostic, build_zxnext.sh --divider-skew): no
+    // measuring; the 7 MHz divider is released 1 to 3 cycles of 28 MHz after
+    // the 14 MHz one, or with 4 the 14 MHz divider one cycle after the
+    // 7 MHz one.
     localparam integer DIVIDER_SKEW = 0;
     reg [4:0] divider_release = 5'd0;
     always @(negedge clock_28 or negedge machine_pll_lock)
         if (!machine_pll_lock) divider_release <= 5'd0;
         else divider_release <= {divider_release[3:0], 1'b1};
     wire clock_14, clock_7;
+    reg  toggle_14 = 1'b0, toggle_7 = 1'b0;
+    always @(posedge clock_14) toggle_14 <= !toggle_14;
+    always @(posedge clock_7) toggle_7 <= !toggle_7;
+    reg [1:0] seen_14 = 2'b00, seen_7 = 2'b00;
+    reg [5:0] align_wait = 6'd0;
+    reg [2:0] align_good = 3'd0;
+    reg       align_hold = 1'b0;        // the 7 MHz divider is held in reset
+    reg       align_odd = 1'b0;         // which cycle of the 14 MHz clock to release it in
+    reg       dividers_aligned = 1'b0;
+    wire      changed_14 = seen_14[1] != seen_14[0];
+    wire      changed_7 = seen_7[1] != seen_7[0];
+    always @(posedge clock_28 or negedge machine_pll_lock)
+        if (!machine_pll_lock) begin
+            seen_14 <= 2'b00; seen_7 <= 2'b00;
+            align_wait <= 6'd0; align_good <= 3'd0; align_hold <= 1'b0; align_odd <= 1'b0;
+            dividers_aligned <= 1'b0;
+        end else begin
+            seen_14 <= {seen_14[0], toggle_14};
+            seen_7 <= {seen_7[0], toggle_7};
+            if (DIVIDER_SKEW != 0)
+                dividers_aligned <= divider_release[4];
+            else if (align_hold) begin
+                // held for a while, then let go in the chosen cycle
+                align_wait <= align_wait + 6'd1;
+                if (align_wait[5] && changed_14 == align_odd) begin
+                    align_hold <= 1'b0;
+                    align_wait <= 6'd0;
+                end
+            end else if (!dividers_aligned) begin
+                if (!align_wait[5])
+                    align_wait <= align_wait + 6'd1;        // let the dividers run first
+                else if (changed_7) begin
+                    if (changed_14) begin
+                        align_good <= align_good + 3'd1;
+                        if (align_good == 3'd7)
+                            dividers_aligned <= 1'b1;
+                    end else begin
+                        align_good <= 3'd0;
+                        align_hold <= 1'b1;
+                        align_odd <= !align_odd;
+                        align_wait <= 6'd0;
+                    end
+                end
+            end
+        end
+    // the hold reaches the divider half a cycle later, as the release does
+    reg align_hold_n = 1'b0;
+    always @(negedge clock_28) align_hold_n <= align_hold;
     CLKDIV #(.DIV_MODE("2"), .GSREN("false")) divide_14 (
         .HCLKIN(clock_28), .RESETN(divider_release[DIVIDER_SKEW == 4 ? 2 : 1]), .CALIB(1'b0), .CLKOUT(clock_14));
     CLKDIV #(.DIV_MODE("4"), .GSREN("false")) divide_7 (
-        .HCLKIN(clock_28), .RESETN(divider_release[DIVIDER_SKEW == 4 ? 1 : 1 + DIVIDER_SKEW]), .CALIB(1'b0), .CLKOUT(clock_7));
+        .HCLKIN(clock_28), .RESETN(divider_release[DIVIDER_SKEW == 4 ? 1 : 1 + DIVIDER_SKEW] && !align_hold_n),
+        .CALIB(1'b0), .CLKOUT(clock_7));
     wire clock_28_n = ~clock_28;
 
     wire serial_clock;      // 135 MHz
@@ -179,7 +235,7 @@ module nexttang_nano20k_zxnext (
     wire machine_locked = machine_pll_lock;
     wire machine_reset;
     nexttang_reset_release machine_reset_release (
-        .clock(clock_28), .asynchronous_reset(!machine_pll_lock || !memory_ready), .reset(machine_reset));
+        .clock(clock_28), .asynchronous_reset(!machine_pll_lock || !memory_ready || !dividers_aligned), .reset(machine_reset));
     wire psg_enable;
     nexttang_machine_clock_enables machine_enables (
         .clock_28(clock_28), .reset(machine_reset), .psg_enable(psg_enable));
