@@ -179,7 +179,11 @@ module nexttang_next_machine #(
     // 1: every frame exactly one HDMI frame long (zxula_timing's
     // i_frame_exact), for a board with a 27 MHz pixel clock that is 24/25 of
     // its 28 MHz and no other video output.
-    parameter integer FRAME_EXACT = 0
+    parameter integer FRAME_EXACT = 0,
+    // 1: a real-time clock in fabric at the DS1307's I2C address
+    // (nexttang_rtc), set from the debug UART (C and fourteen digits) or by
+    // NextZXOS; nothing keeps the time while the board is off.
+    parameter integer RTC = 0
 ) (
     // clocks and resets
     input  wire        clock_28,
@@ -394,6 +398,9 @@ module nexttang_next_machine #(
     wire        core_iorq_n;
     wire [15:0] core_bus_address;
 
+    // The core's bit-banged I2C lines (1 released, 0 low) and the clock on them.
+    wire i2c_scl, i2c_sda, rtc_sda;           // the clock itself is further down
+
     // Held from the debug UART (Y and M commands, parsed with K and J below).
     reg [11:0] host_joystick = 12'b0;
     reg [18:0] host_mouse = 19'b0;             // buttons, X, Y
@@ -460,10 +467,10 @@ module nexttang_next_machine #(
         .o_PS2_MODE(),
         .o_MOUSE_CONTROL(),
 
-        .i_I2C_SCL_n(1'b1),
-        .i_I2C_SDA_n(1'b1),
-        .o_I2C_SCL_n(),
-        .o_I2C_SDA_n(),
+        .i_I2C_SCL_n(i2c_scl),
+        .i_I2C_SDA_n(i2c_sda & rtc_sda),
+        .o_I2C_SCL_n(i2c_scl),
+        .o_I2C_SDA_n(i2c_sda),
 
         .o_SPI_SS_FLASH_n(),
         .o_SPI_SS_SD1_n(),
@@ -933,6 +940,18 @@ module nexttang_next_machine #(
         .spi_mosi(master_spi_mosi),
         .spi_miso(core_gpio[9])
     );
+
+    generate
+    if (RTC != 0) begin : rtc
+        nexttang_rtc #(.CLOCK_HZ(28000000)) clock_chip (
+            .clock(clock_28), .reset(!machine_locked),
+            .scl(i2c_scl), .sda_in(i2c_sda), .sda_out(rtc_sda),
+            .command_valid(board_command_valid), .command_byte(command_byte),
+            .valid());
+    end else begin : no_rtc
+        assign rtc_sda = 1'b1;
+    end
+    endgenerate
 
     reg [2:0]  trigger_digits_left = 3'd0;
     reg [15:0] trigger_command_address = 16'h0000;

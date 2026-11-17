@@ -131,5 +131,18 @@ class CompanionKeyboardTest(unittest.TestCase):
             self.assertIn("PASS", output, output)
 
 
+
+@unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "iverilog not installed")
+class RtcTest(unittest.TestCase):
+    def test_i2c_uart_set_and_rollovers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sim.vvp"
+            run(["iverilog", "-g2005", "-o", str(image),
+                 str(SIM / "peripherals" / "tb_rtc.v"),
+                 str(REPO_ROOT / "rtl" / "peripherals" / "nexttang_rtc.v")], REPO_ROOT)
+            output = run(["vvp", "-n", str(image)], REPO_ROOT)
+            self.assertIn("PASS", output, output)
+
+
 if __name__ == "__main__":
     unittest.main()

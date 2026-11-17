@@ -348,6 +348,10 @@ module nexttang_nano20k_zxnext (
     // SDRAM. With RZX 3 and the debugger on the UART; not with DIRTY_PROBE,
     // which answers some of the same letters.
     localparam integer REWIND_RING = 0;
+    // RTC: 1 a real-time clock in fabric where the Next has its DS1307
+    // (nexttang_rtc; build option --rtc). Set from the debug UART or by
+    // NextZXOS's .date and .time; it starts from zero at every power-on.
+    localparam integer RTC = 0;
     // FRAME_EXACT: 1 makes the core's frame exactly one HDMI frame (625 lines
     // at 50 Hz, 525 at 60 Hz), so the output is plain CEA 576p50 or 480p60
     // with every frame alike. With 0 the core keeps the original machines'
@@ -493,6 +497,7 @@ module nexttang_nano20k_zxnext (
         .BREAKPOINT_SLOTS(2),
         .PI_SPI_PINS(PI_SPI_PINS),
         .RZX(RZX),
+        .RTC(RTC),
         .REWIND_RING(REWIND_RING),
         .FRAME_EXACT(FRAME_EXACT),
         // SD MISO sampled half a CPU clock later: SCK leaves through an

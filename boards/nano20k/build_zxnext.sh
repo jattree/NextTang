@@ -33,6 +33,7 @@ companion=0      # --companion 1: a USB keyboard through the BL616's FPGA-Compan
 pi_i2s=0         # --pi-i2s 1: with --pi-pins 1, the Pi's I2S audio into the Next (header 77/31/42;
                  # 85% logic without --companion; with it, 88% and timing failed, 2026-11-14)
 video_probe=0    # --video-probe 1: H on the debug UART, a line about the HDMI picture path
+rtc=0            # --rtc 1: a real-time clock in fabric at the DS1307's address (set from the debug UART or NextZXOS)
 rewind_ring=0    # --rewind-ring 1: the rewind ring's checkpoints (with --rzx 3; host/rzx_session.py --ring)
 dirty_probe=0    # --dirty-probe 1: d on the debug UART, the blocks of memory written since the last d
 divider_skew=0   # --divider-skew 1-3 (diagnostic): start the 7 MHz divider that many 28 MHz cycles late;
@@ -54,6 +55,7 @@ while (($#)); do
         --rzx) [[ $# -ge 2 && $2 == [0-3] ]] || exit 2; rzx=$2; shift 2 ;;
         --video-probe) [[ $# -ge 2 && $2 == [01] ]] || exit 2; video_probe=$2; shift 2 ;;
         --rewind-ring) [[ $# -ge 2 && $2 == [01] ]] || exit 2; rewind_ring=$2; shift 2 ;;
+        --rtc) [[ $# -ge 2 && $2 == [01] ]] || exit 2; rtc=$2; shift 2 ;;
         --dirty-probe) [[ $# -ge 2 && $2 == [01] ]] || exit 2; dirty_probe=$2; shift 2 ;;
         --divider-skew) [[ $# -ge 2 && $2 == [0-4] ]] || exit 2; divider_skew=$2; shift 2 ;;
         --toolchain|--vendor-source) [[ $# -ge 2 ]] || exit 2; shift 2 ;;
@@ -95,6 +97,7 @@ source_files+=(
     "$repo_root/rtl/input/nexttang_keyboard_matrix.v"
     "$repo_root/rtl/input/nexttang_companion_keyboard.v"
     "$repo_root/rtl/input/nexttang_usb_keyboard_matrix.v"
+    "$repo_root/rtl/peripherals/nexttang_rtc.v"
     "$repo_root/rtl/debug/nexttang_rzx_logger.v"
     "$repo_root/rtl/debug/nexttang_rzx_uart.v"
     "$repo_root/rtl/debug/nexttang_rzx_play_link.v"
@@ -169,11 +172,12 @@ sed -e "s/^    localparam integer AUDIO = [0-3];/    localparam integer AUDIO = 
     -e "s/^    localparam integer RZX = [0-3];/    localparam integer RZX = $rzx;/" \
     -e "s/^    localparam integer VIDEO_PROBE = [01];/    localparam integer VIDEO_PROBE = $video_probe;/" \
     -e "s/^    localparam integer REWIND_RING = [01];/    localparam integer REWIND_RING = $rewind_ring;/" \
+    -e "s/^    localparam integer RTC = [01];/    localparam integer RTC = $rtc;/" \
     -e "s/^    localparam integer DIRTY_PROBE = [01];/    localparam integer DIRTY_PROBE = $dirty_probe;/" \
     -e "s/^    localparam integer DIVIDER_SKEW = [0-4];/    localparam integer DIVIDER_SKEW = $divider_skew;/" \
     "$shell_source" >"$output_dir/nexttang_nano20k_zxnext.v"
 for option in "AUDIO = $audio" "STATUS_LINE = $status_line" "PI_SPI_PINS = $pi_pins" "COMPANION = $companion" \
-              "PI_I2S = $pi_i2s" "RZX = $rzx" "VIDEO_PROBE = $video_probe" "REWIND_RING = $rewind_ring" "DIRTY_PROBE = $dirty_probe" "DIVIDER_SKEW = $divider_skew"; do
+              "PI_I2S = $pi_i2s" "RZX = $rzx" "VIDEO_PROBE = $video_probe" "REWIND_RING = $rewind_ring" "RTC = $rtc" "DIRTY_PROBE = $dirty_probe" "DIVIDER_SKEW = $divider_skew"; do
     grep -q "^    localparam integer $option;" "$output_dir/nexttang_nano20k_zxnext.v" || {
         printf 'nano20k zxnext build: could not set %s in the shell\n' "$option" >&2; exit 1; }
 done
