@@ -79,6 +79,7 @@ begin
    break_now <= matched;
 
    process (clock)
+      variable slot_page : std_logic_vector(7 downto 0);
    begin
       if rising_edge(clock) then
          hit <= '0';
@@ -92,10 +93,22 @@ begin
                paged(to_integer(unsigned(write_slot))) <= write_paged;
                pages(to_integer(unsigned(write_slot))) <= write_page;
             end if;
+            -- The slot's MMU byte is chosen first and compared once. Written
+            -- as one comparison against a slice with a computed position, it
+            -- was built as eight comparisons a slot, one per MMU register
+            -- (128 carry cells for two slots; 2026-11-17).
             for i in 0 to SLOTS - 1 loop
-               if paged(i) = '0' or
-                  mmu(to_integer(unsigned(addresses(i)(15 downto 13))) * 8 + 7 downto
-                      to_integer(unsigned(addresses(i)(15 downto 13))) * 8) = pages(i) then
+               case addresses(i)(15 downto 13) is
+                  when "000"  => slot_page := mmu(7 downto 0);
+                  when "001"  => slot_page := mmu(15 downto 8);
+                  when "010"  => slot_page := mmu(23 downto 16);
+                  when "011"  => slot_page := mmu(31 downto 24);
+                  when "100"  => slot_page := mmu(39 downto 32);
+                  when "101"  => slot_page := mmu(47 downto 40);
+                  when "110"  => slot_page := mmu(55 downto 48);
+                  when others => slot_page := mmu(63 downto 56);
+               end case;
+               if paged(i) = '0' or (slot_page xor pages(i)) = x"00" then
                   page_ok(i) <= '1';
                else
                   page_ok(i) <= '0';

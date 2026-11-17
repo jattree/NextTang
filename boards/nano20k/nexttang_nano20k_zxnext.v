@@ -849,8 +849,14 @@ module nexttang_nano20k_zxnext (
     // LEDs, lit when driven low (to be confirmed on the board with the
     // bring-up image): 0 machine PLL, 1 SDRAM ready, 2 machine running,
     // 3 video PLL, 4 heartbeat, 5 SDRAM timeout.
-    reg [24:0] heartbeat = 25'd0;
-    always @(posedge clock_28) heartbeat <= heartbeat + 25'd1;
+    // The heartbeat counts in one of the chip's spare DSP blocks (a free-running
+    // sum of ones), not in 25 logic cells of carry chain.
+    wire [53:0] heartbeat;
+    ALU54D #(.AREG(1'b0), .BREG(1'b0), .ASIGN_REG(1'b0), .BSIGN_REG(1'b0), .ACCLOAD_REG(1'b0),
+             .OUT_REG(1'b1), .B_ADD_SUB(1'b0), .C_ADD_SUB(1'b0), .ALUD_MODE(0),
+             .ALU_RESET_MODE("SYNC")) heartbeat_dsp (
+        .A(54'd1), .B(54'd0), .ASIGN(1'b0), .BSIGN(1'b0), .ACCLOAD(1'b1), .CASI(55'd0),
+        .CLK(clock_28), .CE(1'b1), .RESET(1'b0), .DOUT(heartbeat), .CASO());
     assign led = ~{memory_timeout, heartbeat[24], video_pll_lock, !machine_reset, memory_ready, machine_pll_lock};
 endmodule
 
