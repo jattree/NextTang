@@ -42,6 +42,14 @@
 //     fell between two decisions), at the start of the next whole
 //     instruction that is not an acknowledge.
 //
+// A CPU that is stopped (by a debugger, or for a rewind checkpoint) does not
+// see the interrupts that pass meanwhile, and they must end no frame: a
+// replay would take an interrupt the recorded run never took. The board
+// holds int_n high while the CPU is stopped and raises int_cut as it stops:
+// a pulse still under way then, with no frame ended for it yet, is
+// forgotten. (One that had already risen unanswered keeps its frame end at
+// the next instruction, as before.)
+//
 // Prefixes are followed from the opcode bytes, which `data` also carries at
 // the end of each fetch (see below). Tie int_n high to end frames at
 // acknowledges only.
@@ -84,12 +92,18 @@ module nexttang_rzx_logger #(
     input  wire       rd_n,
     input  wire [7:0] data,
     input  wire       int_n,
+    input  wire       int_cut,
 
     output wire [8:0] word,
     output wire       word_valid,
     input  wire       word_ready,
 
     output reg [15:0] frames,
+    // Where the recording is inside the frame under way: fetches counted and
+    // port reads made since the last frame end. With `frames`, the place a
+    // checkpoint taken now belongs to (steady while the CPU is stopped).
+    output wire [15:0] frame_fetches,
+    output reg  [15:0] frame_reads = 16'd0,
     output reg        saturated,
     output reg        overflow
 );
@@ -105,6 +119,7 @@ module nexttang_rzx_logger #(
     wire m1_start = m1_n_q && !m1_n;
     wire m1_end = !m1_n_q && m1_n;
     wire io_end = io_rd_q && !io_rd;
+    assign frame_fetches = fetches;
     reg io_end_q = 1'b0;
 
     // Where in an instruction the next fetch falls: at its start, after a
@@ -186,6 +201,11 @@ module nexttang_rzx_logger #(
             frame_this_pulse <= 1'b0;
             after_pulse <= 1'b0;
         end
+        if (int_cut) begin
+            frame_this_pulse <= 1'b1;
+            after_pulse <= after_pulse;         // not set by the pulse being cut
+            int_low_at_fetch_end <= 1'b0;
+        end
         if (!m1_n && !iorq_n)
             ack_seen <= 1'b1;
         else if (m1_end)
@@ -201,6 +221,11 @@ module nexttang_rzx_logger #(
                 wr_ptr <= wr_ptr + 1'b1;
             end
         end
+
+        if (recording && frame_end)
+            frame_reads <= 16'd0;
+        else if (recording && io_end)
+            frame_reads <= frame_reads + 1'b1;
 
         hi_pending <= 1'b0;
         if (recording && frame_end) begin
@@ -221,6 +246,7 @@ module nexttang_rzx_logger #(
             recording <= 1'b1;
             // a fetch that ends on the start's own clock is this recording's
             fetches <= start_fetches + ((m1_end && !ack_seen) ? 16'd1 : 16'd0);
+            frame_reads <= 16'd0;
             frames <= 16'd0;
             saturated <= 1'b0;
             overflow <= 1'b0;

@@ -266,6 +266,7 @@ module `NEXTTANG_ZXNEXT_TOP (
         .layer2_data(layer2_data),
 
         .ram_c_address(ram_c_address),
+        .ram_c_address_high(),
         .ram_c_request(ram_c_request),
         .ram_c_read_n(ram_c_read_n),
         .ram_c_write_data(ram_c_write_data),

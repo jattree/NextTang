@@ -25,10 +25,13 @@
 //                     the CPU (a rewind: the host replays up to a frame and
 //                     the recording carries on from there)
 //
-// The host ends the stream with one more frame header that is not to be
-// played (FF FF 00 00) before FE 01: the player takes a header only when the
-// frame before it has ended, so the buffer is empty exactly when the last
-// real frame is over.
+// The host ends the stream with the first three bytes of one more frame
+// header (FF FF 00) and then FE 01: the player takes header bytes only when
+// the frame before has ended, so the buffer is empty exactly when the last
+// real frame is over, and by then the end is known, so playing stops on the
+// spot with the CPU still held for the header. (A whole header before the
+// end code left a gap: a replay of a frame or two could finish, take the
+// header and run on before FE 01 arrived.)
 //
 // The stream is the player's: per frame, fetch count (2 bytes), IN count
 // (2 bytes), the IN bytes. While `taking` is high the bytes are this

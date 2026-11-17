@@ -31,9 +31,9 @@ module testbench;
 
     nexttang_rzx_logger #(.FIFO_BITS(FIFO_BITS)) logger (
         .clock(clock), .reset(reset), .start(start), .start_fetches(16'd0), .stop(stop), .recording(recording),
-        .m1_n(m1_n), .iorq_n(iorq_n), .rd_n(rd_n), .data(data), .int_n(1'b1),
+        .m1_n(m1_n), .iorq_n(iorq_n), .rd_n(rd_n), .data(data), .int_n(1'b1), .int_cut(1'b0),
         .word(word), .word_valid(word_valid), .word_ready(word_ready),
-        .frames(frames), .saturated(saturated), .overflow(overflow));
+        .frames(frames), .frame_fetches(), .frame_reads(), .saturated(saturated), .overflow(overflow));
     nexttang_rzx_uart #(.CLOCK_HZ(1000000), .BAUD_RATE(100000)) sender (
         .clock(clock), .reset(reset), .begin_stream(begin_stream), .end_stream(end_stream),
         .end_flags({overflow, saturated}), .end_frames(frames),

@@ -1,12 +1,12 @@
 # RZX replay, recording and rewind
 
 Status: **recording and playback hardware-verified on the Nano 20K** for 48K programs, playback also for 128K, +2 and +3,
-and **rewind by replay from the PC** for 48K programs
+and **rewind** for 48K programs, by replay from the PC and, in a test image, from **checkpoints kept on the board**
+(the rewind ring; no image with it has met timing with the final logic yet)
 (owner request 2026-11-14; results under Progress). The input recorder
 (`rtl/debug/nexttang_rzx_logger.v`) and player (`rtl/debug/nexttang_rzx_player.vhd`)
 are in the Nano 20K build as an option, fed over the debug UART by host tools. Not
-done: Next-mode recordings, recordings on the SD card, the rewind ring (checkpoints
-on the board, so a rewind does not replay the whole session), and the 138K. The official Next has
+done: Next-mode recordings, recordings on the SD card, and the 138K. The official Next has
 no input recording, no RZX support and no rewind; NextZXOS 26.11 loads SNA/Z80/SNX/NEX
 snapshots and the NMI menu can save state by hand. This is a NextTang addition, inside
 the Next core, for the 138K and, where it fits, the Nano 20K. cpcnext plans the same
@@ -334,7 +334,9 @@ same through the debug interface.
   on the debug UART (`d`), to size the checkpoints:
   - on the board (image dirtyC-p1r2; one setup violation of 0.24 ns in the sprite
     line buffer, not in this logic): 48K BASIC at its prompt writes 3 blocks a
-    second; a game standing still writes 9;
+    second; a game standing still writes 9. (These two leave out bank 5, the
+    screen and the 48K system variables: the core keeps it in block RAM and its
+    writes never reach the memory port this probe watches; found on 2026-11-17.)
   - real play, counted by replaying board-made recordings of the game in a software
     Z80 on the PC: 41 blocks in a typical second (10 KB), 63 at most, and 61 to 68
     over 5 seconds, in three recordings of 8 to 10 s. One game only; a game that
@@ -362,9 +364,65 @@ same through the debug interface.
 - 2026-11-16, black picture: four more placements of the probe image (hunt-p1r0,
   p1r1, p2r0, p2r1) 0 in 240 loads, and seven earlier probe images 0 in 210 more.
   About 700 loads of eleven probe images without one; still only rzxS-p0r2.
-- Next: the main branch, the 138K with the recording on the SD card, and putting
-  the rewind store on the board (a mux on port C, banks 5 and 7, the registers,
-  host commands).
+- 2026-11-17, **the rewind ring on the Nano 20K**, working in a test image
+  (`build_zxnext.sh --rzx 3 --rewind-ring 1`, `host/rzx_session.py --ring`).
+  `rtl/debug/nexttang_ring_control.v` holds the tracker and the store and takes
+  p (prime), g (checkpoint), r hh (rewind by that many checkpoints) and i (report)
+  from the debug UART. It needs no change in the core: it shares memory port C with
+  the debug slave for main memory, the copy (2 MiB at 0x200000), the undo ring
+  (2 MiB at 0x400000) and each checkpoint's notes (at 0x600000: the 27 register
+  bytes and the recorder's frame, fetch and port-read counts), and it shares the
+  board's SPI master to give the debug slave its own commands: pause and resume,
+  register reads and writes, and block RAM writes for bank 5 and half of bank 7.
+  The host takes a checkpoint every few seconds; a rewind goes back to the last
+  checkpoint before the moment wanted, replays from there (the first frame
+  shortened by the counts in the notes) and hands over to the recorder as before.
+  - In a game (the archive recording taken over at frame 6,000; image
+    ringG-p0r2): a 150 s session with keys, a checkpoint every 5 s and eight
+    rewinds (back 3, 18, 1, 30, 70, 200, 4 and 12 s; two of them to the very
+    start) saved as 2,177 frames, which play to their end in Fuse 1.6.0 and on
+    the board. Each rewind took 0.8 to 2.5 s, whatever the session's length.
+    After a rewind to the start, the registers and all 48K of RAM read back equal
+    to the session's snapshot.
+  - A checkpoint stops the game for about a frame: the longest silence in the
+    recorder's stream after each of 13 checkpoints was 20 to 39 ms (59 ms for
+    the first after a 28 MHz replay), against 20 ms between frames otherwise.
+    The prime at the start takes 2.4 s.
+  - **Timing is not closed.** The image is 96 to 98 % of the device's logic
+    (90 % without the ring), and of 20 place-and-route runs of the final logic
+    none met timing; the best (ringG-p0r2, used for the results above) has 5
+    setup violations, the worst -0.31 ns, in the SDRAM service's Layer 2
+    fetch and the CPU's input register, paths a 48K game does not exercise
+    hard. Three earlier versions of the ring did meet timing (ringB-p0r2,
+    ringC and ringD at p1r2 and p2r2) but had the faults listed next. So the
+    results are from an image that must not be called verified at speed.
+  - Faults found and fixed on the way, each first seen on the board:
+    - the ring drove port C's read/write line the wrong way round (0 is a read);
+      the simulation's port model had the same mistake and passed;
+    - bank 5's writes never reach port A, so its blocks were never marked: they
+      are now taken from the bus (a memory write to a slot whose MMU page is 0A,
+      0B or 0E);
+    - an interrupt that passes while the CPU is stopped for a checkpoint was
+      given a frame end by the recorder, though the CPU never saw it; a replay
+      then took an interrupt the run had not. The board now holds the
+      recorder's INT high while the CPU is stopped and tells it to forget a
+      pulse cut by the stop (`int_cut`). Frames that lose their interrupt that
+      way are longer than a video frame; Fuse warns ("RZX frame is longer than
+      79000 tstates") and plays them;
+    - a replay of one frame could end before the host's end code arrived and
+      run on: both host tools now end the stream with three bytes of a header
+      and then the end code (`rtl/debug/nexttang_rzx_play_link.v`);
+    - reading bank 5 a byte a command through the slave made each checkpoint
+      stop the game for a third of a second; the SDRAM at bank 5's and 7's
+      addresses now holds a mirror, written as the machine writes, and a
+      checkpoint reads that (the slave is still used for a stale mirror and for
+      writing the banks back in a rewind).
+  - Limits: 48K programs; the interrupt mode is not restored (the tool falls back
+    to the long way if it differs); an interrupt is lost whenever a checkpoint's
+    stop covers it; no image with a USB keyboard (`--companion 1`) has been
+    built with the ring, and the device is nearly full.
+- Next: timing for the ring image (free some logic, or find a placement), the
+  main branch, and the 138K with the recording on the SD card.
 
 ## Order
 

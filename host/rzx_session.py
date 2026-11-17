@@ -17,8 +17,15 @@ and records every input from then on. A rewind goes back in time:
    earlier moment, with the keys free again.
 
 So the cost of a rewind grows with the session: an eighth of the time played
-so far, plus about ten seconds for the snapshot. (The rewind ring planned for
-the Console 138K keeps checkpoints on the board instead.)
+so far, plus about ten seconds for the snapshot.
+
+With --ring (an image built with --rewind-ring 1) the board keeps checkpoints
+of memory and registers itself (rtl/debug/nexttang_ring_control.v): one at the
+start and one every --every seconds, each a pause of some milliseconds. A
+rewind then goes back to the last checkpoint before the moment wanted and
+replays only from there, so it stays quick however long the session is. If the
+checkpoint wanted has left the ring, the rewind is done the long way and the
+ring starts again from there.
 
 While it runs, type on this terminal:
 
@@ -42,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import select
 import sys
 import termios
@@ -67,9 +75,16 @@ class SessionError(RuntimeError):
 
 
 class Session:
-    def __init__(self, port: str, say=print) -> None:
+    def __init__(self, port: str, say=print, ring: bool = False) -> None:
         self.port = port
         self.say = say
+        self.ring = ring
+        # One entry per checkpoint the board holds, oldest first: the frames
+        # kept when its recording segment began, and about which frame of
+        # the session it was taken in (the board reports the exact place
+        # when it is gone back to).
+        self.marks: list[dict[str, int]] = []
+        self.last_checkpoint = 0.0
         self.link: UartLink | None = None
         self.regs: dict[str, int] = {}
         self.ram = b""
@@ -102,10 +117,42 @@ class Session:
         self.regs = regs
         self.ram = memory.read(0x4000, 0xC000)
         self.say(f"snapshot: PC {regs['PC']:04X} SP {regs['SP']:04X} IM {regs['IM']} IFF1 {regs['IFF1']}")
+        if self.ring:
+            started = time.monotonic()
+            self._raw(b"p")
+            self._ring_report(20.0)
+            self.marks = [{"base": 0, "about": 0, "start": 1}]
+            self.say(f"ring primed in {time.monotonic() - started:.1f} s")
         self._raw(b"Z")
         time.sleep(0.05)
         self._raw(b"X\x04" + bytes([CMD_CPU_RESUME, 0, 0, 0]))
         self.captured = bytearray()
+        self.last_checkpoint = time.monotonic()
+
+    # ----------------------------------------------------------------- ring
+    def _ring_report(self, timeout: float) -> dict[str, int]:
+        """The board's report line: i HH FFFF TTTT RRRR SS V."""
+        assert self.link is not None
+        deadline = time.monotonic() + timeout
+        seen = bytearray(self.link.pending)
+        self.link.pending.clear()
+        while True:
+            found = re.search(rb"i([0-9A-F]{2})([0-9A-F]{4})([0-9A-F]{4})([0-9A-F]{4})([0-9A-F]{2})([0-9A-F])\n", seen)
+            if found:
+                held, frames, fetches, reads, state, dropped = (int(g, 16) for g in found.groups())
+                return {"held": held, "frames": frames, "fetches": fetches, "reads": reads,
+                        "state": state, "dropped": dropped}
+            if time.monotonic() > deadline:
+                raise SessionError("no report from the rewind ring (is the image built with --rewind-ring 1?)")
+            ready, _, _ = select.select([self.link.fd], [], [], 0.05)
+            if ready:
+                seen += os.read(self.link.fd, 4096)
+
+    def checkpoint(self) -> None:
+        """Ask the board for a checkpoint now (no answer comes: the line is the recorder's)."""
+        self._raw(b"g")
+        self.marks.append({"base": len(self.kept), "about": self.frames_so_far(), "start": 0})
+        self.last_checkpoint = time.monotonic()
 
     def _raw(self, data: bytes) -> None:
         assert self.link is not None
@@ -174,16 +221,75 @@ class Session:
     def rewind(self, seconds: float) -> int:
         """Go back `seconds`; the CPU is left stopped at that frame with the
         recorder running. Returns the frame gone back to."""
+        if self.ring and time.monotonic() - self.last_checkpoint < 0.5:
+            time.sleep(0.5)             # a checkpoint may still be under way
         frames = self._stop_recorder()
         target = max(1, len(frames) - round(seconds * FRAMES_PER_SECOND))
-        frames = frames[:target]
         assert self.link is not None
         link = self.link
-        fd = link.fd
         time.sleep(0.2)
-        termios.tcflush(fd, termios.TCIFLUSH)
+        termios.tcflush(link.fd, termios.TCIFLUSH)
         link.pending.clear()
+        started = time.monotonic()
+        how = "from the start"
+        play = None
+        if self.ring:
+            try:
+                play, kept_marks = self._ring_back(frames, target)
+                how = f"from the checkpoint at frame {target - len(play)}"
+            except SessionError as error:
+                self.say(f"ring: {error}; rewinding the long way")
         debug = PiDebug(link)
+        if play is None:
+            self._restore_snapshot(debug)
+            play = frames[:target]
+        debug.set_nextreg(0x07, 3)      # 28 MHz for the replay
+        after = self._replay(play)
+        self.kept = frames[:target]
+        self.captured = after
+        self.rewinds += 1
+        if self.ring:
+            if how == "from the start":
+                # The host wrote the machine's memory: the ring starts again
+                # here, with the CPU stopped at the hand-over. No report can
+                # come back (the line is the recorder's); the copy of 2 MiB
+                # takes about two seconds.
+                self._raw(b"p")
+                time.sleep(4.0)
+                self.marks = [{"base": len(self.kept), "about": len(self.kept), "start": 0}]
+            else:
+                self.marks = kept_marks
+            self.last_checkpoint = time.monotonic()
+        self.say(f"back at frame {target} ({target / FRAMES_PER_SECOND:.1f} s) after "
+                 f"{time.monotonic() - started:.1f} s, replayed {how}; the program is stopped there")
+        return target
+
+    def _ring_back(self, frames: list[Frame], target: int) -> tuple[list[Frame], list[dict[str, int]]]:
+        """Have the board go back to the last checkpoint safely before
+        `target`; returns the frames to replay from there and the marks left."""
+        choice = max((n for n, mark in enumerate(self.marks) if mark["about"] + 10 <= target or n == 0), default=0)
+        self._raw(b"r%02x" % (len(self.marks) - 1 - choice))
+        report = self._ring_report(30.0)
+        mark = self.marks[choice]
+        if mark["start"]:
+            at, fetches, reads = 0, 0, 0
+        else:
+            at, fetches, reads = mark["base"] + report["frames"], report["fetches"], report["reads"]
+            if abs(at - mark["about"]) > 100:
+                raise SessionError(f"the board went back to frame {at}, not near {mark['about']} "
+                                   f"(it holds {report['held']} checkpoints)")
+        if not at < target or at >= len(frames):
+            raise SessionError(f"checkpoint at frame {at} is not before frame {target}")
+        if report["state"] >> 4 & 3 != self.regs["IM"]:
+            raise SessionError("the interrupt mode at the checkpoint is not the snapshot's")
+        first = frames[at]
+        if fetches > first.fetches or reads > len(first.inputs):
+            raise SessionError(f"checkpoint position {fetches}/{reads} is past frame {at}'s end")
+        play = [Frame(first.fetches - fetches, first.inputs[reads:])] + frames[at + 1:target]
+        return play, self.marks[:choice + 1]
+
+    def _restore_snapshot(self, debug: PiDebug) -> None:
+        """The session's starting snapshot back into the stopped machine."""
         debug.pause()
         memory = Z80Memory(debug)
         regs = self.regs
@@ -198,8 +304,13 @@ class Session:
         if wrong or memory.read(0x4000, 0x100) != self.ram[:0x100] or memory.read(0xFF00, 0x100) != self.ram[-0x100:]:
             debug.resume()
             raise SessionError(f"the snapshot did not go back in (registers that differ: {wrong})")
-        debug.set_nextreg(0x07, 3)      # 28 MHz for the replay
 
+    def _replay(self, frames: list[Frame]) -> bytearray:
+        """Play `frames` from the stopped machine's state and hand over to
+        the recorder; returns the recorder's first bytes."""
+        assert self.link is not None
+        link = self.link
+        fd = link.fd
         sizes = [4 + len(f.inputs) for f in frames]
         sent = 0
         prefill = b""
@@ -226,9 +337,14 @@ class Session:
                 sent_bytes += sizes[sent]
                 sent += 1
             if sent == len(frames) and not ended:
-                # A header that is not played, then the end that hands over
-                # to the recorder and stops the CPU.
-                out += b"\xff\xff\x00\x00" + b"\xfe\x02"
+                # Three bytes of a header that is never played, then the end
+                # that hands over to the recorder and stops the CPU. The
+                # player takes header bytes only once the last frame is
+                # over, so the buffer empties exactly then, with the end
+                # already known: playing stops there and then. (With the
+                # whole header first, a replay of a frame or two could
+                # finish before the end code arrived and run on.)
+                out += b"\xff\xff\x00" + b"\xfe\x02"
                 ended = True
             if out:
                 link.write(out)
@@ -261,12 +377,7 @@ class Session:
         time.sleep(0.05)
         self._raw(b"X\x04" + bytes([CMD_NEXTREG_W, 0x07, self.speed, 0]))
         time.sleep(0.02)
-        self.kept = frames
-        self.captured = after
-        self.rewinds += 1
-        self.say(f"back at frame {target} ({target / FRAMES_PER_SECOND:.1f} s) after "
-                 f"{time.monotonic() - started:.1f} s of replay; the program is stopped there")
-        return target
+        return after
 
     def go_on(self) -> None:
         self._raw(b"X\x04" + bytes([CMD_CPU_RESUME, 0, 0, 0]))
@@ -289,13 +400,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", default=DEFAULT_PORT)
     parser.add_argument("--step", type=float, default=10.0, help="seconds a plain Enter rewinds (default 10)")
     parser.add_argument("--script", default=None, help="a timeline instead of the terminal (see above)")
+    parser.add_argument("--ring", action="store_true", help="use the board's rewind ring (--rewind-ring 1 images)")
+    parser.add_argument("--every", type=float, default=5.0, help="seconds between the ring's checkpoints (default 5)")
     args = parser.parse_args(argv)
     try:
         plan = parse_script(args.script) if args.script is not None else None
     except ValueError as error:
         parser.error(str(error))
 
-    session = Session(args.port)
+    session = Session(args.port, ring=args.ring)
     try:
         session.start()
         if plan is None:
@@ -307,6 +420,8 @@ def main(argv: list[str] | None = None) -> int:
             now = time.monotonic()
             clock += now - last
             last = now
+            if args.ring and now - session.last_checkpoint >= args.every:
+                session.checkpoint()
             command = None
             if plan is not None:
                 if plan and plan[0][0] <= clock:

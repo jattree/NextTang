@@ -23,7 +23,7 @@ class RzxSessionHostTest(unittest.TestCase):
         # FE 02, not rzx_play.py's FE 01: the board starts the recorder and
         # stops the CPU where the replay ends (rtl/debug/nexttang_rzx_play_link.v).
         source = (REPO_ROOT / "host/rzx_session.py").read_text()
-        self.assertIn(r'b"\xff\xff\x00\x00" + b"\xfe\x02"', source)
+        self.assertIn(r'b"\xff\xff\x00" + b"\xfe\x02"', source)
 
 
 if __name__ == "__main__":

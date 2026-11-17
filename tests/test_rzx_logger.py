@@ -19,21 +19,22 @@ module testbench;
     always #5 clock = ~clock;
     reg reset = 1, start = 0, stop = 0;
     reg [15:0] start_fetches = 16'd0;
-    reg m1_n = 1, iorq_n = 1, rd_n = 1, int_n = 1;
+    reg m1_n = 1, iorq_n = 1, rd_n = 1, int_n = 1, int_cut = 0;
     reg [7:0] data = 8'hff;
     reg ready = 1;
     reg random_ready = 0;
     wire [8:0] word;
     wire valid, recording, saturated, overflow;
-    wire [15:0] frames;
+    wire [15:0] frames, frame_fetches, frame_reads;
     integer got = 0;
     reg [8:0] seen [0:65535];
 
     nexttang_rzx_logger #(.FIFO_BITS(FIFO_BITS)) dut (
         .clock(clock), .reset(reset), .start(start), .start_fetches(start_fetches), .stop(stop),
         .recording(recording), .m1_n(m1_n), .iorq_n(iorq_n), .rd_n(rd_n),
-        .data(data), .int_n(int_n), .word(word), .word_valid(valid), .word_ready(ready),
-        .frames(frames), .saturated(saturated), .overflow(overflow));
+        .data(data), .int_n(int_n), .int_cut(int_cut), .word(word), .word_valid(valid), .word_ready(ready),
+        .frames(frames), .frame_fetches(frame_fetches), .frame_reads(frame_reads),
+        .saturated(saturated), .overflow(overflow));
 
     always @(posedge clock) begin
         if (valid && ready) begin
@@ -137,6 +138,45 @@ def frame_words(in_bytes: list[int], fetches: int) -> list[int]:
 
 @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "iverilog not installed")
 class RzxLoggerTest(unittest.TestCase):
+    def test_interrupt_that_passes_while_the_cpu_is_stopped(self) -> None:
+        # The board holds int_n high while the CPU is stopped and pulses
+        # int_cut as it stops. A pulse cut that way ends no frame; the next
+        # real interrupt does.
+        body = ["        start <= 1; @(posedge clock); start <= 0;",
+                "        fetch; fetch; ack;",
+                "        fetch; in_read(8'h11); fetch;",
+                # the pulse begins, the CPU stops inside it: the board masks it
+                "        int_n <= 0; tstates(1);",
+                "        int_n <= 1; int_cut <= 1; tstates(1); int_cut <= 0;",
+                "        tstates(40);",                    # stopped; more pulses pass unseen
+                "        fetch; fetch; in_read(8'h22); fetch;",
+                "        ack;",
+                "        fetch; ack;"]
+        status, words = run_bench("\n".join(body) + "\n")
+        self.assertEqual(words, frame_words([], 2) + frame_words([0x11, 0x22], 5) + frame_words([], 1))
+
+    def test_position_inside_the_frame(self) -> None:
+        # frames, fetches and port reads so far: where a checkpoint taken at
+        # that moment belongs in the recording.
+        body = ["        start <= 1; @(posedge clock); start <= 0;",
+                "        fetch; fetch; ack;",
+                "        fetch; in_read(8'h11); fetch; in_read(8'h22); fetch;",
+                "        tstates(4);",
+                '        $display("POSITION %0d %0d %0d", frames, frame_fetches, frame_reads);',
+                "        ack; fetch;",
+                "        tstates(4);",
+                '        $display("POSITION %0d %0d %0d", frames, frame_fetches, frame_reads);']
+        bench = BENCH_HEAD.replace("module testbench;", "module testbench;\n    localparam CPU_CLOCKS = 4;"
+                                   "\n    localparam FIFO_BITS = 5;") + "\n".join(body) + "\n" + BENCH_TAIL
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "testbench.v").write_text(bench, encoding="ascii")
+            subprocess.run(["iverilog", "-g2012", "-s", "testbench", "-o", str(root / "tb.vvp"), str(RTL),
+                            str(root / "testbench.v")], cwd=REPO_ROOT, check=True, capture_output=True)
+            out = subprocess.run(["vvp", str(root / "tb.vvp")], capture_output=True, text=True, check=True).stdout
+        self.assertEqual([line for line in out.splitlines() if line.startswith("POSITION")],
+                         ["POSITION 1 3 2", "POSITION 2 1 0"])
+
     def test_start_part_way_into_a_frame(self) -> None:
         # A recording that carries on where a replay ended starts with the
         # player's count of the fetches already made in the frame under way.

@@ -197,6 +197,7 @@ module nexttang_nano20k_zxnext (
     wire [7:0]  layer2_data;
     wire [15:0] layer2_late, layer2_mismatch;
     wire [20:0] ram_c_address;
+    wire [1:0]  ram_c_address_high;
     wire        ram_c_request;
     wire        ram_c_read_n;
     wire [7:0]  ram_c_write_data;
@@ -286,6 +287,11 @@ module nexttang_nano20k_zxnext (
     // that come up black.
     localparam integer VIDEO_PROBE = 0;
     localparam integer DIRTY_PROBE = 0;
+    // REWIND_RING: the rewind ring's checkpoints (p, c, r and i on the debug
+    // UART; rtl/debug/nexttang_ring_control.v), in the upper 6 MiB of the
+    // SDRAM. With RZX 3 and the debugger on the UART; not with DIRTY_PROBE,
+    // which answers some of the same letters.
+    localparam integer REWIND_RING = 0;
     // FRAME_EXACT: 1 makes the core's frame exactly one HDMI frame (625 lines
     // at 50 Hz, 525 at 60 Hz), so the output is plain CEA 576p50 or 480p60
     // with every frame alike. With 0 the core keeps the original machines'
@@ -418,6 +424,7 @@ module nexttang_nano20k_zxnext (
         .BREAKPOINT_SLOTS(2),
         .PI_SPI_PINS(PI_SPI_PINS),
         .RZX(RZX),
+        .REWIND_RING(REWIND_RING),
         .FRAME_EXACT(FRAME_EXACT),
         // SD MISO sampled half a CPU clock later: SCK leaves through an
         // I/O-cell register half a clock after the core moves it, so with the
@@ -449,6 +456,7 @@ module nexttang_nano20k_zxnext (
         .layer2_data(layer2_data),
 
         .ram_c_address(ram_c_address),
+        .ram_c_address_high(ram_c_address_high),
         .ram_c_request(ram_c_request),
         .ram_c_read_n(ram_c_read_n),
         .ram_c_write_data(ram_c_write_data),
@@ -520,7 +528,7 @@ module nexttang_nano20k_zxnext (
         .a_request(ram_a_request), .a_cycle_request(ram_a_cycle_request), .a_read_n(ram_a_read_n),
         .a_address(ram_a_address), .a_write_data(ram_a_write_data),
         .a_read_data(ram_a_read_data), .a_wait(cpu_wait),
-        .c_request(ram_c_request), .c_read_n(ram_c_read_n), .c_address({2'b00, ram_c_address}),
+        .c_request(ram_c_request), .c_read_n(ram_c_read_n), .c_address({ram_c_address_high, ram_c_address}),
         .c_write_data(ram_c_write_data), .c_read_data(ram_c_read_data), .c_ack(ram_c_ack), .c_busy(ram_c_busy),
         .fault_timeout(memory_timeout),
         .b_pf_toggle(layer2_prefetch_toggle), .b_pf_address(layer2_prefetch_address),

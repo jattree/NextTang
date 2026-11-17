@@ -165,6 +165,12 @@ module nexttang_next_machine #(
     // Bit 0: the RZX input recorder on the debug UART (Z / z, above).
     // Bit 1: the RZX player on the debug UART (P, above).
     parameter integer RZX = 0,
+    // The rewind ring (rtl/debug/nexttang_ring_control.v): checkpoints of
+    // memory and registers on p, c, r and i from the debug UART. Needs the
+    // FPGA-side SPI master (PI_SPI_PINS = 0), a memory port C that reaches
+    // the whole of an 8 MiB die (ram_c_address_high), and RZX bit 0 for the
+    // recorder's position.
+    parameter integer REWIND_RING = 0,
     // 1: every frame exactly one HDMI frame long (zxula_timing's
     // i_frame_exact), for a board with a 27 MHz pixel clock that is 24/25 of
     // its 28 MHz and no other video output.
@@ -198,6 +204,7 @@ module nexttang_next_machine #(
 
     // memory port C
     output wire [20:0] ram_c_address,
+    output wire [1:0]  ram_c_address_high,   // 0 from the core; the rewind ring's copy and undo records
     output wire        ram_c_request,
     output wire        ram_c_read_n,
     output wire [7:0]  ram_c_write_data,
@@ -354,6 +361,18 @@ module nexttang_next_machine #(
     wire        rzx_play_record_after, rzx_play_desync, rzx_play_busy;
     wire [15:0] rzx_play_fetches;
     wire        rzx_takeover;        // a replay has just handed over to the recorder
+    wire [15:0] rzx_frames, rzx_frame_fetches, rzx_frame_reads;   // the recorder's position
+    // the core's own port C, and the SPI master's users, before the rewind ring's share
+    wire [20:0] core_c_address;
+    wire        core_c_request, core_c_read_n;
+    wire [7:0]  core_c_write_data;
+    wire        ring_c_take, ring_c_request, ring_c_read_n;
+    wire [22:0] ring_c_address;
+    wire [7:0]  ring_c_write_data;
+    wire        ring_spi_take, ring_spi_select, ring_spi_byte_valid;
+    wire [7:0]  ring_spi_byte;
+    wire        ring_tx;
+    wire        core_mreq_n;
     wire [7:0]  rzx_in_data;
 
     wire        core_m1_n;
@@ -482,17 +501,17 @@ module nexttang_next_machine #(
         .o_RAM_B_PF_REQ_T(layer2_prefetch_toggle),
         .i_RAM_B_DI(layer2_data),
 
-        .o_RAM_C_ADDR(ram_c_address),
-        .o_RAM_C_REQ(ram_c_request),
-        .o_RAM_C_RD_n(ram_c_read_n),
+        .o_RAM_C_ADDR(core_c_address),
+        .o_RAM_C_REQ(core_c_request),
+        .o_RAM_C_RD_n(core_c_read_n),
         .i_RAM_C_DI(ram_c_read_data),
-        .o_RAM_C_DO(ram_c_write_data),
-        .i_RAM_C_ACK(ram_c_ack),
+        .o_RAM_C_DO(core_c_write_data),
+        .i_RAM_C_ACK(ram_c_ack && !ring_c_take),
 
         .o_BUS_ADDR(core_bus_address),
         .i_BUS_DI(8'hff),
         .o_BUS_DO(core_bus_data),
-        .o_BUS_MREQ_n(),
+        .o_BUS_MREQ_n(core_mreq_n),
         .o_BUS_IORQ_n(),
         .o_BUS_RD_n(core_rd_n),
         .o_BUS_WR_n(core_wr_n),
@@ -850,10 +869,10 @@ module nexttang_next_machine #(
         .spi_select(pi_select),
         .spi_valid(pi_byte_valid),
         .spi_byte(pi_byte),
-        .spi_ready(pi_byte_ready),
-        .spi_done(pi_reply_done),
+        .spi_ready(pi_byte_ready && !ring_spi_take),
+        .spi_done(pi_reply_done && !ring_spi_take),
         .spi_reply(pi_reply),
-        .spi_idle(pi_spi_idle),
+        .spi_idle(pi_spi_idle && !ring_spi_take),
         .bp_strobe(bp_strobe),
         .bp_slot(bp_slot),
         .bp_enable(bp_enable),
@@ -884,9 +903,9 @@ module nexttang_next_machine #(
     nexttang_pi_spi_master pi_debug_spi (
         .clock(clock_28),
         .reset(!machine_locked),
-        .select_in(pi_select),
-        .byte_valid(pi_byte_valid),
-        .byte_in(pi_byte),
+        .select_in(ring_spi_take ? ring_spi_select : pi_select),
+        .byte_valid(ring_spi_take ? ring_spi_byte_valid : pi_byte_valid),
+        .byte_in(ring_spi_take ? ring_spi_byte : pi_byte),
         .byte_ready(pi_byte_ready),
         .done(pi_reply_done),
         .byte_out(pi_reply),
@@ -1027,6 +1046,7 @@ module nexttang_next_machine #(
         wire [8:0] word;
         wire word_valid, word_ready;
         wire [15:0] frames;
+        assign rzx_frames = frames;
         reg  armed = 1'b0;
         reg  stopped_q = 1'b0;
         wire command_start = board_command_valid && command_byte == "Z";
@@ -1041,6 +1061,7 @@ module nexttang_next_machine #(
         // and the first words wait for the play link's last bytes to leave.
         reg  playing_q = 1'b0;
         reg  begin_wait = 1'b0;
+        reg [1:0] stopped_h = 2'b00;
         assign rzx_takeover = playing_q && !rzx_playing && rzx_play_record_after &&
                               !rzx_play_desync && !recording;
         wire start = (command_start && !cpu_stopped && !recording) || (armed && resumed) || rzx_takeover;
@@ -1049,6 +1070,7 @@ module nexttang_next_machine #(
 
         always @(posedge clock_28) begin
             playing_q <= rzx_playing;
+            stopped_h <= {stopped_h[0], cpu_stopped};
             if (rzx_takeover)
                 begin_wait <= 1'b1;
             else if (!rzx_play_busy || !machine_locked)
@@ -1074,11 +1096,15 @@ module nexttang_next_machine #(
             .iorq_n(rzx_iorq_n),
             .rd_n(rzx_rd_n),
             .data(rzx_in_data),
-            .int_n(rzx_int_n),
+            // interrupts that pass while the CPU is stopped end no frame
+            .int_n(rzx_int_n | cpu_stopped),
+            .int_cut(cpu_stopped && !stopped_h[1]),
             .word(word),
             .word_valid(word_valid),
             .word_ready(word_ready),
             .frames(frames),
+            .frame_fetches(rzx_frame_fetches),
+            .frame_reads(rzx_frame_reads),
             .saturated(saturated),
             .overflow(overflow)
         );
@@ -1105,6 +1131,9 @@ module nexttang_next_machine #(
         assign rzx_busy = 1'b0;
         assign rzx_tx = 1'b1;
         assign rzx_takeover = 1'b0;
+        assign rzx_frames = 16'd0;
+        assign rzx_frame_fetches = 16'd0;
+        assign rzx_frame_reads = 16'd0;
     end
     endgenerate
 
@@ -1177,13 +1206,91 @@ module nexttang_next_machine #(
 
     assign pi_miso = core_gpio[9];
 
-    assign debug_uart_tx = rzx_play_busy ? rzx_play_tx
-                         : rzx_busy ? rzx_tx
-                         : pi_session ? pi_link_tx
-                         : capture_sending ? capture_transmit
-                         : trace_frozen ? trace_transmit
-                         : log_sending ? log_transmit
-                         : status_transmit;
+    // Rewind ring (REWIND_RING).
+    generate
+    if (REWIND_RING != 0) begin : rewind_ring
+        // What the machine writes. Main memory writes are port A's. Bank 5
+        // and the first half of bank 7 are block RAM inside the core and
+        // never reach port A, so those are taken from the bus: a memory
+        // write to a slot whose MMU page is 0A, 0B or 0E. (A write there
+        // that divMMC or a Layer 2 mapping diverts marks a block that did
+        // not change, which only costs a copy.)
+        wire       bank_write = !core_mreq_n && !core_wr_n;
+        wire [7:0] bank_page = core_mmu[{core_bus_address[15:13], 3'b000} +: 8];
+        reg        bank_write_q = 1'b0;
+        reg        bank_strobe = 1'b0;
+        reg [20:0] bank_address = 21'd0;
+        reg [7:0]  bank_data = 8'h00;
+        always @(posedge clock_28) begin
+            bank_data <= core_bus_data;
+            bank_write_q <= bank_write;
+            bank_strobe <= bank_write && !bank_write_q &&
+                           (bank_page == 8'h0a || bank_page == 8'h0b || bank_page == 8'h0e);
+            bank_address <= 21'h040000 + {bank_page, core_bus_address[12:0]};
+        end
+        nexttang_ring_control #(
+            .CLOCK_HZ(28000000),
+            .BAUD_RATE(115200)
+        ) ring (
+            .clock(clock_28),
+            .reset(!machine_locked),
+            .command_valid(board_command_valid),
+            .command_byte(command_byte),
+            .busy(),
+            .cpu_stopped(cpu_stopped),
+            .frames(rzx_frames),
+            .frame_fetches(rzx_frame_fetches),
+            .frame_reads(rzx_frame_reads),
+            .write_valid((ram_a_request && ram_a_read_n) || bank_strobe),
+            .write_address(bank_strobe ? bank_address : ram_a_address),
+            .bank_valid(bank_strobe),
+            .bank_address(bank_address),
+            .bank_data(bank_data),
+            .c_free(!core_c_request && !ram_c_busy),
+            .spi_free(!pi_frame_active),
+            .spi_take(ring_spi_take),
+            .spi_select(ring_spi_select),
+            .spi_byte_valid(ring_spi_byte_valid),
+            .spi_byte(ring_spi_byte),
+            .spi_byte_ready(pi_byte_ready),
+            .spi_done(pi_reply_done),
+            .spi_reply(pi_reply),
+            .spi_idle(pi_spi_idle),
+            .c_take(ring_c_take),
+            .c_request(ring_c_request),
+            .c_read_n(ring_c_read_n),
+            .c_address(ring_c_address),
+            .c_write_data(ring_c_write_data),
+            .c_read_data(ram_c_read_data),
+            .c_ack(ram_c_ack && ring_c_take),
+            .tx(ring_tx)
+        );
+    end else begin : no_rewind_ring
+        assign ring_c_take = 1'b0;
+        assign ring_c_request = 1'b0;
+        assign ring_c_read_n = 1'b1;
+        assign ring_c_address = 23'd0;
+        assign ring_c_write_data = 8'h00;
+        assign ring_spi_take = 1'b0;
+        assign ring_spi_select = 1'b0;
+        assign ring_spi_byte_valid = 1'b0;
+        assign ring_spi_byte = 8'h00;
+        assign ring_tx = 1'b1;
+    end
+    endgenerate
+    assign ram_c_address = ring_c_take ? ring_c_address[20:0] : core_c_address;
+    assign ram_c_address_high = ring_c_take ? ring_c_address[22:21] : 2'b00;
+    assign ram_c_request = ring_c_take ? ring_c_request : core_c_request;
+    assign ram_c_read_n = ring_c_take ? ring_c_read_n : core_c_read_n;
+    assign ram_c_write_data = ring_c_take ? ring_c_write_data : core_c_write_data;
+
+    assign debug_uart_tx = (rzx_play_busy ? rzx_play_tx
+                          : rzx_busy ? rzx_tx
+                          : pi_session ? pi_link_tx
+                          : capture_sending ? capture_transmit
+                          : trace_frozen ? trace_transmit
+                          : log_sending ? log_transmit
+                          : status_transmit) & ring_tx;
 endmodule
 
 `default_nettype wire

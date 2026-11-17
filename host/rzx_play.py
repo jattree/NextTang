@@ -579,7 +579,8 @@ def main(argv: list[str] | None = None) -> int:
                 sent_bytes += sizes[sent]
                 sent += 1
             if sent == len(frames) and not ended:
-                out += b"\xff\xff\x00\x00" + b"\xfe\x01"   # a header that is not played, then the end
+                # part of a header that is never played, then the end (see rzx_session.py)
+                out += b"\xff\xff\x00" + b"\xfe\x01"
                 ended = True
             if out:
                 os.write(fd, out)
