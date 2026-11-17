@@ -431,7 +431,11 @@ same through the debug interface.
     stop covers it; a rewind over many checkpoints is slow (above); the device is
     nearly full, so any change to this image needs several runs to find one that
     meets timing.
-- Next: the ring image with the USB keyboard, bank 5 written back once per rewind
+  - With the USB keyboard as well (`--rzx 3 --rewind-ring 1 --companion 1`): nine
+    runs, none meets timing (107 to 539 setup violations; three would not route).
+    So the ring image takes its keys from the PC, and the keyboard image
+    (rzxK-p1r2) rewinds by replay from the start.
+- Next: room for the ring and the USB keyboard together, bank 5 written back once per rewind
   instead of once per checkpoint undone, the main branch, and the 138K with the
   recording on the SD card.
 
