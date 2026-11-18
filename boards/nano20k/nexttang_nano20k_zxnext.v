@@ -330,7 +330,10 @@ module nexttang_nano20k_zxnext (
     // seen. Off by default until real keys have been tested on the board.
     localparam integer COMPANION = 0;
     // COMPANION_REPORT: 1 reports the Companion's SPI traffic on the debug UART
-    // (diagnostic; see the companion block below).
+    // (diagnostic; see the companion block below). 2 instead copies the BL616's
+    // own console (FPGA pin 70, 2 Mbaud once the Companion runs) to the debug
+    // UART's TX pin, so a USB-UART adapter there shows what the firmware says
+    // when a device is plugged in; the debugger's replies are then not sent.
     localparam integer COMPANION_REPORT = 0;
     // PI_I2S: 1 takes the Pi's I2S audio into the Next (with PI_SPI_PINS); 0
     // ties the inputs low so the core's Pi audio path is optimised away.
@@ -395,7 +398,7 @@ module nexttang_nano20k_zxnext (
             .mouse_buttons(companion_mouse_buttons), .mouse_wheel(companion_mouse_wheel));
         always @(posedge clock_28)
             if (companion_message) companion_message_seen <= 1'b1;
-        if (COMPANION_REPORT != 0) begin : report
+        if (COMPANION_REPORT == 1) begin : report
             // Diagnostic (2026-11-14): what the BL616 does, on the debug UART
             // at 115200: '.' every 64 SPI messages (the Companion is running),
             // 'S' when it reads the FPGA's status, 'K' and two hex digits for
@@ -812,7 +815,8 @@ module nexttang_nano20k_zxnext (
         assign dirty_tx = 1'b1;
     end
     endgenerate
-    assign debug_uart_tx = uart_tx & report_tx & probe_tx & dirty_tx;
+    assign debug_uart_tx = COMPANION_REPORT == 2 ? usb_uart_rx
+                                                 : uart_tx & report_tx & probe_tx & dirty_tx;
     assign companion_irq_n = companion_seen ? 1'b1 : uart_tx;   // BL616 serial RX (debugger firmware); Companion IRQ idle
     // ------------------------------------------------------------- audio
     // AUDIO bit 1: the core's mixed stereo to the on-board MAX98357A over I2S: signed,
