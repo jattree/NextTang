@@ -100,7 +100,10 @@ module nexttang_nano20k_zxnext (
     input  wire        pi_sclk,
     input  wire        debug_uart_rx,
     output wire        debug_uart_tx,
-    input  wire        usb_uart_rx       // BL616 USB serial, FPGA pin 70
+    input  wire        usb_uart_rx,      // BL616 USB serial, FPGA pin 70
+    output wire        esp_tx,           // header 71: to an ESP-01's RX (ESP_UART = 2)
+    input  wire        esp_rx,           // header 72: from an ESP-01's TX
+    output wire        esp_reset_n       // header 48: the ESP-01's RST, low or released
 );
     // ----------------------------------------------------------------- clocks
     wire memory_clock;      // 84.375 MHz
@@ -335,6 +338,17 @@ module nexttang_nano20k_zxnext (
     // UART's TX pin, so a USB-UART adapter there shows what the firmware says
     // when a device is plugged in; the debugger's replies are then not sent.
     localparam integer COMPANION_REPORT = 0;
+    // ESP_UART: the Next's UART 0, which a real Next wires to its ESP Wi-Fi
+    // module. 2: an ESP-01 on header pins 71 (to the module's RX) and 72 (from
+    // its TX), 3.3 V levels, two wires with no hardware flow control, and
+    // header pin 48 to the module's RST (pulled low while NextREG 0x02 bit 7
+    // is set, released otherwise: the module needs its own pull-up). 1: to the
+    // BL616 over the two serial wires the board already has, pin 69 out and
+    // pin 70 in, once the Companion has been seen; that needs BL616 firmware
+    // answering ESP AT commands there (stock Companion firmware treats pin 69
+    // as its level-low interrupt and must not be used with it), and the
+    // Nano 20K's BL616 has no aerial, so 1 is for experiments only.
+    localparam integer ESP_UART = 0;
     // PI_I2S: 1 takes the Pi's I2S audio into the Next (with PI_SPI_PINS); 0
     // ties the inputs low so the core's Pi audio path is optimised away.
     localparam integer PI_I2S = 0;
@@ -488,6 +502,8 @@ module nexttang_nano20k_zxnext (
     wire machine_pi_uart_rxd;
     assign pi_uart_rxd = PI_SPI_PINS != 0 ? machine_pi_uart_rxd : 1'b1;
 
+    wire esp_uart_tx;
+    wire esp_reset;
     nexttang_next_machine #(
         .LAYER2_UNITS(LAYER2_UNITS),
         .CORE_OPTION(CORE_OPTION),
@@ -596,7 +612,10 @@ module nexttang_nano20k_zxnext (
         .pi_uart_rxd(machine_pi_uart_rxd),
         .pi_i2s_bclk(PI_SPI_PINS != 0 && PI_I2S != 0 ? pi_i2s_bclk : 1'b0),
         .pi_i2s_lrclk(PI_SPI_PINS != 0 && PI_I2S != 0 ? pi_i2s_lrclk : 1'b0),
-        .pi_i2s_data(PI_SPI_PINS != 0 && PI_I2S != 0 ? pi_i2s_data : 1'b0)
+        .pi_i2s_data(PI_SPI_PINS != 0 && PI_I2S != 0 ? pi_i2s_data : 1'b0),
+        .esp_uart_rx(ESP_UART == 2 ? esp_rx : ESP_UART == 1 ? (usb_uart_rx || !companion_seen) : 1'b1),
+        .esp_uart_tx(esp_uart_tx),
+        .esp_reset(esp_reset)
     );
 
     // ------------------------------------------------------------ memory
@@ -817,7 +836,13 @@ module nexttang_nano20k_zxnext (
     endgenerate
     assign debug_uart_tx = COMPANION_REPORT == 2 ? usb_uart_rx
                                                  : uart_tx & report_tx & probe_tx & dirty_tx;
-    assign companion_irq_n = companion_seen ? 1'b1 : uart_tx;   // BL616 serial RX (debugger firmware); Companion IRQ idle
+    // Pin 69: the BL616's serial RX (debugger firmware) until the Companion
+    // is seen, then its interrupt line held idle, or the ESP UART (ESP_UART 1).
+    assign companion_irq_n = companion_seen ? (ESP_UART == 1 ? esp_uart_tx : 1'b1) : uart_tx;
+    // Header 71 and 48 belong to the ESP-01 in every build: 71 idles high and
+    // 48 is released when ESP_UART is not 2.
+    assign esp_tx = ESP_UART == 2 ? esp_uart_tx : 1'b1;
+    assign esp_reset_n = (ESP_UART == 2 && esp_reset) ? 1'b0 : 1'bz;   // BL616 serial RX (debugger firmware); Companion IRQ idle
     // ------------------------------------------------------------- audio
     // AUDIO bit 1: the core's mixed stereo to the on-board MAX98357A over I2S: signed,
     // DC removed (nexttang_zxnext_audio_pcm, one sample per I2S frame:

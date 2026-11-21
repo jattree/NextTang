@@ -82,8 +82,9 @@ IO_PORT "led[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
 // PROPOSAL, unverified: Pi0 on the official Pi debug slave's SPI (GPIO 8 CE0,
 // 9 MISO, 10 MOSI, 11 SCLK) and the debug UART, on header pins the USB build
 // leaves free. They are NextNano's LCD / matrix-keyboard pins, so a Pi0 and a
-// matrix keyboard exclude each other. Pins 48, 52, 53, 71 and 72 stay free
-// for an external RP2040/M0S companion (NextNano issue #4).
+// matrix keyboard exclude each other. Header pins 41 and 49 stay free; 48,
+// 71 and 72 are the ESP-01's (below). Pins 52 and 53 are the HDMI socket's
+// EDID lines and 79 the on-board WS2812 (Sipeed's 3921 schematic), not spare.
 IO_LOC "pi_ce0_n" 25;
 IO_PORT "pi_ce0_n" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 IO_LOC "pi_miso" 26;
@@ -119,3 +120,14 @@ IO_PORT "debug_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 // Sipeed's stock firmware; pin 69 (companion_irq_n above) is its RX.
 IO_LOC "usb_uart_rx" 70;
 IO_PORT "usb_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// ESP-01 Wi-Fi module on the Next's UART 0 (build option ESP_UART = 2):
+// header 71 to the module's RX, header 72 from its TX, header 48 to its RST
+// (open drain: low or released; the module's adapter supplies the pull-up).
+// With the option off 71 idles high and 48 is released.
+IO_LOC "esp_tx" 71;
+IO_PORT "esp_tx" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "esp_rx" 72;
+IO_PORT "esp_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "esp_reset_n" 48;
+IO_PORT "esp_reset_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;

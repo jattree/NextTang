@@ -289,7 +289,17 @@ module nexttang_next_machine #(
     // word clock (GPIO 19) and data (GPIO 21). Tie low where there is no Pi.
     input  wire        pi_i2s_bclk,
     input  wire        pi_i2s_lrclk,
-    input  wire        pi_i2s_data
+    input  wire        pi_i2s_data,
+    // The Next's UART 0, which a real Next wires to its ESP Wi-Fi module:
+    // esp_uart_rx is the module's TX (asynchronous; synchronised here),
+    // esp_uart_tx goes to the module's RX. Two wires: hardware flow control
+    // is not supported (the core's CTS is held asserted). esp_reset is high
+    // while NextREG 0x02 bit 7 holds the expansion bus and ESP in reset, which
+    // software uses to recover a module that has stopped answering. Tie
+    // esp_uart_rx high where there is nothing to answer.
+    input  wire        esp_uart_rx,
+    output wire        esp_uart_tx,
+    output wire        esp_reset
 );
     initial begin
         host_keys = 40'b0;
@@ -361,6 +371,8 @@ module nexttang_next_machine #(
     wire        pin_spi_idle = PI_SPI_PINS == 0 || pin_ce_n_sync[1];
     wire [27:0] core_gpio;
     wire [27:0] core_gpio_en;
+    reg  [1:0]  esp_uart_rx_meta = 2'b11;
+    always @(posedge clock_28) esp_uart_rx_meta <= {esp_uart_rx_meta[0], esp_uart_rx};
     reg  [1:0]  pi_uart_txd_meta = 2'b11;
     always @(posedge clock_28) pi_uart_txd_meta <= {pi_uart_txd_meta[0], pi_uart_txd};
     wire        pi_uart_txd_sync = pi_uart_txd_meta[1];
@@ -448,7 +460,7 @@ module nexttang_next_machine #(
         .i_BOOT(core_boot),
         .o_RESET_SOFT(core_soft_reset_request),
         .o_RESET_HARD(core_hard_reset_request),
-        .o_RESET_PERIPHERAL(),
+        .o_RESET_PERIPHERAL(esp_reset),
         .o_FLASH_BOOT(),
         .o_CORE_ID(),
 
@@ -490,8 +502,8 @@ module nexttang_next_machine #(
         .i_SPI_SD_MISO(spi_sd_miso),
         .i_SPI_FLASH_MISO(1'b1),
 
-        .i_UART0_RX(1'b1),
-        .o_UART0_TX(),
+        .i_UART0_RX(esp_uart_rx_meta[1]),
+        .o_UART0_TX(esp_uart_tx),
         .i_UART0_CTS_n(1'b0),
         .o_UART0_RTR_n(),
 

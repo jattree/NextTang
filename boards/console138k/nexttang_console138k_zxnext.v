@@ -323,7 +323,10 @@ module `NEXTTANG_ZXNEXT_TOP (
         .pi_uart_rxd(),
         .pi_i2s_bclk(1'b0),
         .pi_i2s_lrclk(1'b0),
-        .pi_i2s_data(1'b0)
+        .pi_i2s_data(1'b0),
+        .esp_uart_rx(1'b1),          // no Wi-Fi module on this board yet
+        .esp_uart_tx(),
+        .esp_reset()
     );
 
     // ------------------------------------------------------------ keyboard, SD
