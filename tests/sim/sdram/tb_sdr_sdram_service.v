@@ -14,7 +14,9 @@ module tb;
     parameter integer ACCESSES = 40000;
     parameter integer CAPTURE = 1;
     reg mclk = 0; always #5.926 mclk = ~mclk;               // 84.375 MHz
-    reg clk28 = 0; always #17.778 clk28 = ~clk28;            // 28.125 MHz, rises with every third mclk
+    // 28.125 MHz, rising half a memory cycle after every third mclk edge, as on
+    // the board (the PLL's divide-by-3 output; see the board's SDC)
+    reg clk28 = 0; initial begin #5.926; forever #17.778 clk28 = ~clk28; end
     reg reset = 1;
 
     reg a_request = 0, a_cycle = 0, a_read_n = 1; reg [20:0] a_addr = 0; reg [7:0] a_wdata = 0;
@@ -78,19 +80,37 @@ module tb;
         for (i = 0; i < 2097152; i = i + 1) mem[i] = 32'h0;
     end
 
-    task automatic port_a(input reg rd, input [20:0] ad, input [7:0] wd);
+    // A read must hold the CPU from the request's own cycle. A write must not
+    // hold it at all unless the access before it (a write) is still outstanding; with
+    // tight set the next request follows a write in the very next cycle, as a
+    // 28 MHz CPU's would.
+    integer write_waits = 0, tight_starts = 0;
+    reg after_write = 0;
+    task automatic port_a(input reg rd, input [20:0] ad, input [7:0] wd, input reg tight);
+        reg held;
         begin
-            @(posedge clk28); #0.1;
+            if (!(tight && after_write)) begin @(posedge clk28); #0.1; end
+            else tight_starts = tight_starts + 1;
             a_request = 1; a_cycle = 1; a_read_n = !rd; a_addr = ad; a_wdata = wd;
-            #0.5 if (!a_wait) begin $display("FAIL wait not raised in the request cycle"); $finish; end
+            #0.5 if (rd && !a_wait) begin $display("FAIL wait not raised in the request cycle"); $finish; end
+            if (!rd && a_wait) write_waits = write_waits + 1;
+            if (!rd && a_wait && !after_write) begin $display("FAIL a write was held with nothing outstanding"); $finish; end
+            held = a_wait;
             @(posedge clk28); #0.1 a_request = 0;
             while (a_wait) begin @(posedge clk28); #0.1; end
+            // A held write is taken at the edge after wait drops, and the CPU
+            // and the DMA keep its address and byte up through that edge.
+            if (!rd && held) begin @(posedge clk28); #0.1; end
             // the core samples data at the edge where it sees wait low
             if (rd) begin
                 if (a_rdata !== shadow[ad]) begin errors = errors + 1;
                     if (errors < 10) $display("port A read %06h got %02h want %02h", ad, a_rdata, shadow[ad]); end
-            end else shadow[ad] = wd;
-            @(posedge clk28); #0.1 a_cycle = 0;
+                @(posedge clk28); #0.1 a_cycle = 0;
+            end else begin
+                shadow[ad] = wd;
+                a_cycle = 0;
+            end
+            after_write = !rd;
             a_ops = a_ops + 1;
         end
     endtask
@@ -123,11 +143,11 @@ module tb;
         for (n = 0; n < ACCESSES; n = n + 1) begin
             rd = ($random(seed) & 3) != 0;
             ad = pick($random(seed)); ad[20:18] = 3'b000;
-            port_a(rd, ad, $random(seed));
-            repeat ($random(seed) & 3) @(posedge clk28);
+            port_a(rd, ad, $random(seed), n[0]);
+            if (!n[0]) repeat ($random(seed) & 3) @(posedge clk28);
         end
         c_run = 0; repeat (200) @(posedge clk28);
-        $display("port A %0d, port C %0d, refreshes %0d, errors %0d, timeout %0d", a_ops, c_ops, refreshes, errors, fault);
+        $display("port A %0d (%0d straight after a write, %0d writes held), port C %0d, refreshes %0d, errors %0d, timeout %0d", a_ops, tight_starts, write_waits, c_ops, refreshes, errors, fault);
         if (errors == 0 && !fault && refreshes > 2) $display("PASS"); else $display("FAIL");
         $finish;
     end

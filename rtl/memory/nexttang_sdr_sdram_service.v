@@ -129,33 +129,45 @@ module nexttang_sdr_sdram_service #(
     wire       a_done_toggle;           // memory domain
     wire [31:0] a_word;                 // memory domain, stable once done
     reg  [1:0] a_lane = 2'd0;
-    // Completion crosses in two machine stages and the word is taken every
-    // cycle, so by the cycle a_done_sync changes, a_word_sync was taken a
-    // whole machine cycle after the word settled. (The machine clock rises
-    // half a memory cycle after the memory clock, so a word taken on the same
-    // edge as its toggle had only 5.9 ns and could arrive stale.)
-    reg        a_done_meta = 1'b0, a_done_sync = 1'b0;
+    // Completion crosses in one machine stage. The clocks are related and the
+    // static timer checks the crossing (the machine clock rises half a memory
+    // cycle after the memory clock), word and toggle alike. Until 2026-11-21
+    // there were two stages, which cost every read a machine cycle of wait
+    // for nothing.
+    reg        a_done_sync = 1'b0;
     reg [31:0] a_word_sync = 32'd0;
     always @(posedge machine_clock) begin
-        a_done_meta <= a_done_toggle;
-        a_done_sync <= a_done_meta;
+        a_done_sync <= a_done_toggle;
         a_word_sync <= a_word;
     end
     wire       a_pending = a_toggle != a_done_sync;
-    // Raised in the request's own cycle, before the core can sample it, and
-    // held while the access is outstanding.
-    assign a_wait = a_cycle_request && (a_request || a_pending);
+    // A read holds the CPU from the request's own cycle, before the core can
+    // sample wait, until its data is here. A write does not hold it: the
+    // official board's SRAM takes a write with no wait at any speed, so the
+    // address and byte are taken at the request and the CPU goes on while the
+    // SDRAM does the write. Only a request that arrives while the previous
+    // access (always such a write) is still outstanding waits, held as
+    // a_deferred with the CPU stopped, and starts when that one is done.
+    // Only the flag is kept, not the address and byte: a held write is taken
+    // on the edge after wait drops, and both masters (the T80 and the zxnDMA)
+    // keep their address and data up through that edge.
+    reg        a_deferred = 1'b0;       // a request waits for the outstanding access
+    reg        a_holds = 1'b0;          // the outstanding access is a read
+    wire       a_unstarted = a_request || a_deferred;
+    assign a_wait = a_cycle_request && ((a_unstarted && (a_pending || !a_read_n)) || (a_pending && a_holds));
     always @(posedge machine_clock) begin
-        if (a_request && !a_pending) begin
+        if (a_unstarted && !a_pending) begin
             a_toggle <= !a_toggle;
             a_op_read_n <= a_read_n;
             a_op_address <= a_address;
             a_op_data <= a_write_data;
-            a_lane <= a_address[1:0];
-        end
+            a_holds <= !a_read_n;
+            if (!a_read_n) a_lane <= a_address[1:0];
+            a_deferred <= 1'b0;
+        end else if (a_request) a_deferred <= 1'b1;
+        if (!a_cycle_request) a_deferred <= 1'b0;
     end
-    // a_word_sync is taken on the same machine edge as a_done_sync, so the
-    // byte is valid from the cycle wait drops; a_lane is held.
+    // The byte is valid from the cycle wait drops; a_lane is the last read's.
     assign a_read_data = a_word_sync[8 * a_lane +: 8];
     // Port C: same handshake, acknowledged with a one-cycle pulse.
     reg        c_toggle = 1'b0;
