@@ -545,6 +545,7 @@ module nexttang_nano20k_zxnext (
     nexttang_next_machine #(
         .LAYER2_UNITS(LAYER2_UNITS),
         .CORE_OPTION(CORE_OPTION),
+        .MACHINE_HZ(28125000),            // clock_28 is 84.375 MHz / 3
         .SD_MONITOR(STATUS_LINE),         // reported on the status line
         .DEBUG_TAPS(0),                   // the block RAMs go to video and Layer 2
         .STATUS_LINE(STATUS_LINE),

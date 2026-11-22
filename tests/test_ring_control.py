@@ -194,7 +194,8 @@ module testbench;
         run(20);
         send("r"); send("0"); send("0"); finish_command; $display(""); compare(4);
         cpu_stopped = 0; run(20);
-        send("r"); send("3"); send("f"); finish_command; $display(""); compare(0);
+        // r80: more than back_steps holds; saturates and goes back past everything
+        send("r"); send("8"); send("0"); finish_command; $display(""); compare(0);
         send("i"); finish_command; $display("");
         if (good_seen == 0 || stale_seen == 0) $display("FAIL mirror good %0d, stale %0d: one way was never used", good_seen, stale_seen);
         $display("END");

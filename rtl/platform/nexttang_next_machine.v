@@ -185,7 +185,10 @@ module nexttang_next_machine #(
     // NextZXOS; nothing keeps the time while the board is off.
     parameter integer RTC = 0,
     // 1: that clock's one-second counter in a GW2A DSP block (see nexttang_rtc).
-    parameter integer RTC_DSP = 0
+    parameter integer RTC_DSP = 0,
+    // clock_28's real frequency, for the RTC's second (Nano 20K: 28125000; at
+    // 28000000 there the clock gained about 6.5 minutes a day)
+    parameter integer MACHINE_HZ = 28000000
 ) (
     // clocks and resets
     input  wire        clock_28,
@@ -975,7 +978,7 @@ module nexttang_next_machine #(
 
     generate
     if (RTC != 0) begin : rtc
-        nexttang_rtc #(.CLOCK_HZ(28000000), .DSP_PRESCALER(RTC_DSP)) clock_chip (
+        nexttang_rtc #(.CLOCK_HZ(MACHINE_HZ), .DSP_PRESCALER(RTC_DSP)) clock_chip (
             .clock(clock_28), .reset(!machine_locked),
             .scl(i2c_scl), .sda_in(i2c_sda), .sda_out(rtc_sda),
             .command_valid(board_command_valid), .command_byte(command_byte),

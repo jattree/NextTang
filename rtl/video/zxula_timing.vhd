@@ -177,7 +177,7 @@ begin
 
    -- display dimensions
 
-   process (i_timing, i_50_60)
+   process (i_timing, i_50_60, center)   -- NextTang: center added (it is read below; Gowin added it itself)
    begin
       
       if i_timing(2) = '1' then

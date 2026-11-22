@@ -507,7 +507,10 @@ module nexttang_ring_control #(
                 store_prime <= what == 2'd0;
                 store_checkpoint <= what == 2'd1;
                 store_rewind <= what == 2'd2;
-                back_steps <= argument[TABLE_BITS:0];
+                // the two digits allow up to FF, more than back_steps holds:
+                // saturate, and the store clamps to what it holds (r80-rFF
+                // used to lose bit 7 and rewind by 0-7F)
+                back_steps <= (argument > {(TABLE_BITS+1){1'b1}}) ? {(TABLE_BITS+1){1'b1}} : argument[TABLE_BITS:0];
                 state <= C_STORE_WAIT;
             end
             C_STORE_WAIT:
