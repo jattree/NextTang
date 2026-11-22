@@ -43,9 +43,18 @@ repository; build it as below.
   unchanged.
 - After a normal power-up the board enumerates as the SIPEED USB Debugger, the
   FPGA is detected over JTAG, and the NextTang image boots from flash.
-- **Not yet tested with the new file:** a keyboard, a mouse or a joypad through
-  the splitter. The keyboard was hardware-verified with the earlier file
-  (2026-11-14).
+- Tested with the new file on 2026-11-22, the board powered through a USB-C
+  splitter and running image hov2-p1r2 (boards `955f3d6`, `--companion 1`):
+  - a USB keyboard: letters type in NextBASIC; a probe program reading the
+    keyboard rows saw Ctrl and Alt (left and right) as SYMBOL SHIFT, Shift as
+    CAPS SHIFT and Ctrl+P as SYMBOL SHIFT with P, which NextBASIC prints as `"`;
+  - a Trust USB mouse, which gave nothing with the earlier file: a probe
+    program adding up the Kempston mouse ports' movement saw about 500 to 700
+    counts for a slow 5 cm stroke in each of the four directions with the
+    right sign, +531 and -1080 for fast flicks right and left, the left, right
+    and middle buttons, and the wheel nibble changing.
+- **Not yet tested with the new file:** a joypad, and a keyboard and mouse
+  together on a hub.
 
 ## Building the FPGA-Companion
 
