@@ -17,6 +17,7 @@ profile=
 output_dir=
 boot_image=
 place_option=1
+map_option=1     # --map 1-4: Gowin's LUT mapping mode (2: LUT5-oriented, no more LUTs)
 route_option=1   # 2026-11-12: place 1 / route 1 meets timing with nothing violated (HDMI sound
                  # +0.025 ns, 10 of 10 boots; no sound +0.284 ns, 15 of 15). Gowin's result
                  # moves with any change: check the report and boot-test every new build.
@@ -50,6 +51,7 @@ while (($#)); do
         --profile) [[ $# -ge 2 ]] || exit 2; profile=$2; shift 2 ;;
         --output) [[ $# -ge 2 ]] || exit 2; output_dir=$2; shift 2 ;;
         --place) [[ $# -ge 2 ]] || exit 2; place_option=$2; shift 2 ;;
+        --map) [[ $# -ge 2 && $2 == [1-4] ]] || exit 2; map_option=$2; shift 2 ;;
         --route) [[ $# -ge 2 ]] || exit 2; route_option=$2; shift 2 ;;
         --boot-image) [[ $# -ge 2 ]] || exit 2; boot_image=$2; shift 2 ;;
         --audio) [[ $# -ge 2 && $2 == [0-3] ]] || exit 2; audio=$2; shift 2 ;;
@@ -69,7 +71,7 @@ while (($#)); do
         --print-sources) print_sources=1; shift ;;
         -h|--help)
             printf '%s\n' 'usage: boards/nano20k/build_zxnext.sh --profile skeleton|first [--print-sources] [--output DIR]' \
-                '       [--boot-image FILE] [--audio 0-3] [--status-line 0|1] [--pi-pins 0|1] [--companion 0|1] [--esp-uart 0-2] [--word-cache 0|2|4] [--pi-i2s 0|1] [--rzx 0-3] [--video-probe 0|1] [--rewind-ring 0|1] [--dirty-probe 0|1] [--divider-skew 0-4] [--place N] [--route N]'
+                '       [--boot-image FILE] [--audio 0-3] [--status-line 0|1] [--pi-pins 0|1] [--companion 0|1] [--esp-uart 0-2] [--word-cache 0|2|4] [--pi-i2s 0|1] [--rzx 0-3] [--video-probe 0|1] [--rewind-ring 0|1] [--dirty-probe 0|1] [--divider-skew 0-4] [--place N] [--route N] [--map 1-4]'
             exit 0 ;;
         *) printf 'nano20k zxnext build: unknown argument: %s\n' "$1" >&2; exit 2 ;;
     esac
@@ -205,8 +207,8 @@ if [[ "$status_line" == 0 ]]; then
         [[ "${source_files[$i]}" == "$sdc_source" ]] && source_files[i]="$output_dir/nano20k_zxnext.sdc"
     done
 fi
-printf 'word_cache=%s esp_uart=%s audio=%s status_line=%s pi_pins=%s companion=%s pi_i2s=%s rzx=%s video_probe=%s divider_skew=%s place=%s route=%s\n' "$word_cache" "$esp_uart" "$audio" "$status_line" "$pi_pins" "$companion" "$pi_i2s" "$rzx" "$video_probe" "$divider_skew" \
-    "$place_option" "$route_option" >"$output_dir/build-options.txt"
+printf 'word_cache=%s esp_uart=%s audio=%s status_line=%s pi_pins=%s companion=%s pi_i2s=%s rzx=%s video_probe=%s divider_skew=%s place=%s route=%s map=%s\n' "$word_cache" "$esp_uart" "$audio" "$status_line" "$pi_pins" "$companion" "$pi_i2s" "$rzx" "$video_probe" "$divider_skew" \
+    "$place_option" "$route_option" "$map_option" >"$output_dir/build-options.txt"
 sha256sum "${source_files[@]}" >"$output_dir/source-sha256.txt"
 {
     printf 'set_device -device_version C GW2AR-LV18QN88C8/I7\n'
@@ -216,6 +218,7 @@ sha256sum "${source_files[@]}" >"$output_dir/source-sha256.txt"
     printf 'set_option -verilog_std sysv2017\n'
     printf 'set_option -gen_text_timing_rpt 1\n'
     printf 'set_option -use_sspi_as_gpio 1\n'
+    printf 'set_option -map_option %s\n' "$map_option"
     printf 'set_option -place_option %s\n' "$place_option"
     printf 'set_option -route_option %s\n' "$route_option"
     # SDRAM command, address and data registers in their I/O cells, so the

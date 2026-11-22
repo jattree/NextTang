@@ -54,6 +54,17 @@ class SdrSdramServiceTest(unittest.TestCase):
     def test_port_c_handover_bench_catches_the_fault(self) -> None:
         self.assertIn("never acked", self.port_c_handover(0))
 
+    @unittest.skipUnless(shutil.which("ghdl"), "ghdl not installed")
+    def test_sprite_line_buffer_banks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for step in (["ghdl", "-a", "--std=08", str(REPO_ROOT / "rtl" / "core" / "memory" / "nexttang_sdpram.vhd"),
+                          str(SIM / "video" / "tb_spram_320_9.vhd")],
+                         ["ghdl", "-e", "--std=08", "tb_spram_320_9"],
+                         ["ghdl", "-r", "--std=08", "tb_spram_320_9"]):
+                result = subprocess.run(step, cwd=directory, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("PASS", result.stdout + result.stderr)
+
     def test_layer2_rows(self) -> None:
         output = self.iverilog(SIM / "sdram" / "tb_sdr_layer2.v", {"MODE": 0, "LINES": 24, "INJECT_LINE": 10})
         self.assertIn("PASS", output, output)

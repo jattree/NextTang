@@ -117,14 +117,31 @@ entity spram_320_9 is
     );
 end entity;
 
+-- A sprite line buffer holds 320 pixels. Built as one 512-entry RAM it took
+-- 96 distributed-RAM cells per buffer for 192 entries nobody writes (both of
+-- its writers stop at 319, sprites.vhd), so it is a 256-entry and a 64-entry
+-- bank. Entries 320-511 read 0, as they did: they were never written.
 architecture rtl of spram_320_9 is
+    signal we_lo, we_hi : std_logic;
+    signal q_lo, q_hi   : std_logic_vector(8 downto 0);
 begin
-    ram : entity work.sdpram
-        generic map (addr_width_g => 9, data_width_g => 9)
+    we_lo <= WE when A(8) = '0' else '0';
+    we_hi <= WE when A(8 downto 6) = "100" else '0';
+    lo : entity work.sdpram
+        generic map (addr_width_g => 8, data_width_g => 9)
         port map (
-            clk_a_i => CLK, we_a_i => WE, addr_a_i => A, data_a_i => D,
-            addr_b_i => A, data_b_o => SPO
+            clk_a_i => CLK, we_a_i => we_lo, addr_a_i => A(7 downto 0), data_a_i => D,
+            addr_b_i => A(7 downto 0), data_b_o => q_lo
         );
+    hi : entity work.sdpram
+        generic map (addr_width_g => 6, data_width_g => 9)
+        port map (
+            clk_a_i => CLK, we_a_i => we_hi, addr_a_i => A(5 downto 0), data_a_i => D,
+            addr_b_i => A(5 downto 0), data_b_o => q_hi
+        );
+    SPO <= q_lo when A(8) = '0' else
+           q_hi when A(7 downto 6) = "00" else
+           (others => '0');
 end architecture;
 
 library ieee;
