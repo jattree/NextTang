@@ -173,6 +173,10 @@ if [[ "$profile" == diagnostic-ddr3 ]]; then
         "$repo_root/rtl/input/nexttang_usb_keyboard_matrix.v"
         "$repo_root/rtl/input/nexttang_usb_gamepad_kempston.v"
         "$repo_root/rtl/input/nexttang_keyboard_matrix.v"
+        "$repo_root/rtl/input/nexttang_usb_report_events.v"
+        "$repo_root/rtl/input/nexttang_usb_next_keyboard.v"
+        "$repo_root/rtl/input/keymaps.vhd"
+        "$repo_root/rtl/input/membrane.vhd"
         "$repo_root/boards/console138k/nexttang_console138k_usb_pll.v"
     )
 fi

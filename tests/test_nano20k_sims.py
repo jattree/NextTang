@@ -132,6 +132,18 @@ class SdrSdramServiceTest(unittest.TestCase):
             output = subprocess.run(["vvp", "-n", str(image)], cwd=directory, capture_output=True, text=True).stdout
             self.assertIn("PASS", output, output)
 
+    def test_usb_report_events(self) -> None:
+        # boot keyboard reports in, press and release events out (the 138K's path into the Next's keymap)
+        output = self.iverilog_plain(SIM / "input" / "tb_usb_report_events.v",
+                                     REPO_ROOT / "rtl" / "input" / "nexttang_usb_report_events.v")
+        self.assertIn("PASS", output, output)
+
+    def iverilog_plain(self, testbench: Path, *sources: Path) -> str:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sim.vvp"
+            run(["iverilog", "-g2012", "-o", str(image), str(testbench), *map(str, sources)], REPO_ROOT)
+            return run(["vvp", "-n", str(image)], REPO_ROOT)
+
     def test_layer2_rows(self) -> None:
         output = self.iverilog(SIM / "sdram" / "tb_sdr_layer2.v", {"MODE": 0, "LINES": 24, "INJECT_LINE": 10})
         self.assertIn("PASS", output, output)

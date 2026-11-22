@@ -237,6 +237,13 @@ module `NEXTTANG_ZXNEXT_TOP (
     localparam integer SD_MONITOR = 0;
 `endif
 
+    // the Next keyboard's extra keys and keymap writes (see NEXT_KEYMAP)
+    wire [15:0] extended_keys;
+    wire [8:0]  keymap_address;
+    wire [7:0]  keymap_data;
+    wire        keymap_write;
+    wire        keyboard_cancel_extended;
+
     nexttang_next_machine #(
         .LAYER2_UNITS(LAYER2_UNITS),
         .CORE_OPTION(CORE_OPTION),
@@ -297,8 +304,9 @@ module `NEXTTANG_ZXNEXT_TOP (
 
         .keyboard_rows(keyboard_rows),
         .keyboard_columns(keyboard_columns),
-        .extended_keys(16'h0000),                          // no extra Next keys here yet (1 = pressed)
-        .keymap_address(), .keymap_data(), .keymap_write(), .keyboard_cancel_extended(),
+        .extended_keys(extended_keys),                     // the Next keyboard's extra keys, 1 = pressed
+        .keymap_address(keymap_address), .keymap_data(keymap_data), .keymap_write(keymap_write),
+        .keyboard_cancel_extended(keyboard_cancel_extended),
         .function_keys(function_keys),
         .left_joystick(left_joystick),
         .right_joystick(12'b0),
@@ -487,23 +495,73 @@ module `NEXTTANG_ZXNEXT_TOP (
     // F1-F10 for the core's hot keys (F1 hard reset, F3 50/60 Hz, F4 soft
     // reset, F8 CPU speed, F9 Multiface NMI, F10 divMMC NMI); the core acts on
     // a press, so a held key does not repeat.
+    reg [39:0] host_keys_meta = 40'b0, host_keys_sync = 40'b0;   // the debug UART's keys alone (NEXT_KEYMAP)
     reg [10:1] functions_meta = 10'b0;
     reg [10:1] functions_sync = 10'b0;
 
     always @(posedge clock_28) begin
         keys_meta <= usb1_keys | usb2_keys | host_keys;
         keys_sync <= keys_meta;
+        host_keys_meta <= host_keys;
+        host_keys_sync <= host_keys_meta;
         functions_meta <= usb1_functions | usb2_functions | host_functions;
         functions_sync <= functions_meta;
         kempston_meta <= usb1_kempston | usb2_kempston;
         kempston_sync <= kempston_meta;
     end
 
-    nexttang_keyboard_matrix keyboard_scan (
-        .row_select(keyboard_rows),
-        .keys(keys_sync),
-        .columns(keyboard_columns)
-    );
+    // NEXT_KEYMAP 1: the USB keyboards work as the Next's own keyboard, as on
+    // the Nano 20K since boards 97c3c2e: each report's changes become key
+    // events (nexttang_usb_report_events) that go through the Next's keymap
+    // (nexttang_usb_next_keyboard) into the official membrane, which gives
+    // the core its extra keys and the debug keys a place in the same scan.
+    // Off until it has been tried on this board; 0 keeps the 40-key matrix.
+    localparam integer NEXT_KEYMAP = 0;
+    generate
+    if (NEXT_KEYMAP != 0) begin : next_keyboard
+        wire       usb1_event, usb2_event;
+        wire [7:0] usb1_event_byte, usb2_event_byte;
+        wire [6:0] usb1_columns, usb2_columns;
+        wire [2:0] membrane_row;
+        reg  [8:0] membrane_divider = 9'd0;
+        reg        membrane_enable = 1'b0;
+        always @(posedge clock_28) begin
+            membrane_divider <= membrane_divider + 9'd1;
+            membrane_enable <= &membrane_divider;
+        end
+        nexttang_usb_report_events usb1_events (
+            .clock(clock_28), .reset(1'b0), .keyboard(usb1_type == 2'd1), .modifiers(usb1_modifiers),
+            .keys({usb1_key6, usb1_key5, usb1_key4, usb1_key3, usb1_key2, usb1_key1}),
+            .event_valid(usb1_event), .event_byte(usb1_event_byte));
+        nexttang_usb_report_events usb2_events (
+            .clock(clock_28), .reset(1'b0), .keyboard(usb2_type == 2'd1), .modifiers(usb2_modifiers),
+            .keys({usb2_key6, usb2_key5, usb2_key4, usb2_key3, usb2_key2, usb2_key1}),
+            .event_valid(usb2_event), .event_byte(usb2_event_byte));
+        nexttang_usb_next_keyboard usb1_keyboard (
+            .clock(clock_28), .reset(1'b0), .event_valid(usb1_event), .event_byte(usb1_event_byte),
+            .keymap_address(keymap_address), .keymap_data(keymap_data), .keymap_write(keymap_write),
+            .membrane_row(membrane_row), .membrane_columns(usb1_columns));
+        nexttang_usb_next_keyboard usb2_keyboard (
+            .clock(clock_28), .reset(1'b0), .event_valid(usb2_event), .event_byte(usb2_event_byte),
+            .keymap_address(keymap_address), .keymap_data(keymap_data), .keymap_write(keymap_write),
+            .membrane_row(membrane_row), .membrane_columns(usb2_columns));
+        wire [4:0] host_row_keys = host_keys_sync[5 * membrane_row +: 5];
+        membrane keyboard_scan (
+            .i_CLK(clock_28), .i_CLK_EN(membrane_enable), .i_reset(1'b0),
+            .i_rows(keyboard_rows), .o_cols(keyboard_columns),
+            .o_membrane_rows(), .o_membrane_ridx(membrane_row),
+            .i_membrane_cols(usb1_columns & usb2_columns & {2'b11, ~host_row_keys}),
+            .i_cancel_extended_entries(keyboard_cancel_extended),
+            .o_extended_keys(extended_keys));
+    end else begin : spectrum_keyboard
+        assign extended_keys = 16'h0000;
+        nexttang_keyboard_matrix keyboard_scan (
+            .row_select(keyboard_rows),
+            .keys(keys_sync),
+            .columns(keyboard_columns)
+        );
+    end
+    endgenerate
 
     // Kempston's fire, up, down, left and right already sit where the core's
     // joystick word puts B, U, D, L and R.
