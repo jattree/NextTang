@@ -99,6 +99,24 @@ class SdrSdramServiceTest(unittest.TestCase):
                                          f"-gSCLK_HZ={hz}", "-gREADS=20"], cwd=directory, capture_output=True, text=True)
                 self.assertIn("PASS", result.stdout + result.stderr, result.stdout + result.stderr)
 
+    @unittest.skipUnless(shutil.which("ghdl"), "ghdl not installed")
+    def test_internal_spi_master_at_3_5_mhz(self) -> None:
+        # the FPGA's own SPI master reads the debug slave correctly at the
+        # board's setting (HALF_CLOCKS 4) and one step faster
+        with tempfile.TemporaryDirectory() as directory:
+            steps = (["ghdl", "-a", "--std=08", "-fsynopsys", str(REPO_ROOT / "rtl" / "serial" / "spi_slave.vhd"),
+                      str(REPO_ROOT / "rtl" / "debug" / "nexttang_pi_spi_master.vhd"),
+                      str(REPO_ROOT / "rtl" / "device" / "pi_debug_control" / "pi_debug_control_param.vhd"),
+                      str(SIM / "debug" / "tb_internal_spi_master.vhd")],
+                     ["ghdl", "-e", "--std=08", "-fsynopsys", "tb_internal_spi_master"])
+            for step in steps:
+                result = subprocess.run(step, cwd=directory, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for half in (4, 3):
+                result = subprocess.run(["ghdl", "-r", "--std=08", "-fsynopsys", "tb_internal_spi_master",
+                                         f"-gHALF_CLOCKS={half}", "-gREADS=15"], cwd=directory, capture_output=True, text=True)
+                self.assertIn("PASS", result.stdout + result.stderr, result.stdout + result.stderr)
+
     def test_layer2_rows(self) -> None:
         output = self.iverilog(SIM / "sdram" / "tb_sdr_layer2.v", {"MODE": 0, "LINES": 24, "INJECT_LINE": 10})
         self.assertIn("PASS", output, output)

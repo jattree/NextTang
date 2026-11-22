@@ -945,7 +945,10 @@ module nexttang_next_machine #(
         .hit(bp_hit)
     );
 
-    nexttang_pi_spi_master pi_debug_spi (
+    // 3.5 MHz SCLK (HALF_CLOCKS 4; it was 8): the slave answers in time at
+    // HALF_CLOCKS 3 since add72be (tests/sim/debug/tb_internal_spi_master.vhd),
+    // and every debug-UART command and rewind-ring transfer takes half as long.
+    nexttang_pi_spi_master #(.HALF_CLOCKS(4)) pi_debug_spi (
         .clock(clock_28),
         .reset(!machine_locked),
         .select_in(ring_spi_take ? ring_spi_select : pi_select),
