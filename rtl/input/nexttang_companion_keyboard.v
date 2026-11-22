@@ -68,7 +68,12 @@
 
 `default_nettype none
 
-module nexttang_companion_keyboard (
+module nexttang_companion_keyboard #(
+    // 1: the 40-key Spectrum matrix (keys) and F1-F10 from the held usages;
+    // 0: no matrix (keys = 0; a Next-keymap path takes the events from
+    // keyboard_message instead), F1-F10 straight from the events
+    parameter integer KEY_MATRIX = 1
+) (
     input  wire        clock,           // machine domain
     input  wire        reset,
     // the BL616's SPI
@@ -235,39 +240,54 @@ module nexttang_companion_keyboard (
         end
     end
 
-    // One decoder visits the six held usages in turn and the result is
-    // published every six clocks (0.2 us at 28 MHz), instead of six copies
-    // of the decoder side by side (about 200 LUTs on the Nano 20K). Each
-    // published snapshot is the OR of all six slots as they stood during its
-    // pass, so several keys that make the same Spectrum key (or CAPS/SYMBOL
-    // SHIFT) still hold it while any one of them is down.
-    reg  [2:0]  scan_slot = 3'd0;
-    reg  [39:0] scan_keys = 40'd0;
-    reg  [10:1] scan_functions = 10'd0;
-    reg  [39:0] keys_q = 40'd0;
-    reg  [10:1] functions_q = 10'd0;
-    wire [39:0] slot_keys;
-    wire [10:1] slot_functions;
-    nexttang_usb_keyboard_matrix decode (
-        .device_type(2'd1), .modifiers(modifiers),
-        .key1({1'b0, held[scan_slot]}), .key2(8'd0), .key3(8'd0),
-        .key4(8'd0), .key5(8'd0), .key6(8'd0),
-        .keys(slot_keys), .function_keys(slot_functions));
-    always @(posedge clock) begin
-        if (scan_slot == 3'd5) begin
-            keys_q <= scan_keys | slot_keys;
-            functions_q <= scan_functions | slot_functions;
-            scan_keys <= 40'd0;
-            scan_functions <= 10'd0;
-            scan_slot <= 3'd0;
-        end else begin
-            scan_keys <= scan_keys | slot_keys;
-            scan_functions <= scan_functions | slot_functions;
-            scan_slot <= scan_slot + 3'd1;
+    generate
+    if (KEY_MATRIX != 0) begin : key_matrix
+        // One decoder visits the six held usages in turn and the result is
+        // published every six clocks (0.2 us at 28 MHz), instead of six copies
+        // of the decoder side by side (about 200 LUTs on the Nano 20K). Each
+        // published snapshot is the OR of all six slots as they stood during its
+        // pass, so several keys that make the same Spectrum key (or CAPS/SYMBOL
+        // SHIFT) still hold it while any one of them is down.
+        reg  [2:0]  scan_slot = 3'd0;
+        reg  [39:0] scan_keys = 40'd0;
+        reg  [10:1] scan_functions = 10'd0;
+        reg  [39:0] keys_q = 40'd0;
+        reg  [10:1] functions_q = 10'd0;
+        wire [39:0] slot_keys;
+        wire [10:1] slot_functions;
+        nexttang_usb_keyboard_matrix decode (
+            .device_type(2'd1), .modifiers(modifiers),
+            .key1({1'b0, held[scan_slot]}), .key2(8'd0), .key3(8'd0),
+            .key4(8'd0), .key5(8'd0), .key6(8'd0),
+            .keys(slot_keys), .function_keys(slot_functions));
+        always @(posedge clock) begin
+            if (scan_slot == 3'd5) begin
+                keys_q <= scan_keys | slot_keys;
+                functions_q <= scan_functions | slot_functions;
+                scan_keys <= 40'd0;
+                scan_functions <= 10'd0;
+                scan_slot <= 3'd0;
+            end else begin
+                scan_keys <= scan_keys | slot_keys;
+                scan_functions <= scan_functions | slot_functions;
+                scan_slot <= scan_slot + 3'd1;
+            end
         end
+        assign keys = keys_q;
+        assign function_keys = functions_q;
+    end else begin : events_only
+        // F1-F10 (usages 0x3A-0x43) held while their key is down
+        reg [10:1] functions_q = 10'd0;
+        always @(posedge clock) begin
+            if (reset)
+                functions_q <= 10'd0;
+            else if (keyboard_message && usage >= 7'h3A && usage <= 7'h43)
+                functions_q[usage - 7'h39] <= !release_key;
+        end
+        assign keys = 40'd0;
+        assign function_keys = functions_q;
     end
-    assign keys = keys_q;
-    assign function_keys = functions_q;
+    endgenerate
 endmodule
 
 `default_nettype wire

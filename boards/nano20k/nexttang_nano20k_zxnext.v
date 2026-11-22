@@ -377,13 +377,11 @@ module nexttang_nano20k_zxnext (
     // as a shaking picture that blanked every so often (2026-11-15).
     localparam integer FRAME_EXACT = 1;
 
-    // keys and F1-F10 held from the host over the debug UART
-    reg [39:0] keys_meta = 40'd0, keys_sync = 40'd0;
-    reg [10:1] functions_meta = 10'd0, functions_sync = 10'd0;
-    always @(posedge clock_28) begin
-        keys_meta <= host_keys; keys_sync <= keys_meta;
-        functions_meta <= host_functions; functions_sync <= functions_meta;
-    end
+    // keys and F1-F10 held from the host over the debug UART: registers in
+    // the machine's own clock already (nexttang_next_machine), so used as
+    // they are (two more clock_28 stages here cost 100 registers)
+    wire [39:0] keys_sync = host_keys;
+    wire [10:1] functions_sync = host_functions;
     // A USB keyboard through the on-board BL616 running FPGA-Companion (a USB-C
     // OTG splitter on the Nano's port): its SPI on pins 86/13/76/75
     // (nexttang_companion_keyboard). Its keys and F-keys add to the host's.
@@ -400,7 +398,7 @@ module nexttang_nano20k_zxnext (
     reg         companion_message_seen = 1'b0;
     generate
     if (COMPANION != 0) begin : companion
-        nexttang_companion_keyboard companion_keyboard (
+        nexttang_companion_keyboard #(.KEY_MATRIX(0)) companion_keyboard (   // keys go through the Next keymap
             .clock(clock_28), .reset(machine_reset),
             .spi_cs_n(companion_cs_n), .spi_sclk(companion_sclk), .spi_mosi(companion_mosi),
             .spi_miso(companion_miso),

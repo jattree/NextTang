@@ -239,6 +239,17 @@ class CompanionKeyboardTest(unittest.TestCase):
             output = run(["vvp", "-n", str(image)], REPO_ROOT)
             self.assertIn("PASS", output, output)
 
+    def test_function_keys_from_events(self) -> None:
+        # KEY_MATRIX 0 (the Nano 20K): no matrix, F1-F10 from the key events
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sim.vvp"
+            run(["iverilog", "-g2005", "-o", str(image),
+                 str(SIM / "input" / "tb_companion_fkeys.v"),
+                 str(REPO_ROOT / "rtl" / "input" / "nexttang_companion_keyboard.v"),
+                 str(REPO_ROOT / "rtl" / "input" / "nexttang_usb_keyboard_matrix.v")], REPO_ROOT)
+            output = run(["vvp", "-n", str(image)], REPO_ROOT)
+            self.assertIn("PASS", output, output)
+
 
 
 @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "iverilog not installed")
