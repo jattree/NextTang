@@ -215,6 +215,26 @@ All targets will use the same core and debugger protocol. Features
 that depend on available FPGA resources will be discovered at runtime through a
 capability bitmap instead of creating incompatible tools.
 
+### Tang Nano 20K: USB chip (BL616) firmware
+
+The Nano 20K's USB-C socket belongs to a second chip, a Bouffalo BL616, which
+runs two programs: Sipeed's factory FPGA Partner (the USB debugger that loads
+bitstreams) and the FPGA-Companion, which passes a USB keyboard, mouse or
+joypad to the FPGA when the board is powered without a PC. NextTang uses the
+FPGA-Companion and never writes the FPGA Partner.
+
+| | |
+| --- | --- |
+| On the reference board (v3923) since 2026-11-21 | [MiSTle-Dev/FPGA-Companion](https://github.com/MiSTle-Dev/FPGA-Companion) at commit [`c6eb3d6`](https://github.com/MiSTle-Dev/FPGA-Companion/commit/c6eb3d68eb6cf2681a8d11aeec672cb1865157cc) (`1.4.35-1-gc6eb3d6`), unmodified source, built here with `TANG_BOARD=nano20k_v3923`; 750,160 bytes, SHA-256 `51a12c8e...347fd716` |
+| Before | The NextNano v1.0 release file `fpga_companion_tn20k_3923.bin` from [RetroSilicon/NextNano](https://github.com/RetroSilicon/NextNano/releases), confirmed byte for byte by reading the chip back |
+| Why | `c6eb3d6` sets the HID interrupt transfer timeout to 0, a fix for USB mice that is not in release 1.4.35 |
+| How | Hold UPDATE while plugging in USB (the chip appears as `349b:6160`), back up the flash, then write the file at `0x40000` only with Bouffalo's `BLFlashCommand` |
+| Evidence | The chip's SHA-256 of the new program matches the file; the FPGA Partner region reads back unchanged; the board still enumerates as the debugger and boots the NextTang image. A keyboard and mouse have **not yet been tested** with the new file |
+
+Build steps, the exact update commands and recovery are in
+[`docs/nano20k-bl616-firmware.md`](https://github.com/jattree/NextTang/blob/boards/docs/nano20k-bl616-firmware.md)
+on the `boards` branch.
+
 ## Planned build profiles
 
 | Profile | Purpose | Expected targets |
