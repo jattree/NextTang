@@ -7449,7 +7449,7 @@ gen_bram_debug_b5_0: if (g_option(10) = '0') generate
    vram_b5_we <= b5w_pend;   -- NextTang: registered (issue #14)
    vram_b5_di <= b5w_data;
    vram_bank5_a0 <= b5w_addr when b5w_pend = '1' else
-                    (sram_pre_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr;   -- NextTang: pre (see b5w_addr)
+                    (sram_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr;
 
 end generate;
 
@@ -7460,7 +7460,7 @@ gen_bram_debug_b5_1: if (g_option(10) = '1') generate
    vram_b5_we <= b5w_pend or (bram_debug_b5_ack and bram_debug_wr);   -- NextTang: registered (issue #14)
    vram_b5_di <= b5w_data when b5w_pend = '1' else bram_debug_wr_dat;
    vram_bank5_a0 <= b5w_addr when b5w_pend = '1' else
-                    (sram_pre_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr when lores_vram_ack = '1' else bram_debug_addr;   -- NextTang: pre (see b5w_addr)
+                    (sram_A21_A13(0) & cpu_a(12 downto 0)) when cpu_bank5_sched = '1' else lores_addr when lores_vram_ack = '1' else bram_debug_addr;
    
 end generate;
 
@@ -7518,12 +7518,7 @@ end generate;
       if rising_edge(i_CLK_28) then
          b5w_pend <= cpu_bank5_sched and cpu_bank5_we;
          if cpu_bank5_sched = '1' then
-            -- NextTang: bank 5 is scheduled only when sram_bank5 is set, and
-            -- only the memory map's last arm sets it, where sram_A21_A13 is
-            -- sram_pre_A21_A13: taking the pre-decode skips the divMMC,
-            -- Layer 2, ROMCS and altrom overrides on this timing path
-            -- (Codex review, 2026-11-22). Same address in every case.
-            b5w_addr <= sram_pre_A21_A13(0) & cpu_a(12 downto 0);
+            b5w_addr <= sram_A21_A13(0) & cpu_a(12 downto 0);
             b5w_data <= cpu_do;
          end if;
       end if;
