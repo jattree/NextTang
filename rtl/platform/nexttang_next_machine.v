@@ -249,6 +249,14 @@ module nexttang_next_machine #(
     // input
     output wire [7:0]  keyboard_rows,
     input  wire [4:0]  keyboard_columns,
+    // the Next keyboard's extra keys (i_KBD_EXTENDED_KEYS, 1 = pressed, as the
+    // official membrane gives them; 16'h0000 with no Next-style keyboard), the keymap writes from NextREGs 0x28-0x2B
+    // and NextREG 0x68 bit 4 (keep the extra keys out of the 8x5 matrix)
+    input  wire [15:0] extended_keys,
+    output wire [8:0]  keymap_address,
+    output wire [7:0]  keymap_data,
+    output wire        keymap_write,
+    output wire        keyboard_cancel_extended,
     input  wire [10:1] function_keys,
     input  wire [11:0] left_joystick,
     input  wire [11:0] right_joystick,
@@ -467,13 +475,13 @@ module nexttang_next_machine #(
         .i_SPKEY_BUTTONS(2'b0),
         .i_SPKEY_FUNCTION_EXT(5'b0),
 
-        .o_KBD_CANCEL(),
+        .o_KBD_CANCEL(keyboard_cancel_extended),
         .o_KBD_ROW(keyboard_rows),
         .i_KBD_COL(keyboard_columns),
-        .i_KBD_EXTENDED_KEYS(16'hffff),
-        .o_KEYMAP_ADDR(),
-        .o_KEYMAP_DATA(),
-        .o_KEYMAP_WE(),
+        .i_KBD_EXTENDED_KEYS(extended_keys),
+        .o_KEYMAP_ADDR(keymap_address),
+        .o_KEYMAP_DATA(keymap_data),
+        .o_KEYMAP_WE(keymap_write),
         .o_JOYMAP_WE(),
         .i_JOY_LEFT(left_joystick | host_joystick),
         .i_JOY_RIGHT(right_joystick),

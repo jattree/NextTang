@@ -5,6 +5,7 @@ FPGA-Companion keyboard target, and the SPI master's late MISO sampling
 against an SD card through the Nano's pins."""
 
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -116,6 +117,20 @@ class SdrSdramServiceTest(unittest.TestCase):
                 result = subprocess.run(["ghdl", "-r", "--std=08", "-fsynopsys", "tb_internal_spi_master",
                                          f"-gHALF_CLOCKS={half}", "-gREADS=15"], cwd=directory, capture_output=True, text=True)
                 self.assertIn("PASS", result.stdout + result.stderr, result.stdout + result.stderr)
+
+    def test_usb_keyboard_through_next_keymap(self) -> None:
+        # USB key events through the official keymap's default table into the Next's 8x7 matrix
+        table = (REPO_ROOT / "rtl" / "input" / "keymaps.vhd").read_text()
+        body = table[table.index("signal ram_q"):table.index(");", table.index("signal ram_q"))]
+        entries = re.findall(r'"([01]{9})"', body)
+        self.assertEqual(len(entries), 512)
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "keymap.mem").write_text("\n".join(entries) + "\n")
+            image = Path(directory) / "sim.vvp"
+            run(["iverilog", "-g2012", "-o", str(image), str(SIM / "input" / "tb_usb_next_keyboard.v"),
+                 str(REPO_ROOT / "rtl" / "input" / "nexttang_usb_next_keyboard.v")], REPO_ROOT)
+            output = subprocess.run(["vvp", "-n", str(image)], cwd=directory, capture_output=True, text=True).stdout
+            self.assertIn("PASS", output, output)
 
     def test_layer2_rows(self) -> None:
         output = self.iverilog(SIM / "sdram" / "tb_sdr_layer2.v", {"MODE": 0, "LINES": 24, "INJECT_LINE": 10})

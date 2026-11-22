@@ -496,8 +496,46 @@ module nexttang_nano20k_zxnext (
     end
     endgenerate
     wire [39:0] all_keys = keys_sync | companion_keys;
-    nexttang_keyboard_matrix keyboard_scan (
-        .row_select(keyboard_rows), .keys(all_keys), .columns(keyboard_columns));
+
+    // The keyboard as a Next's own: the official membrane scans an 8x7 matrix
+    // a row at a time (rtl/input/membrane.vhd), and hands the core its extra
+    // keys. The BL616's USB keyboard fills that matrix through the Next's
+    // keymap (nexttang_usb_next_keyboard), so the Next's punctuation and
+    // editing keys work and NextZXOS's keymap files choose the layout; the
+    // debug UART's K command (keys_sync) adds Spectrum keys to the same scan.
+    wire [8:0]  keymap_address;
+    wire [7:0]  keymap_data;
+    wire        keymap_write;
+    wire        keyboard_cancel_extended;
+    wire [15:0] extended_keys;
+    wire [2:0]  membrane_row;
+    wire [6:0]  usb_columns;
+    reg  [8:0]  membrane_divider = 9'd0;
+    reg         membrane_enable = 1'b0;
+    always @(posedge clock_28) begin
+        // one membrane row every 512 machine clocks, as the official top
+        membrane_divider <= membrane_divider + 9'd1;
+        membrane_enable <= &membrane_divider;
+    end
+    wire [4:0]  uart_row_keys = keys_sync[5 * membrane_row +: 5];
+    generate
+    if (COMPANION != 0) begin : next_keyboard
+        nexttang_usb_next_keyboard usb_keyboard (
+            .clock(clock_28), .reset(machine_reset),
+            .event_valid(companion_message), .event_byte(companion_byte),
+            .keymap_address(keymap_address), .keymap_data(keymap_data), .keymap_write(keymap_write),
+            .membrane_row(membrane_row), .membrane_columns(usb_columns));
+    end else begin : no_next_keyboard
+        assign usb_columns = 7'h7F;
+    end
+    endgenerate
+    membrane keyboard_scan (
+        .i_CLK(clock_28), .i_CLK_EN(membrane_enable), .i_reset(machine_reset),
+        .i_rows(keyboard_rows), .o_cols(keyboard_columns),
+        .o_membrane_rows(), .o_membrane_ridx(membrane_row),
+        .i_membrane_cols(usb_columns & {2'b11, ~uart_row_keys}),
+        .i_cancel_extended_entries(keyboard_cancel_extended),
+        .o_extended_keys(extended_keys));
     wire uart_tx;
     wire machine_pi_uart_rxd;
     assign pi_uart_rxd = PI_SPI_PINS != 0 ? machine_pi_uart_rxd : 1'b1;
@@ -581,6 +619,9 @@ module nexttang_nano20k_zxnext (
 
         .keyboard_rows(keyboard_rows),
         .keyboard_columns(keyboard_columns),
+        .extended_keys(extended_keys),
+        .keymap_address(keymap_address), .keymap_data(keymap_data), .keymap_write(keymap_write),
+        .keyboard_cancel_extended(keyboard_cancel_extended),
         .function_keys(functions_sync | companion_functions),
         .left_joystick(companion_joystick_left),
         .right_joystick(companion_joystick_right),

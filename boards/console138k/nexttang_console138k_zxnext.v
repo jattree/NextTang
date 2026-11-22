@@ -297,6 +297,8 @@ module `NEXTTANG_ZXNEXT_TOP (
 
         .keyboard_rows(keyboard_rows),
         .keyboard_columns(keyboard_columns),
+        .extended_keys(16'h0000),                          // no extra Next keys here yet (1 = pressed)
+        .keymap_address(), .keymap_data(), .keymap_write(), .keyboard_cancel_extended(),
         .function_keys(function_keys),
         .left_joystick(left_joystick),
         .right_joystick(12'b0),

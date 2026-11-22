@@ -39,3 +39,5 @@ rtl/device/pi_debug_control/pi_debug_control_param.vhd	cores/zxnext/src/device/p
 rtl/device/arbiter_dma.vhd	cores/zxnext/src/device/arbiter_dma.vhd	b742dd76210f00164239dca4bc014ec961aa1769	-	official	imported from official 3.02.05 for the Pi debug interface
 rtl/serial/spi_slave.vhd	cores/zxnext/src/serial/spi_slave.vhd	902930d5f2d9ea4194d9f6bcf300b7324c0bcdce	-	official	imported from official 3.02.05 for the Pi debug interface
 rtl/video/hdmi_frame.vhd	cores/zxnext/src/video/hdmi/hdmi_frame.vhd	cffc6b376657430c22a52d113205bd43a2f3fae0	-	official	from 30205 for native 576p50/480p60 HDMI on the Nano 20K, with the NextTang G_RELOCK option (off by default); no MiSTer counterpart
+rtl/input/keymaps.vhd	cores/zxnext/src/input/keyboard/keymaps.vhd	4341212cd5df6b18ecfd3d650a478fd04ffdacf5	-	official	from official 3.02.05 (unchanged in 30205 head): the Next's programmable keymap, fed by USB keyboards through rtl/input/nexttang_usb_next_keyboard.v
+rtl/input/membrane.vhd	cores/zxnext/src/input/membrane/membrane.vhd	ff77eb1073146b17e8c4870e306bac913aa38dba	-	official	from official 3.02.05 (unchanged in 30205 head): the Next keyboard's 8x7 matrix with its extra keys
