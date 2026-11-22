@@ -398,6 +398,10 @@ module nexttang_next_machine #(
     wire        cpu_stopped;
     wire        cpu_break;
     wire [63:0] core_mmu;
+    wire        core_bank_write;            // the block RAM writes the core makes (rewind ring)
+    wire [7:0]  core_bank_page;
+    wire [12:0] core_bank_offset;
+    wire [7:0]  core_bank_data;
     wire        rzx_m1_n, rzx_iorq_n, rzx_rd_n, rzx_int_n;
     wire        rzx_playing, rzx_play_int;
     wire [7:0]  rzx_play_data;
@@ -412,6 +416,7 @@ module nexttang_next_machine #(
     wire        core_c_request, core_c_read_n;
     wire [7:0]  core_c_write_data;
     wire        ring_c_take, ring_c_request, ring_c_read_n;
+    wire        ring_c_owns;                // the ring holds port C (nexttang_port_c_handover)
     wire [22:0] ring_c_address;
     wire [7:0]  ring_c_write_data;
     wire        ring_spi_take, ring_spi_select, ring_spi_byte_valid;
@@ -562,7 +567,7 @@ module nexttang_next_machine #(
         .o_RAM_C_RD_n(core_c_read_n),
         .i_RAM_C_DI(ram_c_read_data),
         .o_RAM_C_DO(core_c_write_data),
-        .i_RAM_C_ACK(ram_c_ack && !ring_c_take),
+        .i_RAM_C_ACK(ram_c_ack && !ring_c_owns),
 
         .o_BUS_ADDR(core_bus_address),
         .i_BUS_DI(8'hff),
@@ -609,6 +614,10 @@ module nexttang_next_machine #(
         .o_CPU_STOPPED(cpu_stopped),
         .i_CPU_BREAK(cpu_break),
         .o_MMU(core_mmu),
+        .o_BANK_WR(core_bank_write),
+        .o_BANK_WR_PAGE(core_bank_page),
+        .o_BANK_WR_OFFSET(core_bank_offset),
+        .o_BANK_WR_DATA(core_bank_data),
         .i_FRAME_EXACT(FRAME_EXACT != 0),
         .i_RZX_PLAY(rzx_playing),
         .i_RZX_INT(rzx_play_int),
@@ -1304,22 +1313,26 @@ module nexttang_next_machine #(
     if (REWIND_RING != 0) begin : rewind_ring
         // What the machine writes. Main memory writes are port A's. Bank 5
         // and the first half of bank 7 are block RAM inside the core and
-        // never reach port A, so those are taken from the bus: a memory
-        // write to a slot whose MMU page is 0A, 0B or 0E. (A write there
-        // that divMMC or a Layer 2 mapping diverts marks a block that did
-        // not change, which only costs a copy.)
-        wire       bank_write = !core_mreq_n && !core_wr_n;
-        wire [7:0] bank_page = core_mmu[{core_bus_address[15:13], 3'b000} +: 8];
-        reg        bank_write_q = 1'b0;
-        reg        bank_strobe = 1'b0;
+        // never reach port A: the core reports the writes it makes there
+        // (o_BANK_WR). These used to be guessed from the bus (a write to a
+        // slot whose MMU page is 0A, 0B or 0E), which also took writes a
+        // Layer 2 or divMMC mapping diverted, and put their bytes into the
+        // mirror of the block RAM (found by a Codex review, 2026-11-22).
+        // A port A write goes first; a bank write waiting behind it is
+        // reported in the next clock without one (they are never two clocks
+        // in a row).
+        reg        bank_pending = 1'b0;
         reg [20:0] bank_address = 21'd0;
         reg [7:0]  bank_data = 8'h00;
+        wire       port_a_write = ram_a_request && ram_a_read_n;
+        wire       bank_strobe = bank_pending && !port_a_write;
         always @(posedge clock_28) begin
-            bank_data <= core_bus_data;
-            bank_write_q <= bank_write;
-            bank_strobe <= bank_write && !bank_write_q &&
-                           (bank_page == 8'h0a || bank_page == 8'h0b || bank_page == 8'h0e);
-            bank_address <= 21'h040000 + {bank_page, core_bus_address[12:0]};
+            if (bank_strobe) bank_pending <= 1'b0;
+            if (core_bank_write) begin
+                bank_pending <= 1'b1;
+                bank_address <= 21'h040000 + {core_bank_page, core_bank_offset};
+                bank_data <= core_bank_data;
+            end
         end
         nexttang_ring_control #(
             .CLOCK_HZ(28000000),
@@ -1355,7 +1368,7 @@ module nexttang_next_machine #(
             .c_address(ring_c_address),
             .c_write_data(ring_c_write_data),
             .c_read_data(ram_c_read_data),
-            .c_ack(ram_c_ack && ring_c_take),
+            .c_ack(ram_c_ack && ring_c_owns),
             .tx(ring_tx)
         );
     end else begin : no_rewind_ring
@@ -1371,13 +1384,14 @@ module nexttang_next_machine #(
         assign ring_tx = 1'b1;
     end
     endgenerate
-    assign ram_c_address = ring_c_take ? ring_c_address[20:0] : core_c_address;
-    assign ram_c_address_high = ring_c_take ? ring_c_address[22:21] : 2'b00;
-    assign ram_c_read_n = ring_c_take ? ring_c_read_n : core_c_read_n;
-    assign ram_c_write_data = ring_c_take ? ring_c_write_data : core_c_write_data;
+    assign ram_c_address = ring_c_owns ? ring_c_address[20:0] : core_c_address;
+    assign ram_c_address_high = ring_c_owns ? ring_c_address[22:21] : 2'b00;
+    assign ram_c_read_n = ring_c_owns ? ring_c_read_n : core_c_read_n;
+    assign ram_c_write_data = ring_c_owns ? ring_c_write_data : core_c_write_data;
     nexttang_port_c_handover handover (
         .clock(clock_28), .ring_take(ring_c_take), .ring_request(ring_c_request),
-        .core_request(core_c_request), .request(ram_c_request)
+        .core_request(core_c_request), .port_busy(ram_c_busy),
+        .ring_owns(ring_c_owns), .request(ram_c_request)
     );
 
     assign debug_uart_tx = (rzx_play_busy ? rzx_play_tx
@@ -1402,14 +1416,29 @@ endmodule
 // found with a Pi sending 4 KiB blocks while a game drew its screen
 // (2026-11-21). The core's request is now held off the line for the one
 // cycle after the ring lets go.
+//
+// The port also changes hands only between requests (Codex review,
+// 2026-11-22): the ring asks for it (ring_take), and owns it (ring_owns, which
+// steers the address, data and acknowledgements) only once the core has no
+// request outstanding and the memory is idle; it gives it back once its own
+// last request is done. Before, a ring command starting while the core's
+// request waited took that request's acknowledgement.
 module nexttang_port_c_handover (
     input  wire clock,
     input  wire ring_take,
     input  wire ring_request,
     input  wire core_request,
+    input  wire port_busy,        // the memory's port C is still at a request (ram_c_busy)
+    output reg  ring_owns = 1'b0,
     output wire request
 );
-    reg ring_take_q = 1'b0;
-    always @(posedge clock) ring_take_q <= ring_take;
-    assign request = ring_take ? ring_request : (core_request && !ring_take_q);
+    reg ring_owns_q = 1'b0;
+    always @(posedge clock) begin
+        ring_owns_q <= ring_owns;
+        if (!ring_owns && ring_take && !core_request && !port_busy)
+            ring_owns <= 1'b1;
+        else if (ring_owns && !ring_take && !port_busy)
+            ring_owns <= 1'b0;
+    end
+    assign request = ring_owns ? ring_request : (core_request && !ring_owns_q);
 endmodule

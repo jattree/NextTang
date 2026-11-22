@@ -300,6 +300,14 @@ entity zxnext is
       o_CPU_STOPPED        : out std_logic;
       i_CPU_BREAK          : in std_logic := '0';
       o_MMU                : out std_logic_vector(63 downto 0);   -- NextTang: NextREGs 0x57 down to 0x50
+      -- NextTang: for the rewind ring, each CPU or DMA write that bank 5 or
+      -- the first half of bank 7 (block RAM) actually takes: a one-clock
+      -- strobe with the 8K page (0A, 0B or 0E), the offset in it and the
+      -- byte. Debugger writes to those banks are not reported.
+      o_BANK_WR            : out std_logic;
+      o_BANK_WR_PAGE       : out std_logic_vector(7 downto 0);
+      o_BANK_WR_OFFSET     : out std_logic_vector(12 downto 0);
+      o_BANK_WR_DATA       : out std_logic_vector(7 downto 0);
       -- NextTang: RZX replay (rtl/debug/nexttang_rzx_player.vhd). While
       -- i_RZX_PLAY is high, every CPU I/O read takes i_RZX_IN_DATA and the
       -- CPU's maskable interrupt is i_RZX_INT alone. The byte takes the
@@ -1975,6 +1983,13 @@ end generate;
    o_CPU_NEXT_PC <= cpu_debug_next_pc;   -- NextTang
    o_CPU_STOPPED <= not z80_busak_n;      -- NextTang
    o_MMU <= MMU7 & MMU6 & MMU5 & MMU4 & MMU3 & MMU2 & MMU1 & MMU0;   -- NextTang
+
+   -- NextTang: the block RAM writes the core makes (see o_BANK_WR): bank 5's
+   -- registered write (b5w_*), or bank 7's write in its scheduled clock.
+   o_BANK_WR <= b5w_pend or (cpu_bank7_sched and cpu_bank7_we);
+   o_BANK_WR_PAGE <= ("0000101" & b5w_addr(13)) when b5w_pend = '1' else X"0E";
+   o_BANK_WR_OFFSET <= b5w_addr(12 downto 0) when b5w_pend = '1' else cpu_a(12 downto 0);
+   o_BANK_WR_DATA <= b5w_data when b5w_pend = '1' else cpu_do;
 
    -- NextTang: RZX recorder taps. The CPU latches an I/O read's byte in T3;
    -- this keeps the last byte on the bus while a CPU I/O read is under way,
