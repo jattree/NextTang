@@ -235,13 +235,39 @@ module nexttang_companion_keyboard (
         end
     end
 
-    wire [10:1] decoded_function_keys;
+    // One decoder visits the six held usages in turn and the result is
+    // published every six clocks (0.2 us at 28 MHz), instead of six copies
+    // of the decoder side by side (about 200 LUTs on the Nano 20K). Each
+    // published snapshot is the OR of all six slots as they stood during its
+    // pass, so several keys that make the same Spectrum key (or CAPS/SYMBOL
+    // SHIFT) still hold it while any one of them is down.
+    reg  [2:0]  scan_slot = 3'd0;
+    reg  [39:0] scan_keys = 40'd0;
+    reg  [10:1] scan_functions = 10'd0;
+    reg  [39:0] keys_q = 40'd0;
+    reg  [10:1] functions_q = 10'd0;
+    wire [39:0] slot_keys;
+    wire [10:1] slot_functions;
     nexttang_usb_keyboard_matrix decode (
         .device_type(2'd1), .modifiers(modifiers),
-        .key1({1'b0, held[0]}), .key2({1'b0, held[1]}), .key3({1'b0, held[2]}),
-        .key4({1'b0, held[3]}), .key5({1'b0, held[4]}), .key6({1'b0, held[5]}),
-        .keys(keys), .function_keys(decoded_function_keys));
-    assign function_keys = decoded_function_keys;
+        .key1({1'b0, held[scan_slot]}), .key2(8'd0), .key3(8'd0),
+        .key4(8'd0), .key5(8'd0), .key6(8'd0),
+        .keys(slot_keys), .function_keys(slot_functions));
+    always @(posedge clock) begin
+        if (scan_slot == 3'd5) begin
+            keys_q <= scan_keys | slot_keys;
+            functions_q <= scan_functions | slot_functions;
+            scan_keys <= 40'd0;
+            scan_functions <= 10'd0;
+            scan_slot <= 3'd0;
+        end else begin
+            scan_keys <= scan_keys | slot_keys;
+            scan_functions <= scan_functions | slot_functions;
+            scan_slot <= scan_slot + 3'd1;
+        end
+    end
+    assign keys = keys_q;
+    assign function_keys = functions_q;
 endmodule
 
 `default_nettype wire
