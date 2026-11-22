@@ -229,7 +229,7 @@ FPGA-Companion and never writes the FPGA Partner.
 | Before | The NextNano v1.0 release file `fpga_companion_tn20k_3923.bin` from [RetroSilicon/NextNano](https://github.com/RetroSilicon/NextNano/releases), confirmed byte for byte by reading the chip back |
 | Why | `c6eb3d6` sets the HID interrupt transfer timeout to 0, a fix for USB mice that is not in release 1.4.35 |
 | How | Hold UPDATE while plugging in USB (the chip appears as `349b:6160`), back up the flash, then write the file at `0x40000` only with Bouffalo's `BLFlashCommand` |
-| Evidence | The chip's SHA-256 of the new program matches the file; the FPGA Partner region reads back unchanged; the board still enumerates as the debugger and boots the NextTang image. A keyboard and mouse have **not yet been tested** with the new file |
+| Evidence | The chip's SHA-256 of the new program matches the file; the FPGA Partner region reads back unchanged; the board still enumerates as the debugger and boots the NextTang image. Tested on the board on 2026-11-22, powered through a USB-C splitter: a USB keyboard types (letters, Shift as CAPS SHIFT, Ctrl or Alt as SYMBOL SHIFT), and a Trust USB mouse, which did not work with the earlier file, gives movement in all four directions (slow and fast), three buttons and the wheel at the Kempston mouse ports. A joypad has not been tested with the new file |
 
 Build steps, the exact update commands and recovery are in
 [`docs/nano20k-bl616-firmware.md`](https://github.com/jattree/NextTang/blob/boards/docs/nano20k-bl616-firmware.md)
