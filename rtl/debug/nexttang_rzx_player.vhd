@@ -97,10 +97,12 @@ architecture rtl of nexttang_rzx_player is
    -- header bytes still to read: 4 down to 0; 0 = the frame is known
    signal header_left : unsigned(2 downto 0) := to_unsigned(4, 3);
    signal target      : unsigned(15 downto 0) := (others => '0');
-   signal in_count    : unsigned(15 downto 0) := (others => '0');
    signal fetches     : unsigned(15 downto 0) := (others => '0');
-   signal loaded      : unsigned(15 downto 0) := (others => '0');  -- IN bytes taken from the stream
-   signal used        : unsigned(15 downto 0) := (others => '0');  -- IN bytes the CPU has read
+   -- IN bytes of the frame still to take from the stream (the header's count,
+   -- less each one taken). With one byte of lookahead, the CPU has read every
+   -- byte exactly when this is 0 and none is held: reading without a byte is
+   -- a desync at once. (Was three 16-bit counts; Codex review, 2026-11-22.)
+   signal in_left     : unsigned(15 downto 0) := (others => '0');
    signal have_byte   : std_logic := '0';
    signal next_byte   : std_logic_vector(7 downto 0) := (others => '1');
 
@@ -119,7 +121,7 @@ begin
    -- A header byte, or the next IN byte when none is held, is taken whenever
    -- the stream offers one.
    take <= '1' when play_r = '1' and byte_valid = '1' and
-                    (header_left /= 0 or (have_byte = '0' and loaded /= in_count)) else '0';
+                    (header_left /= 0 or (have_byte = '0' and in_left /= 0)) else '0';
    byte_ready <= take;
 
    in_last_fetch <= '1' when m1_n = '0' and ack_seen = '0' and target /= 0 and
@@ -135,7 +137,7 @@ begin
                             last_fetch_ending = '1') else '0';
 
    hold_i <= '1' when play_r = '1' and
-                      (header_left /= 0 or (have_byte = '0' and loaded /= in_count)) else '0';
+                      (header_left /= 0 or (have_byte = '0' and in_left /= 0)) else '0';
    hold <= hold_q;   -- registered: it feeds the CPU's WAIT, a tight path
 
    in_data <= next_byte;
@@ -171,12 +173,12 @@ begin
             case to_integer(header_left) is
                when 4 => target(7 downto 0) <= unsigned(byte_in);
                when 3 => target(15 downto 8) <= unsigned(byte_in);
-               when 2 => in_count(7 downto 0) <= unsigned(byte_in);
-               when 1 => in_count(15 downto 8) <= unsigned(byte_in);
+               when 2 => in_left(7 downto 0) <= unsigned(byte_in);
+               when 1 => in_left(15 downto 8) <= unsigned(byte_in);
                when others =>
                   next_byte <= byte_in;
                   have_byte <= '1';
-                  loaded <= loaded + 1;
+                  in_left <= in_left - 1;
             end case;
             if header_left /= 0 then
                header_left <= header_left - 1;
@@ -191,30 +193,25 @@ begin
                   bad := true;
                end if;
                have_byte <= '0';
-               used <= used + 1;
             end if;
             if m1_end = '1' then
                if ack_seen = '1' then
-                  if header_left /= 0 or fetches /= target or used /= in_count then
+                  if header_left /= 0 or fetches /= target or in_left /= 0 or have_byte = '1' then
                      bad := true;
                   end if;
                   frames_r <= frames_r + 1;
                   fetches <= (others => '0');
                   header_left <= to_unsigned(4, 3);
-                  loaded <= (others => '0');
-                  used <= (others => '0');
                   have_byte <= '0';
                elsif header_left = 0 and fetches = target then
                   -- The interrupt was declined: the frame ends here and this
                   -- fetch is the next frame's first.
-                  if used /= in_count then
+                  if in_left /= 0 or have_byte = '1' then
                      bad := true;
                   end if;
                   frames_r <= frames_r + 1;
                   fetches <= to_unsigned(1, 16);
                   header_left <= to_unsigned(4, 3);
-                  loaded <= (others => '0');
-                  used <= (others => '0');
                   have_byte <= '0';
                else
                   if header_left = 0 and fetches > target then
@@ -239,8 +236,7 @@ begin
             frames_r <= (others => '0');
             fetches <= (others => '0');
             header_left <= to_unsigned(4, 3);
-            loaded <= (others => '0');
-            used <= (others => '0');
+            in_left <= (others => '0');
             have_byte <= '0';
          end if;
          if reset = '1' then
@@ -249,8 +245,7 @@ begin
             frames_r <= (others => '0');
             fetches <= (others => '0');
             header_left <= to_unsigned(4, 3);
-            loaded <= (others => '0');
-            used <= (others => '0');
+            in_left <= (others => '0');
             have_byte <= '0';
             ack_seen <= '0';
             m1_n_q <= '1';
