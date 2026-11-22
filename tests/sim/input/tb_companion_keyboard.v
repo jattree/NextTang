@@ -113,6 +113,10 @@ module tb_companion_keyboard;
         if (keys[30] !== 1'b0 || keys[35] !== 1'b1) begin $display("FAIL release one of two (keys %h)", keys); errors = errors + 1; end
         short_key(8'hac);
         if (keys !== 40'd0) begin $display("FAIL short keys not released (keys %h)", keys); errors = errors + 1; end
+        short_key(8'h39);                                   // CAPS LOCK: caps shift + 2 (bits 0 and 16)
+        if (keys !== ((40'd1 << 0) | (40'd1 << 16))) begin $display("FAIL caps lock (keys %h)", keys); errors = errors + 1; end
+        short_key(8'hb9);
+        if (keys !== 40'd0) begin $display("FAIL caps lock not released (keys %h)", keys); errors = errors + 1; end
         short_key(8'h68);                                   // left control = symbol shift (bit 36)
         short_key(8'h13);                                   // P (bit 25): symbol shift + P is "
         if (keys[36] !== 1'b1 || keys[25] !== 1'b1) begin $display("FAIL symbol shift + P (keys %h)", keys); errors = errors + 1; end

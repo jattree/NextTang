@@ -75,6 +75,8 @@ module nexttang_usb_keyboard_matrix (
                 8'h50: begin decode_key[0] = 1'b1; decode_key[19] = 1'b1; end
                 8'h51: begin decode_key[0] = 1'b1; decode_key[24] = 1'b1; end
                 8'h52: begin decode_key[0] = 1'b1; decode_key[23] = 1'b1; end
+                // CAPS LOCK is CAPS SHIFT + 2 on the Spectrum and the Next.
+                8'h39: begin decode_key[0] = 1'b1; decode_key[16] = 1'b1; end
                 default: decode_key = 40'b0;
             endcase
         end
