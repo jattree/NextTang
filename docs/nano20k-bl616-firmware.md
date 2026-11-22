@@ -31,6 +31,15 @@ and does not contain it, and there are no build artefacts for the commit, so
 the file was built here. The change was made to help a USB mouse that did not
 work with the earlier file.
 
+Since then (checked 2026-11-22): FPGA-Companion release
+[v1.4.36](https://github.com/MiSTle-Dev/FPGA-Companion/releases/tag/v1.4.36)
+of 2026-11-20 contains that change and ships a ready-made
+`fpga_companion_nano20k_v3923.bin`. It also puts the BL616's keyboard handling
+back to the simpler path shared with the RP2040 (same messages to the FPGA),
+and improves USB storage start-up and the RTC. It has not been tried on the
+reference board, which still runs the file built here; a board being set up
+now can use the release file instead of building.
+
 The FPGA-Companion is Apache-2.0 licensed. Its binary is not kept in this
 repository; build it as below.
 
