@@ -66,7 +66,11 @@ module nexttang_sdr_sdram_service #(
     // cycles after READ, the middle of the data window at these speeds; 0 the
     // rising edge half a cycle earlier, at the window's leading edge. The
     // bring-up self-test measures both (its captures B and A) on the board.
-    parameter integer CAPTURE      = 1
+    parameter integer CAPTURE      = 1,
+    // Keep the last WORD_CACHE words read for port A (2 or 4) and answer
+    // reads of them without waiting for the SDRAM (see word_cache). 0 leaves
+    // the cache out.
+    parameter integer WORD_CACHE   = 0
 ) (
     input  wire        machine_clock,
     input  wire        memory_clock,
@@ -154,21 +158,123 @@ module nexttang_sdr_sdram_service #(
     reg        a_deferred = 1'b0;       // a request waits for the outstanding access
     reg        a_holds = 1'b0;          // the outstanding access is a read
     wire       a_unstarted = a_request || a_deferred;
-    assign a_wait = a_cycle_request && ((a_unstarted && (a_pending || !a_read_n)) || (a_pending && a_holds));
+    // The word cache (WORD_CACHE; below). Every SDRAM read brings back four
+    // bytes; the last four words read are kept, and a read of a byte in one
+    // of them is answered from here. Wait is raised with the request as for
+    // any read and dropped one machine cycle later with the byte. The CPU
+    // samples wait at the end of T2: at 14 MHz and below that is later still,
+    // so the read costs no wait, and at 28 MHz it falls together with the
+    // core's own one wait state. Both are the official SRAM's timing.
+    // The cache is kept out of the decision to start an SDRAM access, which
+    // is the machine's longest path (half a cycle from the CPU's strobes to
+    // some thirty registers): a cached read starts its SDRAM read like any
+    // other and lets it finish unused (a_holds clear). Of the cache's own
+    // logic only two flags (k_read_r, k_merge_r) are decided from the request
+    // on its edge; everything else follows from them a cycle later.
+    wire       a_read_hit;              // this request is a read the cache holds
+    wire       k_hit_r;                 // ... and its byte arrives on this edge
+    wire       c_write_busy;
+    reg        a_use_hit = 1'b0;        // the last read was answered by the cache
+    reg  [7:0] a_hit_byte = 8'd0;
+    wire       a_start = a_unstarted && !a_pending;
+    assign a_wait = a_cycle_request && ((a_unstarted && (a_pending || !a_read_n)) || (a_pending && a_holds) || k_hit_r);
     always @(posedge machine_clock) begin
-        if (a_unstarted && !a_pending) begin
+        if (a_start) begin
             a_toggle <= !a_toggle;
             a_op_read_n <= a_read_n;
             a_op_address <= a_address;
             a_op_data <= a_write_data;
             a_holds <= !a_read_n;
-            if (!a_read_n) a_lane <= a_address[1:0];
+            if (!a_read_n) begin a_lane <= a_address[1:0]; a_use_hit <= 1'b0; end
             a_deferred <= 1'b0;
         end else if (a_request) a_deferred <= 1'b1;
+        // any read's lane (a new read only comes once the last one's byte is taken)
+        if (a_unstarted && !a_read_n) a_lane <= a_address[1:0];
+        // A cached read, the edge after its request (k_hit_r): its byte is
+        // loaded on this edge, and an SDRAM read started for it, on the
+        // request's edge or on this one, is not waited for.
+        if (k_hit_r) begin
+            a_use_hit <= 1'b1;
+            a_deferred <= 1'b0;
+            a_holds <= 1'b0;
+        end
         if (!a_cycle_request) a_deferred <= 1'b0;
     end
+    generate
+    if (WORD_CACHE != 0) begin : word_cache
+        // Two or four entries (WORD_CACHE; with two, entries 2 and 3 are never
+        // filled and fall away): a 19-bit word address and a valid bit each
+        // in registers, the words in distributed RAM. Replacement goes round.
+        // - A read that misses fills an entry the cycle after its data
+        //   arrives (a_word_sync still holds it).
+        // - A CPU or DMA write to a cached word replaces its byte in the
+        //   entry on the edge that takes the write, so a posted write is
+        //   seen by the next read at once.
+        // - A port C write (the debugger, a Pi, the rewind ring) empties the
+        //   cache for as long as it is outstanding, and a read that was under
+        //   way at any time during it does not fill: the SDRAM serves port A
+        //   first, so that read may have gone out ahead of the write.
+        reg [18:0] k_tag [0:3];
+        reg [3:0]  k_valid = 4'd0;
+        (* syn_ramstyle = "distributed_ram" *) reg [31:0] k_word [0:3];
+        reg [1:0]  k_next = 2'd0;
+        reg        k_poison = 1'b0;     // a port C write overlapped the read under way
+        reg        a_pending_d = 1'b0;
+        wire [3:0] k_match = {k_valid[3] && k_tag[3] == a_address[20:2], k_valid[2] && k_tag[2] == a_address[20:2],
+                              k_valid[1] && k_tag[1] == a_address[20:2], k_valid[0] && k_tag[0] == a_address[20:2]};
+        wire       k_hit = |k_match;
+        assign a_read_hit = !a_read_n && k_hit && a_unstarted;
+        // The entry is chosen on the request's edge and its word read or
+        // rewritten on the next, so the address compare ends in registers.
+        reg        k_read_r = 1'b0;     // a cached read's byte is due
+        reg        k_merge_r = 1'b0;    // a write's byte goes into its entry
+        reg [1:0]  k_sel = 2'd0;
+        reg [1:0]  k_merge_lane = 2'd0;
+        reg [7:0]  k_merge_byte = 8'd0;
+        assign k_hit_r = k_read_r;
+        wire [31:0] k_read = k_word[k_sel];
+        wire       k_merge = a_start && a_read_n && k_hit;
+        // A fill happens on the edge after its read's wait dropped (E + 1,
+        // the wait having dropped after E), and a request taken on that same
+        // edge would be compared with the entries as they were. Neither
+        // master can make one: the T80 samples wait at E + 1 at the earliest,
+        // and the zxnDMA, which drops its strobe on the falling edge after E,
+        // raises the next on the falling edge after E + 1, so its request is
+        // taken at E + 2, with the filled entry in place. (Giving way to a
+        // request on the fill edge was built and cost some 250 LUTs: the
+        // core's late request signal in the fill enable. 2026-11-21.)
+        wire       k_fill = a_holds && a_pending_d && !a_pending && !k_poison && !c_write_busy && !k_merge_r;
+        wire [31:0] k_merged = {k_merge_lane == 2'd3 ? k_merge_byte : k_read[31:24],
+                                k_merge_lane == 2'd2 ? k_merge_byte : k_read[23:16],
+                                k_merge_lane == 2'd1 ? k_merge_byte : k_read[15:8],
+                                k_merge_lane == 2'd0 ? k_merge_byte : k_read[7:0]};
+        integer k;
+        initial for (k = 0; k < 4; k = k + 1) k_tag[k] = 19'd0;
+        always @(posedge machine_clock) begin
+            a_pending_d <= a_pending;
+            k_read_r <= a_read_hit && !k_read_r;   // once: a_deferred may still be up for a cycle
+            k_merge_r <= k_merge;
+            // taken every cycle and used only on the edge after a hit or a merge
+            k_sel <= {k_match[3] | k_match[2], k_match[3] | k_match[1]};
+            k_merge_lane <= a_address[1:0];
+            k_merge_byte <= a_write_data;
+            if (k_read_r) a_hit_byte <= k_read[8 * a_lane +: 8];
+            if (a_start && !a_read_n) k_poison <= 1'b0;
+            if (k_merge_r || k_fill) k_word[k_merge_r ? k_sel : k_next] <= k_merge_r ? k_merged : a_word_sync;
+            if (k_fill) begin
+                k_tag[k_next] <= a_op_address[20:2];
+                k_valid[k_next] <= 1'b1;
+                k_next <= (WORD_CACHE > 2) ? k_next + 2'd1 : {1'b0, !k_next[0]};
+            end
+            if (c_write_busy) begin k_valid <= 4'd0; k_poison <= 1'b1; end
+        end
+    end else begin : no_word_cache
+        assign a_read_hit = 1'b0;
+        assign k_hit_r = 1'b0;
+    end
+    endgenerate
     // The byte is valid from the cycle wait drops; a_lane is the last read's.
-    assign a_read_data = a_word_sync[8 * a_lane +: 8];
+    assign a_read_data = a_use_hit ? a_hit_byte : a_word_sync[8 * a_lane +: 8];
     // Port C: same handshake, acknowledged with a one-cycle pulse.
     reg        c_toggle = 1'b0;
     reg        c_op_read_n = 1'b0;
@@ -188,6 +294,8 @@ module nexttang_sdr_sdram_service #(
     end
     wire       c_pending = c_toggle != c_done_sync;
     assign c_busy = c_request || c_pending;
+    // a port C write from its request until the SDRAM has it (word cache)
+    assign c_write_busy = (c_request && c_read_n) || ((c_seen || c_pending) && c_op_read_n);
     always @(posedge machine_clock) begin
         c_ack <= 1'b0;
         if (!c_request) c_armed <= 1'b1;

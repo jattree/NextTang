@@ -32,8 +32,12 @@ class SdrSdramServiceTest(unittest.TestCase):
             return run(["vvp", "-n", str(image)], REPO_ROOT)
 
     def test_ports_a_and_c(self) -> None:
-        output = self.iverilog(SIM / "sdram" / "tb_sdr_sdram_service.v", {"ACCESSES": 4000})
-        self.assertIn("PASS", output, output)
+        # with the word cache at each size, and without it
+        for words in (4, 2, 0):
+            with self.subTest(word_cache=words):
+                output = self.iverilog(SIM / "sdram" / "tb_sdr_sdram_service.v", {"ACCESSES": 4000, "WORD_CACHE": words})
+                self.assertIn("PASS", output, output)
+                self.assertEqual(", 0 reads from the cache" in output, words == 0, output)
 
     def test_layer2_rows(self) -> None:
         output = self.iverilog(SIM / "sdram" / "tb_sdr_layer2.v", {"MODE": 0, "LINES": 24, "INJECT_LINE": 10})
