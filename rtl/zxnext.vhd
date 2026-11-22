@@ -883,6 +883,7 @@ architecture rtl of zxnext is
    signal sram_req_d             : std_logic := '1';
    signal sram_req_t             : std_logic;
    signal sram_wait_n            : std_logic := '1';
+   signal cpu_wait_before        : std_logic := '0';   -- NextTang: i_CPU_WAIT at the previous CPU cycle
    
    signal bootrom_do             : std_logic_vector(7 downto 0);
 
@@ -2483,16 +2484,25 @@ end generate;
    pulse_count_end <= pulse_count(5) and (machine_timing_48 or machine_timing_p3 or pulse_count(2));
 
    -- NextTang: cycles in which main memory holds the CPU through i_CPU_WAIT
-   -- do not count towards the pulse. The Z80 only samples INT at the end of
-   -- an instruction, and a board memory that waits longer than the pulse would
-   -- otherwise hide it completely. Nothing drives i_CPU_WAIT on a Next, so
-   -- its pulse is unchanged.
+   -- for longer than the official board would do not count towards the
+   -- pulse. The Z80 only samples INT at the end of an instruction, and a
+   -- board memory that waits longer than the pulse would otherwise hide it
+   -- completely. Nothing drives i_CPU_WAIT on a Next, so its pulse is
+   -- unchanged.
+   -- Only a CPU cycle that finds i_CPU_WAIT up for the second time running is
+   -- left out. The first is either no wait state at all (at 3.5 to 14 MHz the
+   -- board's wait is up at the start of T2 and gone before the CPU samples
+   -- it) or the one wait state the official board has too (28 MHz reads).
+   -- Leaving out every cycle with i_CPU_WAIT up, as until 2026-11-21, made
+   -- the pulse about 37 T-states long instead of 32 for code in main memory
+   -- on the Nano 20K (measured with handlers of known length).
    process (i_CLK_CPU)
    begin
       if rising_edge(i_CLK_CPU) and i_CPU_CEN_R = '1' then
+         cpu_wait_before <= i_CPU_WAIT;
          if pulse_int_n = '1' then
             pulse_count <= (others => '0');
-         elsif pulse_count_end = '0' and i_CPU_WAIT = '0' then
+         elsif pulse_count_end = '0' and not (i_CPU_WAIT = '1' and cpu_wait_before = '1') then
             pulse_count <= pulse_count + 1;
          end if;
       end if;
