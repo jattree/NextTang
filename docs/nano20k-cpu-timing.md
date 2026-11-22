@@ -31,8 +31,8 @@ What each step did:
 - **Posted writes.** A write no longer holds the CPU: it is taken at the
   request and done in the background. Before, every main-memory write cost one
   T-state even at 3.5 MHz.
-- **Word cache** (`--word-cache 4`, off by default). The last four 4-byte
-  words read are kept; a read of a byte in one of them costs no wait at 14 MHz
+- **Word cache** (`--word-cache 2` or `4`; 2 is the default since 2026-11-22, 0
+  turns it off). The last two or four 4-byte words read are kept; a read of a byte in one of them costs no wait at 14 MHz
   and below and one wait at 28 MHz, the official timing. A read that misses
   still waits about three machine cycles, and sequential code misses once in
   four bytes: that is what is left of the gap.
@@ -75,3 +75,13 @@ Place options 3 and 4 are not accepted for this device and route option 1 has
 not built. Record the place and route options with any image, and boot-test
 it on the board; "timing met" by 0.001 ns is the usual result of a build that
 passes.
+
+## The default build (2026-11-22)
+
+`--word-cache 2` is the default. The image in the reference board's flash
+(hov2-p1r2, `955f3d6`, all features, place 1, route 2; 20,095 cells, timing met
+with 0.035 ns to spare) uses it. Measured on that image, code in main memory
+against the same code in block RAM: full speed at 3.5 and 7 MHz, 94 to 98% at
+14 MHz and 72 to 84% at 28 MHz. With the debug-link fix of `955f3d6` in the
+source, eight placements of the four-entry cache missed timing and so did
+every build without a cache; of four placements with two entries one met it.

@@ -30,8 +30,9 @@ status_line=0    # --status-line 1: the debug status line (about 1,000 cells; us
 pi_pins=0        # --pi-pins 1: the Pi debug slave on a Pi Zero's SPI (header 25-28) instead
 companion=0      # --companion 1: a USB keyboard through the BL616's FPGA-Companion firmware; the
                  # Companion then takes the Nano's USB-C port as a host (no laptop debugger on it)
-word_cache=0     # --word-cache 2 or 4: the SDRAM service keeps that many words the CPU last read and
-                 # answers reads of them at the official SRAM's timing (14 and 28 MHz run faster)
+word_cache=2     # --word-cache 2 or 4: the SDRAM service keeps that many words the CPU last read and
+                 # answers reads of them at the official SRAM's timing (14 and 28 MHz run faster);
+                 # 0: none. 2 is the default: the image in the reference board's flash uses it
 esp_uart=0       # --esp-uart 2: the Next's ESP UART on header pins 71 (out) and 72 (in) for an ESP-01;
                  # 1: to the BL616 on pins 69/70 (experiments; needs --companion 1 and our BL616 firmware)
 pi_i2s=0         # --pi-i2s 1: with --pi-pins 1, the Pi's I2S audio into the Next (header 77/31/42;

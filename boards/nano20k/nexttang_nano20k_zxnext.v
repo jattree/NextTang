@@ -624,7 +624,7 @@ module nexttang_nano20k_zxnext (
     localparam integer SDRAM_CAPTURE = 1;
     // WORD_CACHE: the SDRAM service keeps the last 2 or 4 words the CPU read
     // and answers reads of them at the official SRAM's timing; 0 none.
-    localparam integer WORD_CACHE = 0;
+    localparam integer WORD_CACHE = 2;
     nexttang_sdr_sdram_service #(.CAPTURE(SDRAM_CAPTURE), .WORD_CACHE(WORD_CACHE)) sdram (
         .machine_clock(clock_28), .memory_clock(memory_clock), .reset(memory_reset), .ready(memory_ready),
         .a_request(ram_a_request), .a_cycle_request(ram_a_cycle_request), .a_read_n(ram_a_read_n),
