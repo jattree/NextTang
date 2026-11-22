@@ -26,13 +26,29 @@ wire [5:0] counter_t2_p1 = {counter, 1'b1};
 // Initialize parity bits to 0
 logic [7:0] parity [4:0] = '{8'd0, 8'd0, 8'd0, 8'd0, 8'd0};
 
-wire [63:0] bch [3:0];
-assign bch[0] = {parity[0], sub[0]};
-assign bch[1] = {parity[1], sub[1]};
-assign bch[2] = {parity[2], sub[2]};
-assign bch[3] = {parity[3], sub[3]};
-wire [31:0] bch4 = {parity[4], header};
-assign packet_data = {bch[3][counter_t2_p1], bch[2][counter_t2_p1], bch[1][counter_t2_p1], bch[0][counter_t2_p1], bch[3][counter_t2], bch[2][counter_t2], bch[1][counter_t2], bch[0][counter_t2], bch4[counter]};
+// NextTang: each subpacket and header bit is selected once and used by both
+// the packet output and the ECC below; the parity bits are selected
+// separately for the last four counts. Selecting from {parity, sub} for the
+// output and from sub for the ECC built two sets of wide multiplexers (about
+// 340 LUTs on the Nano 20K). Same output on every clock.
+wire [3:0] sub_lo, sub_hi, par_lo, par_hi;
+genvar j;
+generate
+    for (j = 0; j < 4; j++)
+    begin: bit_select
+        assign sub_lo[j] = sub[j][counter_t2];
+        assign sub_hi[j] = sub[j][counter_t2_p1];
+        assign par_lo[j] = parity[j][{counter[1:0], 1'b0}];
+        assign par_hi[j] = parity[j][{counter[1:0], 1'b1}];
+    end
+endgenerate
+wire header_bit = header[counter];
+wire subpacket_period = counter < 5'd28;
+wire header_period = counter < 5'd24;
+wire [3:0] out_lo = subpacket_period ? sub_lo : par_lo;
+wire [3:0] out_hi = subpacket_period ? sub_hi : par_hi;
+wire out_header = header_period ? header_bit : parity[4][counter[2:0]];
+assign packet_data = {out_hi, out_lo, out_header};
 
 // See Figure 5-5 Error Correction Code generator. Generalization of a CRC with binary BCH.
 // See https://web.archive.org/web/20190520020602/http://hamsterworks.co.nz/mediawiki/index.php/Minimal_HDMI#Computing_the_ECC for an explanation of the implementation.
@@ -55,11 +71,11 @@ generate
     for(i = 0; i < 5; i++)
     begin: parity_calc
         if (i == 4)
-            assign parity_next[i] = next_ecc(parity[i], header[counter]);
+            assign parity_next[i] = next_ecc(parity[i], header_bit);
         else
         begin
-            assign parity_next[i] = next_ecc(parity[i], sub[i][counter_t2]);
-            assign parity_next_next[i] = next_ecc(parity_next[i], sub[i][counter_t2_p1]);
+            assign parity_next[i] = next_ecc(parity[i], sub_lo[i]);
+            assign parity_next_next[i] = next_ecc(parity_next[i], sub_hi[i]);
         end
     end
 endgenerate

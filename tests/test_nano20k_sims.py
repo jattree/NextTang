@@ -4,6 +4,7 @@ option, where HDMI data islands go in hdmi_frame's output, the BL616
 FPGA-Companion keyboard target, and the SPI master's late MISO sampling
 against an SD card through the Nano's pins."""
 
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -64,6 +65,23 @@ class SdrSdramServiceTest(unittest.TestCase):
                 result = subprocess.run(step, cwd=directory, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("PASS", result.stdout + result.stderr)
+
+    def test_hdmi_packet_assembler_matches_original(self) -> None:
+        suite = os.environ.get("NEXTTANG_OSS_CAD_SUITE", "/opt/oss-cad-suite/2026-08-05")
+        verilator = shutil.which("verilator") or shutil.which("verilator", path=str(Path(suite) / "bin"))
+        if not verilator:
+            self.skipTest("verilator not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            env = dict(os.environ, PATH=str(Path(verilator).parent) + os.pathsep + os.environ["PATH"])
+            build = subprocess.run([verilator, "--binary", "--timing", "-Wno-fatal", "-Wno-lint", "-Wno-style",
+                                    "--top-module", "tb", "-Mdir", directory,
+                                    str(SIM / "video" / "tb_packet_assembler.sv"),
+                                    str(REPO_ROOT / "rtl" / "video" / "hdmi" / "packet_assembler.sv"),
+                                    str(SIM / "video" / "packet_assembler_ref.sv")],
+                                   cwd=directory, capture_output=True, text=True, env=env)
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            result = subprocess.run([str(Path(directory) / "Vtb")], capture_output=True, text=True)
+            self.assertIn("PASS", result.stdout, result.stdout + result.stderr)
 
     def test_layer2_rows(self) -> None:
         output = self.iverilog(SIM / "sdram" / "tb_sdr_layer2.v", {"MODE": 0, "LINES": 24, "INJECT_LINE": 10})
