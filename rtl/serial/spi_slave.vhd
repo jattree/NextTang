@@ -90,6 +90,8 @@ architecture rtl of spi_slave is
    signal rx_byte_r       : std_logic_vector(7 downto 0) := (others => '0');
    signal rx_valid_r      : std_logic := '0';
 
+   -- NextTang: clocks since the last bit of a byte, for the next byte's load
+   signal tx_wait_r       : unsigned(1 downto 0) := (others => '1');
    -- TX loading
    
    signal tx_loaded_r     : std_logic_vector(1 downto 0) := "00";
@@ -169,6 +171,7 @@ begin
             rx_valid_r <= '0';
             tx_shift_r <= (others => '0');
             tx_loaded_r <= "00";
+            tx_wait_r <= (others => '1');
          else
             -- Sample MOSI on rising SCLK
             
@@ -186,18 +189,33 @@ begin
                end if;
             end if;
 
-            -- Shift TX out on falling SCLK (7 shifts per byte, not 8)
-            -- Skip shift when bit_count=0 (byte boundary) to avoid
-            -- corrupting the next byte's MSB before master samples it
-            
+            -- NextTang: shift TX out as soon as the rising SCLK edge that
+            -- sampled the bit is seen, not at the falling edge, and load the
+            -- next byte two clocks after the last bit of a byte (the reply
+            -- byte is ready by then), not at the falling edge after it. The
+            -- master samples MISO on its next rising edge, so MISO now has a
+            -- whole SCLK period less the synchroniser delay, where it had half
+            -- a period: reads worked up to 3 MHz and failed from 3.5 MHz on a
+            -- Pi Zero (2026-11-22). 7 shifts per byte, as before: none after
+            -- the last bit, whose place the next byte's MSB takes.
+
             tx_loaded_r(1) <= tx_loaded_r(0);
-			
+
+            if sclk_rising = '1' and bit_count_r = "111" then
+               tx_wait_r <= (others => '0');
+            elsif tx_wait_r /= "11" then
+               tx_wait_r <= tx_wait_r + 1;
+            end if;
+
             if bit_count_r /= "000" then
-               if sclk_falling = '1' then
+               if sclk_rising = '1' and bit_count_r /= "111" then
                   tx_shift_r <= tx_shift_r(6 downto 0) & '0';
                end if;
                tx_loaded_r(0) <= '0';
-            elsif i_tx_load = '1' and sclk_next = '0' and tx_loaded_r(0) = '0' then
+            elsif sclk_rising = '1' then
+               tx_shift_r <= tx_shift_r(6 downto 0) & '0';
+               tx_loaded_r(0) <= '0';
+            elsif i_tx_load = '1' and tx_wait_r /= "00" and tx_loaded_r(0) = '0' then
                tx_shift_r <= i_tx_byte;
                tx_loaded_r(0) <= '1';
             end if;
