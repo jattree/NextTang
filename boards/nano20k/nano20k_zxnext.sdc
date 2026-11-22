@@ -35,6 +35,25 @@ set_false_path -to [get_regs {machine/status_uart/flags_meta*}]
 set_false_path -from [get_regs {machine/core/gen_cpu_10.cpu_mod/cpu/z80n/A_*}] -to [get_regs {machine/core/gen_dma.dma_mod/dma_d_n_s*}]
 set_false_path -from [get_regs {machine/core/gen_cpu_10.cpu_mod/cpu/z80n/BusAck*}] -to [get_regs {machine/core/gen_dma.dma_mod/dma_d_n_s*}]
 set_false_path -from [get_regs {machine/core/gen_cpu_10.cpu_mod/cpu/z80n/Debug_Release*}] -to [get_regs {machine/core/gen_dma.dma_mod/dma_d_n_s*}]
+// The same holds for the rest of the CPU and for the DMA's own address
+// (2026-11-21). While the DMA reads, the CPU is frozen (T80: ClkEn = CEN and
+// not BusAck), so nothing in it moves. The DMA sets its address on the rising
+// edge that starts a read, raises its strobe half a cycle later, and uses the
+// byte latched on the last falling edge before it leaves the read, at the
+// earliest one and a half cycles after the address changed (two-cycle
+// timing, no wait): the half-cycle check on address -> decode -> bus -> latch
+// is on a latch value that is always overwritten. The 14 MHz latch
+// (dma_d_p_s, rising edge) is filled the same way.
+// The read data itself (memory and I/O registers to the latch) stays timed.
+set_false_path -from [get_regs {machine/core/gen_cpu_10.cpu_mod/cpu/z80n/*}] -to [get_regs {machine/core/gen_dma.dma_mod/dma_d_n_s*}]
+set_false_path -from [get_regs {machine/core/gen_cpu_10.cpu_mod/cpu/z80n/*}] -to [get_regs {machine/core/gen_dma.dma_mod/dma_d_p_s*}]
+set_false_path -from [get_regs {machine/core/gen_dma.dma_mod/dma_a_s*}] -to [get_regs {machine/core/gen_dma.dma_mod/dma_d_n_s*}]
+set_false_path -from [get_regs {machine/core/gen_dma.dma_mod/dma_a_s*}] -to [get_regs {machine/core/gen_dma.dma_mod/dma_d_p_s*}]
+// And the other way: the DMA's read and write strobes reach the CPU's
+// registers through the memory wait, but the DMA only strobes while it owns
+// the bus, when those registers are not clocked.
+set_false_path -from [get_regs {machine/core/gen_dma.dma_mod/dma_rd_s*}] -to [get_regs {machine/core/gen_cpu_10.cpu_mod/cpu/z80n/*}]
+set_false_path -from [get_regs {machine/core/gen_dma.dma_mod/dma_wr_s*}] -to [get_regs {machine/core/gen_cpu_10.cpu_mod/cpu/z80n/*}]
 
 
 // The BL616's FPGA-Companion SPI clock (about 20 MHz; 25 MHz allowed here), the

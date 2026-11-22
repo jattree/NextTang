@@ -450,6 +450,16 @@ module nexttang_sdr_sdram_service #(
     wire       b_want = !b_fetch_stale && b_fetch != b_tail_m && !b_busy;
     wire       b_want_read = b_want && !b_slot_dup[b_fetch[3:0]];
     wire       b_repeat = b_want && b_slot_dup[b_fetch[3:0]] && b_done_m == b_fetch && !b_arrived;
+    // The decision to fetch is taken from a registered copy. Straight from
+    // the pointers it ran through two subtractions and a compare into the
+    // command and address registers' enables, the longest path on the memory
+    // clock and a regular timing failure (2026-11-21). A copy one cycle old is
+    // safe for the same reason as the pointers above: at worst a fetch goes
+    // out for a slot that was flushed in that cycle, which is the fetch in
+    // flight during a flush again. A fetch always leaves S_IDLE for several
+    // cycles, so the copy is fresh whenever it is next used.
+    reg        b_want_read_r = 1'b0;
+    always @(posedge memory_clock) b_want_read_r <= b_want_read;
 
     // The request toggles are registered in the memory domain before the
     // command decision: read combinationally they had 5.9 ns to get through
@@ -539,10 +549,10 @@ module nexttang_sdr_sdram_service #(
             S_IDLE: begin
                 ready <= 1'b1;
                 step <= 3'd0;
-                if (refresh_owed[1] || (refresh_now && !b_want_read)) begin
+                if (refresh_owed[1] || (refresh_now && !b_want_read_r)) begin
                     command(C_REF); refresh_take = 1'b1;
                     op_refresh <= 1'b1; state <= S_OP;
-                end else if (b_want_read && b_done_m == b_fetch) begin
+                end else if (b_want_read_r && b_done_m == b_fetch) begin
                     // Layer 2 ahead of the CPU (one port B read in flight)
                     op_refresh <= 1'b0; op_port_c <= 1'b0; op_port_b <= 1'b1; op_read <= 1'b1;
                     op_address <= b_slot_address[b_fetch[3:0]];
