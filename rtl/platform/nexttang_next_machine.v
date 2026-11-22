@@ -1359,9 +1359,12 @@ module nexttang_next_machine #(
     endgenerate
     assign ram_c_address = ring_c_take ? ring_c_address[20:0] : core_c_address;
     assign ram_c_address_high = ring_c_take ? ring_c_address[22:21] : 2'b00;
-    assign ram_c_request = ring_c_take ? ring_c_request : core_c_request;
     assign ram_c_read_n = ring_c_take ? ring_c_read_n : core_c_read_n;
     assign ram_c_write_data = ring_c_take ? ring_c_write_data : core_c_write_data;
+    nexttang_port_c_handover handover (
+        .clock(clock_28), .ring_take(ring_c_take), .ring_request(ring_c_request),
+        .core_request(core_c_request), .request(ram_c_request)
+    );
 
     assign debug_uart_tx = (rzx_play_busy ? rzx_play_tx
                           : rzx_busy ? rzx_tx
@@ -1373,3 +1376,26 @@ module nexttang_next_machine #(
 endmodule
 
 `default_nettype wire
+
+// Memory port C's request line, shared by the rewind ring and the core's
+// debug slave. The board's memory takes a request as new only once the line
+// has been low since its last ack. The ring lets go a cycle after its ack,
+// and if the core's request was already waiting behind it the line went from
+// the ring's request straight to the core's without a low cycle: the core's
+// request was never started and the debug slave waited for ever, dead to the
+// Pi and the debug UART alike. It took a CPU write to bank 5 or 7 (the ring
+// mirrors each one into the SDRAM) landing just before a debug memory access;
+// found with a Pi sending 4 KiB blocks while a game drew its screen
+// (2026-11-21). The core's request is now held off the line for the one
+// cycle after the ring lets go.
+module nexttang_port_c_handover (
+    input  wire clock,
+    input  wire ring_take,
+    input  wire ring_request,
+    input  wire core_request,
+    output wire request
+);
+    reg ring_take_q = 1'b0;
+    always @(posedge clock) ring_take_q <= ring_take;
+    assign request = ring_take ? ring_request : (core_request && !ring_take_q);
+endmodule

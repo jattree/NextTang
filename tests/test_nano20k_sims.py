@@ -39,6 +39,21 @@ class SdrSdramServiceTest(unittest.TestCase):
                 self.assertIn("PASS", output, output)
                 self.assertEqual(", 0 reads from the cache" in output, words == 0, output)
 
+    def port_c_handover(self, gate: int) -> str:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sim.vvp"
+            run(["iverilog", "-g2012", "-s", "tb", f"-Ptb.GATE={gate}", "-o", str(image),
+                 str(SIM / "sdram" / "tb_port_c_handover.v"), str(SERVICE),
+                 str(REPO_ROOT / "rtl" / "platform" / "nexttang_next_machine.v")], REPO_ROOT)
+            return run(["vvp", "-n", str(image)], REPO_ROOT)
+
+    def test_port_c_handover(self) -> None:
+        # the ring lets go of port C with the debug slave's request waiting
+        self.assertIn("PASS", self.port_c_handover(1))
+
+    def test_port_c_handover_bench_catches_the_fault(self) -> None:
+        self.assertIn("never acked", self.port_c_handover(0))
+
     def test_layer2_rows(self) -> None:
         output = self.iverilog(SIM / "sdram" / "tb_sdr_layer2.v", {"MODE": 0, "LINES": 24, "INJECT_LINE": 10})
         self.assertIn("PASS", output, output)
