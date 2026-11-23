@@ -136,17 +136,27 @@ module nexttang_rzx_logger #(
     // CPU declined the interrupt; both are known at the fetch's end.
     wire frame_end = m1_end && (ack_seen || declined);
 
-    // FIFO
+    // FIFO: a block RAM read a clock late, then `head`, the oldest word,
+    // which `word` shows until it is taken. A word moves from the RAM to the
+    // head two clocks after the head frees (the consumer is a serial sender,
+    // far slower). The RAM was asynchronous distributed RAM, which the Nano
+    // 20K built from 12 shadow-SRAM blocks (Codex review, 2026-11-22).
     localparam DEPTH = 1 << FIFO_BITS;
-    reg [8:0] fifo [0:DEPTH-1];
+    (* syn_ramstyle = "block_ram" *) reg [8:0] fifo [0:DEPTH-1];
     reg [FIFO_BITS:0] wr_ptr = 0;
-    reg [FIFO_BITS:0] rd_ptr = 0;
-    wire empty = wr_ptr == rd_ptr;
+    reg [FIFO_BITS:0] rd_ptr = 0;        // the next word to read from the RAM
+    reg [8:0] fetched = 9'h000;          // the RAM's registered read
+    reg       fetching = 1'b0;           // `fetched` holds a word for the head
+    reg [8:0] head = 9'h000;
+    reg       head_valid = 1'b0;
+    wire ram_empty = wr_ptr == rd_ptr;
     wire full = (wr_ptr[FIFO_BITS] != rd_ptr[FIFO_BITS]) &&
                 (wr_ptr[FIFO_BITS-1:0] == rd_ptr[FIFO_BITS-1:0]);
-    assign word = fifo[rd_ptr[FIFO_BITS-1:0]];
-    assign word_valid = !empty;
-    wire pop = word_valid && word_ready;
+    assign word = head;
+    assign word_valid = head_valid;
+    wire pop = head_valid && word_ready;
+    // read the RAM only when the head will be free for the word
+    wire fetch = !ram_empty && !fetching && (!head_valid || pop);
 
     // At most one word is pushed per clock: a frame end's high byte waits one
     // clock in hi_pending, and an IN byte is pushed one clock after its cycle.
@@ -212,9 +222,18 @@ module nexttang_rzx_logger #(
             ack_seen <= 1'b0;
 
         if (pop)
+            head_valid <= 1'b0;
+        if (fetching) begin
+            head <= fetched;
+            head_valid <= 1'b1;
+        end
+        fetching <= fetch;
+        if (fetch) begin
+            fetched <= fifo[rd_ptr[FIFO_BITS-1:0]];
             rd_ptr <= rd_ptr + 1'b1;
+        end
         if (push) begin
-            if (full && !pop)
+            if (full)          // (a word leaving the RAM this clock does not make room yet)
                 overflow <= 1'b1;
             else begin
                 fifo[wr_ptr[FIFO_BITS-1:0]] <= push_word;
@@ -256,6 +275,8 @@ module nexttang_rzx_logger #(
             declined <= 1'b0;
             wr_ptr <= 0;
             rd_ptr <= 0;
+            fetching <= 1'b0;
+            head_valid <= 1'b0;
         end
         if (reset) begin
             recording <= 1'b0;
@@ -275,6 +296,8 @@ module nexttang_rzx_logger #(
             declined <= 1'b0;
             wr_ptr <= 0;
             rd_ptr <= 0;
+            fetching <= 1'b0;
+            head_valid <= 1'b0;
         end
     end
 endmodule

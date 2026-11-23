@@ -346,7 +346,9 @@ class RzxLoggerTest(unittest.TestCase):
 """
         status, words = run_bench(body, fifo_bits=4)
         self.assertEqual(status["overflow"], 1)
-        self.assertEqual(len(words), 16)
+        # 16 in the block RAM and one in the head register
+        self.assertEqual(len(words), 17)
+        self.assertEqual(words, [0x01] * 17)     # the IN bytes, in order
 
 
 if __name__ == "__main__":
