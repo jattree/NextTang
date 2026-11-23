@@ -280,13 +280,12 @@ module nexttang_sdr_sdram_service #(
     reg        c_op_read_n = 1'b0;
     reg [22:0] c_op_address = 23'd0;
     reg [7:0]  c_op_data = 8'd0;
-    reg [1:0]  c_lane = 2'd0;
     wire       c_done_toggle;
-    wire [31:0] c_word;
+    wire [7:0]  c_word;                 // port C's byte, picked on the memory side
     reg        c_seen = 1'b0;
     reg        c_armed = 1'b1;          // the request has been low since the last ack
     reg        c_done_meta = 1'b0, c_done_sync = 1'b0;
-    reg [31:0] c_word_sync = 32'd0;
+    reg [7:0]  c_word_sync = 8'd0;
     always @(posedge machine_clock) begin
         c_done_meta <= c_done_toggle;
         c_done_sync <= c_done_meta;
@@ -305,10 +304,9 @@ module nexttang_sdr_sdram_service #(
         if (c_request && c_armed && !c_pending && !c_seen) begin
             c_toggle <= !c_toggle; c_seen <= 1'b1; c_armed <= 1'b0;
             c_op_read_n <= c_read_n; c_op_address <= c_address; c_op_data <= c_write_data;
-            c_lane <= c_address[1:0];
         end else if (c_seen && !c_pending) begin
             c_ack <= 1'b1; c_seen <= 1'b0;
-            c_read_data <= c_word_sync[8 * c_lane +: 8];
+            c_read_data <= c_word_sync;
         end
     end
 
@@ -370,7 +368,8 @@ module nexttang_sdr_sdram_service #(
     // ------------------------------------------------- memory-domain side
     reg        a_seen_m = 1'b0, c_seen_m = 1'b0;
     reg        a_done_m = 1'b0, c_done_m = 1'b0;
-    reg [31:0] a_word_m = 32'd0, c_word_m = 32'd0;
+    reg [31:0] a_word_m = 32'd0;
+    reg [7:0]  c_word_m = 8'd0;
     assign a_done_toggle = a_done_m;
     assign a_word = a_word_m;
     assign c_done_toggle = c_done_m;
@@ -500,7 +499,10 @@ module nexttang_sdr_sdram_service #(
             if (rd_port_b[CL + 1]) begin
                 b_last_word_m <= dq_read;
                 b_done_m <= b_done_m + 5'd1; b_busy <= 1'b0;
-            end else if (rd_port_c[CL + 1]) begin c_word_m <= dq_read; c_done_m <= !c_done_m; end
+            end else if (rd_port_c[CL + 1]) begin
+                // only the requested byte crosses back (c_op_address holds until the ack)
+                c_word_m <= dq_read[8 * c_op_address[1:0] +: 8]; c_done_m <= !c_done_m;
+            end
             else begin a_word_m <= dq_read; a_done_m <= !a_done_m; end
         end
         // port B bookkeeping: skip slots a flush dropped; an announcement that
